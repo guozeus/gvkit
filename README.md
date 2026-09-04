@@ -1,37 +1,42 @@
 # gvkit
 
-Obsidian plugin for fast blue/purple text and background coloring.
+A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
-## V0.1 scope
+## 0.1 scope
 
-The first version intentionally solves only one daily-use problem: fast blue/purple text and background coloring.
+The first version solves one daily-use problem: fast blue/purple text and background coloring on desktop and mobile.
 
-Desktop editing flow:
+### Desktop
 
 1. Select text in a Markdown note.
-2. A small floating toolbar appears near the selection.
+2. A compact floating toolbar appears near the selection.
 3. Choose `蓝字`, `紫字`, `蓝底`, `紫底`, or `清除`.
 
-Mobile editing flow:
+### Mobile
 
 1. Add the gvkit formatting commands to Obsidian's native mobile editor toolbar once.
 2. Select text in a Markdown note.
-3. Tap the corresponding gvkit toolbar action to apply or clear the style.
+3. Tap the corresponding gvkit toolbar action.
 
-The same formatting implementation is used on desktop and mobile; only the UI entry point differs.
+## Formatting model
 
-## Stored markup
+Color is an independent formatting layer. Markdown bold, italic, links, and other inline formatting remain Markdown and can coexist with gvkit colors.
 
-The plugin writes semantic inline HTML classes into the Markdown source instead of hard-coding RGB values:
+Text color uses lightweight gvkit source markers that are hidden in Live Preview:
 
-```html
-<span class="gvkit-text-blue">blue text</span>
-<span class="gvkit-text-purple">purple text</span>
-<mark class="gvkit-bg-blue">blue background</mark>
-<mark class="gvkit-bg-purple">purple background</mark>
+```md
+~={gv-blue}blue text=~
+~={gv-purple}purple text=~
 ```
 
-Colors are rendered from Obsidian's own `--color-blue` and `--color-purple` CSS variables. The source text remains intact even if the plugin is disabled.
+Background color follows Obsidian's colored-highlight syntax introduced in Obsidian 1.14:
+
+```md
+==🔵blue background==
+==🟣purple background==
+```
+
+For compatibility with Obsidian 1.13, gvkit also renders these colored highlights itself. Existing 0.1.0 HTML color markup remains readable/removable, but new formatting no longer writes HTML wrappers.
 
 ## Development
 
@@ -47,4 +52,4 @@ Build output required by Obsidian:
 - `manifest.json`
 - `styles.css`
 
-Do not develop or test unverified builds directly in the production vault. Use an isolated test vault first.
+Do not develop or test unverified builds directly in a production vault. Use an isolated test vault first.

@@ -3,6 +3,8 @@ import {
 	applyGvkitStyleMarkup,
 	type StyleAction,
 } from './formatting';
+import { gvkitEditorDecorations } from './editorDecorations';
+import { renderGvkitStyles } from './readingView';
 
 interface ToolbarAction {
 	action: StyleAction;
@@ -56,6 +58,8 @@ export default class GvkitPlugin extends Plugin {
 
 	onload(): void {
 		this.registerStyleCommands();
+		this.registerEditorExtension(gvkitEditorDecorations);
+		this.registerMarkdownPostProcessor((element) => renderGvkitStyles(element));
 
 		// V0.1 uses a floating selection toolbar on desktop and Obsidian's native
 		// mobile editor toolbar for the same registered formatting commands.

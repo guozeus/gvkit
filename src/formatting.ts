@@ -5,87 +5,121 @@ export type StyleAction =
 	| 'bg-purple'
 	| 'clear';
 
+export type GvkitColor = 'blue' | 'purple';
+
 interface Wrapper {
 	open: string;
 	close: string;
 	kind: 'text' | 'bg';
-	color: 'blue' | 'purple';
+	color: GvkitColor;
 }
 
-const WRAPPERS: Record<Exclude<StyleAction, 'clear'>, Wrapper> = {
+/**
+ * Text color uses gvkit's lightweight source syntax.
+ * Background color intentionally follows Obsidian 1.14's native colored-highlight syntax.
+ */
+export const WRAPPERS: Record<Exclude<StyleAction, 'clear'>, Wrapper> = {
 	'text-blue': {
-		open: '<span class="gvkit-text-blue">',
-		close: '</span>',
+		open: '~={gv-blue}',
+		close: '=~',
 		kind: 'text',
 		color: 'blue',
 	},
 	'text-purple': {
-		open: '<span class="gvkit-text-purple">',
-		close: '</span>',
+		open: '~={gv-purple}',
+		close: '=~',
 		kind: 'text',
 		color: 'purple',
 	},
 	'bg-blue': {
-		open: '<mark class="gvkit-bg-blue">',
-		close: '</mark>',
+		open: '==🔵',
+		close: '==',
 		kind: 'bg',
 		color: 'blue',
 	},
 	'bg-purple': {
-		open: '<mark class="gvkit-bg-purple">',
-		close: '</mark>',
+		open: '==🟣',
+		close: '==',
 		kind: 'bg',
 		color: 'purple',
 	},
 };
 
-const TEXT_WRAPPER_RE = /^<span class="gvkit-text-(blue|purple)">([\s\S]*)<\/span>$/u;
-const BG_WRAPPER_RE = /^<mark class="gvkit-bg-(blue|purple)">([\s\S]*)<\/mark>$/u;
+const TEXT_WRAPPER_RE = /^~=\{gv-(blue|purple)\}([\s\S]*)=~$/u;
+const BG_WRAPPER_RE = /^==([🔵🟣])([\s\S]*)==$/u;
+const STANDARD_HIGHLIGHT_RE = /^==([\s\S]*)==$/u;
 
-const COMPLETE_TEXT_WRAPPER_RE = /<span class="gvkit-text-(?:blue|purple)">([\s\S]*?)<\/span>/gu;
-const COMPLETE_BG_WRAPPER_RE = /<mark class="gvkit-bg-(?:blue|purple)">([\s\S]*?)<\/mark>/gu;
+// Legacy 0.1.0 HTML markup remains removable so test notes are not stranded.
+const LEGACY_TEXT_WRAPPER_RE = /^<span class="gvkit-text-(blue|purple)">([\s\S]*)<\/span>$/u;
+const LEGACY_BG_WRAPPER_RE = /^<mark class="gvkit-bg-(blue|purple)">([\s\S]*)<\/mark>$/u;
+const COMPLETE_LEGACY_TEXT_RE = /<span class="gvkit-text-(?:blue|purple)">([\s\S]*?)<\/span>/gu;
+const COMPLETE_LEGACY_BG_RE = /<mark class="gvkit-bg-(?:blue|purple)">([\s\S]*?)<\/mark>/gu;
+const COMPLETE_TEXT_RE = /~=\{gv-(?:blue|purple)\}([\s\S]*?)=~/gu;
+const COMPLETE_BG_RE = /==[🔵🟣]([\s\S]*?)==/gu;
 
-/**
- * Removes only markup created by this plugin. Other HTML remains untouched.
- */
+function backgroundColorFromMarker(marker: string): GvkitColor {
+	return marker === '🔵' ? 'blue' : 'purple';
+}
+
+/** Removes only gvkit color layers; unrelated Markdown/HTML remains untouched. */
 export function removeGvkitStyleMarkup(text: string): string {
 	let previous = '';
 	let next = text;
 
-	// Repeat so nested gvkit wrappers are removed as well.
 	while (next !== previous) {
 		previous = next;
 		next = next
-			.replace(COMPLETE_TEXT_WRAPPER_RE, '$1')
-			.replace(COMPLETE_BG_WRAPPER_RE, '$1');
+			.replace(COMPLETE_TEXT_RE, '$1')
+			.replace(COMPLETE_BG_RE, '$1')
+			.replace(COMPLETE_LEGACY_TEXT_RE, '$1')
+			.replace(COMPLETE_LEGACY_BG_RE, '$1');
 	}
 
 	return next;
+}
+
+function unwrapSameKind(line: string, kind: 'text' | 'bg'): { color: GvkitColor; inner: string } | null {
+	if (kind === 'text') {
+		const modern = line.match(TEXT_WRAPPER_RE);
+		if (modern) return { color: modern[1] as GvkitColor, inner: modern[2] ?? '' };
+
+		const legacy = line.match(LEGACY_TEXT_WRAPPER_RE);
+		if (legacy) return { color: legacy[1] as GvkitColor, inner: legacy[2] ?? '' };
+		return null;
+	}
+
+	const modern = line.match(BG_WRAPPER_RE);
+	if (modern) return { color: backgroundColorFromMarker(modern[1] ?? ''), inner: modern[2] ?? '' };
+
+	const legacy = line.match(LEGACY_BG_WRAPPER_RE);
+	if (legacy) return { color: legacy[1] as GvkitColor, inner: legacy[2] ?? '' };
+	return null;
 }
 
 function styleSingleLine(line: string, action: Exclude<StyleAction, 'clear'>): string {
 	if (line.length === 0) return line;
 
 	const wrapper = WRAPPERS[action];
-	const sameKindMatch = wrapper.kind === 'text' ? line.match(TEXT_WRAPPER_RE) : line.match(BG_WRAPPER_RE);
+	const existing = unwrapSameKind(line, wrapper.kind);
+	if (existing) {
+		if (existing.color === wrapper.color) return existing.inner;
+		return `${wrapper.open}${existing.inner}${wrapper.close}`;
+	}
 
-	if (sameKindMatch) {
-		const currentColor = sameKindMatch[1];
-		const inner = sameKindMatch[2] ?? '';
-
-		// Applying the same style twice toggles that layer off.
-		if (currentColor === wrapper.color) return inner;
-
-		// Switching blue <-> purple replaces the existing wrapper instead of nesting it.
-		return `${wrapper.open}${inner}${wrapper.close}`;
+	// Convert a normal Obsidian highlight into a colored highlight instead of nesting highlights.
+	if (wrapper.kind === 'bg') {
+		const standardHighlight = line.match(STANDARD_HIGHLIGHT_RE);
+		if (standardHighlight) {
+			return `${wrapper.open}${standardHighlight[1] ?? ''}${wrapper.close}`;
+		}
 	}
 
 	return `${wrapper.open}${line}${wrapper.close}`;
 }
 
 /**
- * Applies one semantic style wrapper to the selected source text.
- * Multi-line selections are styled line-by-line so inline HTML does not span blocks.
+ * Applies one independent color layer to the selected source text.
+ * Lines are handled independently so inline formatting never spans Markdown blocks.
  */
 export function applyGvkitStyleMarkup(text: string, action: StyleAction): string {
 	if (action === 'clear') return removeGvkitStyleMarkup(text);
