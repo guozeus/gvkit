@@ -16,19 +16,19 @@ const CUSTOM_ICON_IDS = [
 function registerGvkitIcons(): void {
 	addIcon(
 		'gvkit-text-blue',
-		'<path d="M6 18 12 5l6 13M8.5 13h7"/><circle cx="18.5" cy="6" r="2.2" fill="var(--color-blue)" stroke="none"/>',
+		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 12 5l6 13"/><path d="M8.5 13h7"/></g><circle cx="18.5" cy="6" r="2.4" fill="var(--color-blue)" stroke="none"/>',
 	);
 	addIcon(
 		'gvkit-text-purple',
-		'<path d="M6 18 12 5l6 13M8.5 13h7"/><circle cx="18.5" cy="6" r="2.2" fill="var(--color-purple)" stroke="none"/>',
+		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 12 5l6 13"/><path d="M8.5 13h7"/></g><circle cx="18.5" cy="6" r="2.4" fill="var(--color-purple)" stroke="none"/>',
 	);
 	addIcon(
 		'gvkit-bg-blue',
-		'<path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/><rect x="16" y="3.5" width="4.5" height="4.5" rx="1" fill="var(--color-blue)" stroke="none"/>',
+		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/></g><rect x="15.5" y="3" width="5" height="5" rx="1.2" fill="var(--color-blue)" stroke="none"/>',
 	);
 	addIcon(
 		'gvkit-bg-purple',
-		'<path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/><rect x="16" y="3.5" width="4.5" height="4.5" rx="1" fill="var(--color-purple)" stroke="none"/>',
+		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/></g><rect x="15.5" y="3" width="5" height="5" rx="1.2" fill="var(--color-purple)" stroke="none"/>',
 	);
 }
 
