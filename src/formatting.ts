@@ -14,45 +14,45 @@ interface Wrapper {
 
 const WRAPPERS: Record<Exclude<StyleAction, 'clear'>, Wrapper> = {
 	'text-blue': {
-		open: '<span class="gzt-text-blue">',
+		open: '<span class="gvkit-text-blue">',
 		close: '</span>',
 		kind: 'text',
 		color: 'blue',
 	},
 	'text-purple': {
-		open: '<span class="gzt-text-purple">',
+		open: '<span class="gvkit-text-purple">',
 		close: '</span>',
 		kind: 'text',
 		color: 'purple',
 	},
 	'bg-blue': {
-		open: '<mark class="gzt-bg-blue">',
+		open: '<mark class="gvkit-bg-blue">',
 		close: '</mark>',
 		kind: 'bg',
 		color: 'blue',
 	},
 	'bg-purple': {
-		open: '<mark class="gzt-bg-purple">',
+		open: '<mark class="gvkit-bg-purple">',
 		close: '</mark>',
 		kind: 'bg',
 		color: 'purple',
 	},
 };
 
-const TEXT_WRAPPER_RE = /^<span class="gzt-text-(blue|purple)">([\s\S]*)<\/span>$/u;
-const BG_WRAPPER_RE = /^<mark class="gzt-bg-(blue|purple)">([\s\S]*)<\/mark>$/u;
+const TEXT_WRAPPER_RE = /^<span class="gvkit-text-(blue|purple)">([\s\S]*)<\/span>$/u;
+const BG_WRAPPER_RE = /^<mark class="gvkit-bg-(blue|purple)">([\s\S]*)<\/mark>$/u;
 
-const COMPLETE_TEXT_WRAPPER_RE = /<span class="gzt-text-(?:blue|purple)">([\s\S]*?)<\/span>/gu;
-const COMPLETE_BG_WRAPPER_RE = /<mark class="gzt-bg-(?:blue|purple)">([\s\S]*?)<\/mark>/gu;
+const COMPLETE_TEXT_WRAPPER_RE = /<span class="gvkit-text-(?:blue|purple)">([\s\S]*?)<\/span>/gu;
+const COMPLETE_BG_WRAPPER_RE = /<mark class="gvkit-bg-(?:blue|purple)">([\s\S]*?)<\/mark>/gu;
 
 /**
  * Removes only markup created by this plugin. Other HTML remains untouched.
  */
-export function removeGuozhousiStyleMarkup(text: string): string {
+export function removeGvkitStyleMarkup(text: string): string {
 	let previous = '';
 	let next = text;
 
-	// Repeat so nested Guozhousi wrappers are removed as well.
+	// Repeat so nested gvkit wrappers are removed as well.
 	while (next !== previous) {
 		previous = next;
 		next = next
@@ -87,8 +87,8 @@ function styleSingleLine(line: string, action: Exclude<StyleAction, 'clear'>): s
  * Applies one semantic style wrapper to the selected source text.
  * Multi-line selections are styled line-by-line so inline HTML does not span blocks.
  */
-export function applyGuozhousiStyleMarkup(text: string, action: StyleAction): string {
-	if (action === 'clear') return removeGuozhousiStyleMarkup(text);
+export function applyGvkitStyleMarkup(text: string, action: StyleAction): string {
+	if (action === 'clear') return removeGvkitStyleMarkup(text);
 	if (text.length === 0) return text;
 
 	return text

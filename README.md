@@ -1,4 +1,4 @@
-# Guozhousi Tools
+# gvkit
 
 Private Obsidian plugin for the `guozhousi` external information library.
 
@@ -19,10 +19,10 @@ The same actions are also exposed as Obsidian commands for hotkeys and later mob
 The plugin writes semantic inline HTML classes into the Markdown source instead of hard-coding RGB values:
 
 ```html
-<span class="gzt-text-blue">blue text</span>
-<span class="gzt-text-purple">purple text</span>
-<mark class="gzt-bg-blue">blue background</mark>
-<mark class="gzt-bg-purple">purple background</mark>
+<span class="gvkit-text-blue">blue text</span>
+<span class="gvkit-text-purple">purple text</span>
+<mark class="gvkit-bg-blue">blue background</mark>
+<mark class="gvkit-bg-purple">purple background</mark>
 ```
 
 Colors are rendered from Obsidian's own `--color-blue` and `--color-purple` CSS variables. The source text remains intact even if the plugin is disabled.

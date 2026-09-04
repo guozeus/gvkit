@@ -1,9 +1,9 @@
 {
-  "id": "guozhousi-tools",
-  "name": "Guozhousi Tools",
+  "id": "gvkit",
+  "name": "gvkit",
   "version": "0.1.0",
   "minAppVersion": "1.13.0",
-  "description": "Personal editing tools for the Guozhousi external information library.",
+  "description": "Personal Obsidian toolkit for the guozhousi external information library.",
   "author": "Guozeus",
   "isDesktopOnly": false
 }

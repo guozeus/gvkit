@@ -1,28 +1,28 @@
-/* Guozhousi Tools V0.1: semantic blue/purple text and background styles. */
+/* gvkit V0.1: semantic blue/purple text and background styles. */
 
-.gzt-text-blue {
+.gvkit-text-blue {
 	color: var(--color-blue);
 }
 
-.gzt-text-purple {
+.gvkit-text-purple {
 	color: var(--color-purple);
 }
 
-.gzt-bg-blue {
+.gvkit-bg-blue {
 	background-color: color-mix(in oklch, var(--color-blue) 22%, transparent);
 	color: inherit;
 	border-radius: 0.18em;
 	padding-inline: 0.06em;
 }
 
-.gzt-bg-purple {
+.gvkit-bg-purple {
 	background-color: color-mix(in oklch, var(--color-purple) 22%, transparent);
 	color: inherit;
 	border-radius: 0.18em;
 	padding-inline: 0.06em;
 }
 
-.gzt-format-toolbar {
+.gvkit-format-toolbar {
 	position: fixed;
 	display: flex;
 	align-items: center;
@@ -36,11 +36,11 @@
 	user-select: none;
 }
 
-.gzt-format-toolbar[hidden] {
+.gvkit-format-toolbar[hidden] {
 	display: none;
 }
 
-.gzt-format-button {
+.gvkit-format-button {
 	min-width: 38px;
 	height: 30px;
 	padding: 0 var(--size-4-2, 8px);
@@ -54,26 +54,26 @@
 	cursor: pointer;
 }
 
-.gzt-format-button:hover {
+.gvkit-format-button:hover {
 	background: var(--background-modifier-hover);
 }
 
-.gzt-action-text-blue {
+.gvkit-action-text-blue {
 	color: var(--color-blue);
 }
 
-.gzt-action-text-purple {
+.gvkit-action-text-purple {
 	color: var(--color-purple);
 }
 
-.gzt-action-bg-blue {
+.gvkit-action-bg-blue {
 	background-color: color-mix(in oklch, var(--color-blue) 16%, transparent);
 }
 
-.gzt-action-bg-purple {
+.gvkit-action-bg-purple {
 	background-color: color-mix(in oklch, var(--color-purple) 16%, transparent);
 }
 
-.gzt-action-clear {
+.gvkit-action-clear {
 	color: var(--text-muted);
 }

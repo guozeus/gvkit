@@ -1,7 +1,7 @@
 {
-  "name": "guozhousi-tools",
+  "name": "gvkit",
   "version": "0.1.0",
-  "description": "Personal Obsidian tools for the Guozhousi external information library.",
+  "description": "Personal Obsidian toolkit for the guozhousi external information library.",
   "main": "main.js",
   "type": "module",
   "scripts": {

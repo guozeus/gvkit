@@ -1,6 +1,6 @@
 import { Editor, MarkdownView, Notice, Platform, Plugin } from 'obsidian';
 import {
-	applyGuozhousiStyleMarkup,
+	applyGvkitStyleMarkup,
 	type StyleAction,
 } from './formatting';
 
@@ -16,35 +16,35 @@ const TOOLBAR_ACTIONS: ToolbarAction[] = [
 		action: 'text-blue',
 		label: '蓝字',
 		title: '蓝色文字',
-		className: 'gzt-action-text-blue',
+		className: 'gvkit-action-text-blue',
 	},
 	{
 		action: 'text-purple',
 		label: '紫字',
 		title: '紫色文字',
-		className: 'gzt-action-text-purple',
+		className: 'gvkit-action-text-purple',
 	},
 	{
 		action: 'bg-blue',
 		label: '蓝底',
 		title: '蓝色背景',
-		className: 'gzt-action-bg-blue',
+		className: 'gvkit-action-bg-blue',
 	},
 	{
 		action: 'bg-purple',
 		label: '紫底',
 		title: '紫色背景',
-		className: 'gzt-action-bg-purple',
+		className: 'gvkit-action-bg-purple',
 	},
 	{
 		action: 'clear',
 		label: '清除',
-		title: '清除 Guozhousi 标色',
-		className: 'gzt-action-clear',
+		title: '清除 gvkit 标色',
+		className: 'gvkit-action-clear',
 	},
 ];
 
-export default class GuozhousiToolsPlugin extends Plugin {
+export default class GvkitPlugin extends Plugin {
 	private toolbarEl: HTMLDivElement | null = null;
 	private refreshFrame: number | null = null;
 
@@ -82,15 +82,15 @@ export default class GuozhousiToolsPlugin extends Plugin {
 
 	private createFloatingToolbar(): void {
 		const toolbar = document.createElement('div');
-		toolbar.className = 'gzt-format-toolbar';
+		toolbar.className = 'gvkit-format-toolbar';
 		toolbar.setAttribute('role', 'toolbar');
-		toolbar.setAttribute('aria-label', 'Guozhousi 标色工具条');
+		toolbar.setAttribute('aria-label', 'gvkit 标色工具条');
 		toolbar.hidden = true;
 
 		for (const item of TOOLBAR_ACTIONS) {
 			const button = document.createElement('button');
 			button.type = 'button';
-			button.className = `gzt-format-button ${item.className ?? ''}`.trim();
+			button.className = `gvkit-format-button ${item.className ?? ''}`.trim();
 			button.textContent = item.label;
 			button.title = item.title;
 			button.setAttribute('aria-label', item.title);
@@ -212,7 +212,7 @@ export default class GuozhousiToolsPlugin extends Plugin {
 			return;
 		}
 
-		const replacement = applyGuozhousiStyleMarkup(selected, action);
+		const replacement = applyGvkitStyleMarkup(selected, action);
 		editor.replaceSelection(replacement);
 	}
 }
