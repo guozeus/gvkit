@@ -1,6 +1,6 @@
 # gvkit
 
-Private Obsidian plugin for the `guozhousi` external information library.
+Obsidian plugin for fast blue/purple text and background coloring.
 
 ## V0.1 scope
 
