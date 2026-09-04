@@ -1,0 +1,9 @@
+{
+  "id": "guozhousi-tools",
+  "name": "Guozhousi Tools",
+  "version": "0.1.0",
+  "minAppVersion": "1.13.0",
+  "description": "Personal editing tools for the Guozhousi external information library.",
+  "author": "Guozeus",
+  "isDesktopOnly": false
+}
