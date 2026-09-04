@@ -1,10 +1,59 @@
-import { Editor, MarkdownView, Notice, Platform, Plugin } from 'obsidian';
+import { addIcon, Editor, MarkdownView, Notice, Platform, Plugin, removeIcon, type EditorPosition } from 'obsidian';
 import {
-	applyGvkitStyleMarkup,
+	applyStyleToSourceSelection,
 	type StyleAction,
 } from './formatting';
 import { gvkitEditorDecorations } from './editorDecorations';
 import { renderGvkitStyles } from './readingView';
+
+const CUSTOM_ICON_IDS = [
+	'gvkit-text-blue',
+	'gvkit-text-purple',
+	'gvkit-bg-blue',
+	'gvkit-bg-purple',
+] as const;
+
+function registerGvkitIcons(): void {
+	addIcon(
+		'gvkit-text-blue',
+		'<path d="M6 18 12 5l6 13M8.5 13h7"/><circle cx="18.5" cy="6" r="2.2" fill="var(--color-blue)" stroke="none"/>',
+	);
+	addIcon(
+		'gvkit-text-purple',
+		'<path d="M6 18 12 5l6 13M8.5 13h7"/><circle cx="18.5" cy="6" r="2.2" fill="var(--color-purple)" stroke="none"/>',
+	);
+	addIcon(
+		'gvkit-bg-blue',
+		'<path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/><rect x="16" y="3.5" width="4.5" height="4.5" rx="1" fill="var(--color-blue)" stroke="none"/>',
+	);
+	addIcon(
+		'gvkit-bg-purple',
+		'<path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/><rect x="16" y="3.5" width="4.5" height="4.5" rx="1" fill="var(--color-purple)" stroke="none"/>',
+	);
+}
+
+function offsetToPosition(source: string, offset: number): EditorPosition {
+	const before = source.slice(0, offset);
+	const lines = before.split('\n');
+	return { line: lines.length - 1, ch: lines[lines.length - 1]?.length ?? 0 };
+}
+
+function computeMinimalChange(oldSource: string, newSource: string): { from: number; to: number; text: string } | null {
+	if (oldSource === newSource) return null;
+
+	let from = 0;
+	const sharedLength = Math.min(oldSource.length, newSource.length);
+	while (from < sharedLength && oldSource[from] === newSource[from]) from += 1;
+
+	let oldTo = oldSource.length;
+	let newTo = newSource.length;
+	while (oldTo > from && newTo > from && oldSource[oldTo - 1] === newSource[newTo - 1]) {
+		oldTo -= 1;
+		newTo -= 1;
+	}
+
+	return { from, to: oldTo, text: newSource.slice(from, newTo) };
+}
 
 interface ToolbarAction {
 	action: StyleAction;
@@ -19,28 +68,28 @@ const TOOLBAR_ACTIONS: ToolbarAction[] = [
 		action: 'text-blue',
 		label: '蓝字',
 		title: '蓝色文字',
-		icon: 'type',
+		icon: 'gvkit-text-blue',
 		className: 'gvkit-action-text-blue',
 	},
 	{
 		action: 'text-purple',
 		label: '紫字',
 		title: '紫色文字',
-		icon: 'a-large-small',
+		icon: 'gvkit-text-purple',
 		className: 'gvkit-action-text-purple',
 	},
 	{
 		action: 'bg-blue',
 		label: '蓝底',
 		title: '蓝色背景',
-		icon: 'highlighter',
+		icon: 'gvkit-bg-blue',
 		className: 'gvkit-action-bg-blue',
 	},
 	{
 		action: 'bg-purple',
 		label: '紫底',
 		title: '紫色背景',
-		icon: 'paint-bucket',
+		icon: 'gvkit-bg-purple',
 		className: 'gvkit-action-bg-purple',
 	},
 	{
@@ -57,6 +106,7 @@ export default class GvkitPlugin extends Plugin {
 	private refreshFrame: number | null = null;
 
 	onload(): void {
+		registerGvkitIcons();
 		this.registerStyleCommands();
 		this.registerEditorExtension(gvkitEditorDecorations);
 		this.registerMarkdownPostProcessor((element) => renderGvkitStyles(element));
@@ -76,6 +126,7 @@ export default class GvkitPlugin extends Plugin {
 		}
 		this.toolbarEl?.remove();
 		this.toolbarEl = null;
+		for (const iconId of CUSTOM_ICON_IDS) removeIcon(iconId);
 	}
 
 	private registerStyleCommands(): void {
@@ -217,13 +268,28 @@ export default class GvkitPlugin extends Plugin {
 	}
 
 	private applyAction(editor: Editor, action: StyleAction): void {
-		const selected = editor.getSelection();
-		if (selected.length === 0) {
+		if (!editor.somethingSelected()) {
 			new Notice('请先选中文字');
 			return;
 		}
 
-		const replacement = applyGvkitStyleMarkup(selected, action);
-		editor.replaceSelection(replacement);
+		const source = editor.getValue();
+		const selectionFrom = editor.posToOffset(editor.getCursor('from'));
+		const selectionTo = editor.posToOffset(editor.getCursor('to'));
+		const result = applyStyleToSourceSelection(source, selectionFrom, selectionTo, action);
+		const change = computeMinimalChange(source, result.source);
+		if (!change) return;
+
+		editor.transaction({
+			changes: [{
+				from: editor.offsetToPos(change.from),
+				to: editor.offsetToPos(change.to),
+				text: change.text,
+			}],
+			selection: {
+				from: offsetToPosition(result.source, result.selectionFrom),
+				to: offsetToPosition(result.source, result.selectionTo),
+			},
+		});
 	}
 }

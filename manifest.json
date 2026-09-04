@@ -1,7 +1,7 @@
 {
   "id": "gvkit",
   "name": "gvkit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.13.0",
   "description": "Add fast blue and purple text and background coloring while preserving Markdown formatting.",
   "author": "Guozeus",

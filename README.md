@@ -16,7 +16,7 @@ The first version solves one daily-use problem: fast blue/purple text and backgr
 
 1. Add the gvkit formatting commands to Obsidian's native mobile editor toolbar once.
 2. Select text in a Markdown note.
-3. Tap the corresponding gvkit toolbar action.
+3. Tap the corresponding gvkit toolbar action. Tap the same active color again to remove only that color layer.
 
 ## Formatting model
 
