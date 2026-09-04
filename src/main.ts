@@ -8,6 +8,7 @@ interface ToolbarAction {
 	action: StyleAction;
 	label: string;
 	title: string;
+	icon: string;
 	className?: string;
 }
 
@@ -16,30 +17,35 @@ const TOOLBAR_ACTIONS: ToolbarAction[] = [
 		action: 'text-blue',
 		label: '蓝字',
 		title: '蓝色文字',
+		icon: 'type',
 		className: 'gvkit-action-text-blue',
 	},
 	{
 		action: 'text-purple',
 		label: '紫字',
 		title: '紫色文字',
+		icon: 'a-large-small',
 		className: 'gvkit-action-text-purple',
 	},
 	{
 		action: 'bg-blue',
 		label: '蓝底',
 		title: '蓝色背景',
+		icon: 'highlighter',
 		className: 'gvkit-action-bg-blue',
 	},
 	{
 		action: 'bg-purple',
 		label: '紫底',
 		title: '紫色背景',
+		icon: 'paint-bucket',
 		className: 'gvkit-action-bg-purple',
 	},
 	{
 		action: 'clear',
 		label: '清除',
 		title: '清除 gvkit 标色',
+		icon: 'eraser',
 		className: 'gvkit-action-clear',
 	},
 ];
@@ -51,8 +57,8 @@ export default class GvkitPlugin extends Plugin {
 	onload(): void {
 		this.registerStyleCommands();
 
-		// V0.1 only shows the floating toolbar on desktop. The commands remain
-		// available on mobile so they can later be pinned to a mobile toolbar.
+		// V0.1 uses a floating selection toolbar on desktop and Obsidian's native
+		// mobile editor toolbar for the same registered formatting commands.
 		if (!Platform.isMobileApp) {
 			this.createFloatingToolbar();
 			this.registerSelectionListeners();
@@ -73,6 +79,7 @@ export default class GvkitPlugin extends Plugin {
 			this.addCommand({
 				id: `format-${item.action}`,
 				name: `标色：${item.title}`,
+				icon: item.icon,
 				editorCallback: (editor) => {
 					this.applyAction(editor, item.action);
 				},

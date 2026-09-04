@@ -12,7 +12,13 @@ Desktop editing flow:
 2. A small floating toolbar appears near the selection.
 3. Choose `蓝字`, `紫字`, `蓝底`, `紫底`, or `清除`.
 
-The same actions are also exposed as Obsidian commands for hotkeys and later mobile integration.
+Mobile editing flow:
+
+1. Add the gvkit formatting commands to Obsidian's native mobile editor toolbar once.
+2. Select text in a Markdown note.
+3. Tap the corresponding gvkit toolbar action to apply or clear the style.
+
+The same formatting implementation is used on desktop and mobile; only the UI entry point differs.
 
 ## Stored markup
 
