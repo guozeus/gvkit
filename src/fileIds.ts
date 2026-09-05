@@ -1,5 +1,5 @@
 import { App, getFrontMatterInfo, parseYaml, TFile } from 'obsidian';
-import { addMissingGvid, hasOwnGvid, isTargetMarkdownPath } from './fileIdCore';
+import { createGvid, hasOwnGvid, insertGvidPreservingSource, isTargetMarkdownPath } from './fileIdCore';
 
 const SCAN_YIELD_EVERY = 250;
 const WRITE_YIELD_EVERY = 50;
@@ -24,6 +24,14 @@ function yieldToUi(): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
+function inspectSourceGvid(source: string): { frontmatterExists: boolean; hasGvid: boolean } {
+	const info = getFrontMatterInfo(source);
+	return {
+		frontmatterExists: info.exists,
+		hasGvid: info.exists && hasOwnGvid(parseYaml(info.frontmatter)),
+	};
+}
+
 export class FileIdManager {
 	constructor(private app: App) {}
 
@@ -32,22 +40,19 @@ export class FileIdManager {
 	}
 
 	async hasGvid(file: TFile): Promise<boolean> {
-		const cached = this.app.metadataCache.getFileCache(file);
-		if (cached) return hasOwnGvid(cached.frontmatter);
-
-		const source = await this.app.vault.cachedRead(file);
-		const info = getFrontMatterInfo(source);
-		if (!info.exists) return false;
-		return hasOwnGvid(parseYaml(info.frontmatter));
+		const source = await this.app.vault.read(file);
+		return inspectSourceGvid(source).hasGvid;
 	}
 
 	async ensureGvid(file: TFile): Promise<'added' | 'existing' | 'skipped'> {
 		if (!this.isTargetFile(file)) return 'skipped';
-		if (await this.hasGvid(file)) return 'existing';
 
 		let added = false;
-		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-			added = addMissingGvid(frontmatter);
+		await this.app.vault.process(file, (source) => {
+			const inspection = inspectSourceGvid(source);
+			if (inspection.hasGvid) return source;
+			added = true;
+			return insertGvidPreservingSource(source, createGvid(), inspection.frontmatterExists);
 		});
 		return added ? 'added' : 'existing';
 	}
