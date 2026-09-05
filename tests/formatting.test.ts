@@ -5,6 +5,7 @@ import {
 	applyGvkitStyleMarkup,
 	applyStyleToSourceSelection,
 	removeGvkitStyleMarkup,
+	toggleBoldInSourceSelection,
 } from '../src/formatting.ts';
 
 test('applies blue text with non-HTML gvkit syntax', () => {
@@ -148,4 +149,46 @@ test('converts a normal yellow highlight selected by visible content into gvkit 
 	const result = applyStyleToSourceSelection(source, 2, 4, 'bg-blue');
 	assert.equal(result.source, '~={gv-bg-blue}结论=bg~');
 	assert.equal(result.source.slice(result.selectionFrom, result.selectionTo), '结论');
+});
+
+
+test('desktop bold adds standard Markdown bold and keeps visible selection', () => {
+	const result = toggleBoldInSourceSelection('重要结论', 0, '重要结论'.length);
+	assert.equal(result.source, '**重要结论**');
+	assert.equal(result.source.slice(result.selectionFrom, result.selectionTo), '重要结论');
+});
+
+test('desktop bold toggles off on immediate second click', () => {
+	const first = toggleBoldInSourceSelection('重要结论', 0, '重要结论'.length);
+	const second = toggleBoldInSourceSelection(first.source, first.selectionFrom, first.selectionTo);
+	assert.equal(second.source, '重要结论');
+	assert.equal(second.source.slice(second.selectionFrom, second.selectionTo), '重要结论');
+});
+
+test('desktop bold toggles independently inside text color', () => {
+	const open = '~={gv-blue}';
+	const source = `${open}重要结论=~`;
+	const result = toggleBoldInSourceSelection(source, open.length, open.length + '重要结论'.length);
+	assert.equal(result.source, '~={gv-blue}**重要结论**=~');
+});
+
+test('desktop bold toggles independently inside background color', () => {
+	const open = '~={gv-bg-purple}';
+	const source = `${open}重要结论=bg~`;
+	const result = toggleBoldInSourceSelection(source, open.length, open.length + '重要结论'.length);
+	assert.equal(result.source, '~={gv-bg-purple}**重要结论**=bg~');
+});
+
+test('desktop bold removal preserves enclosing text and background color layers', () => {
+	const prefix = '~={gv-blue}~={gv-bg-purple}**';
+	const source = `${prefix}结论**=bg~=~`;
+	const from = prefix.length;
+	const result = toggleBoldInSourceSelection(source, from, from + '结论'.length);
+	assert.equal(result.source, '~={gv-blue}~={gv-bg-purple}结论=bg~=~');
+});
+
+test('desktop bold recognizes underscore strong syntax and toggles it off', () => {
+	const source = '__结论__';
+	const result = toggleBoldInSourceSelection(source, 2, 4);
+	assert.equal(result.source, '结论');
 });

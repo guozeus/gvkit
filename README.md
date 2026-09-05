@@ -10,7 +10,8 @@ The first version solves one daily-use problem: fast blue/purple text and backgr
 
 1. Select text in a Markdown note.
 2. A compact floating toolbar appears near the selection.
-3. Choose `蓝字`, `紫字`, `蓝底`, `紫底`, or `清除`.
+3. The toolbar uses the same icon language as mobile, with `粗体` first, followed by `蓝字`, `紫字`, `蓝底`, `紫底`.
+4. The selection and toolbar stay active after an action so multiple formats can be applied in sequence.
 
 ### Mobile
 

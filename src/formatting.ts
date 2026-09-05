@@ -353,3 +353,92 @@ export function applyStyleToSourceSelection(
 		selectionTo: selectionTo + wrapper.open.length,
 	};
 }
+
+
+interface MarkdownDelimiterRange {
+	open: string;
+	close: string;
+	fullFrom: number;
+	contentFrom: number;
+	contentTo: number;
+	fullTo: number;
+}
+
+function collectBoldRanges(source: string): MarkdownDelimiterRange[] {
+	const ranges: MarkdownDelimiterRange[] = [];
+	for (const match of source.matchAll(/(\*\*|__)([^\n]*?)\1/gu)) {
+		const fullFrom = match.index ?? 0;
+		const delimiter = match[1] ?? '**';
+		ranges.push({
+			open: delimiter,
+			close: delimiter,
+			fullFrom,
+			contentFrom: fullFrom + delimiter.length,
+			contentTo: fullFrom + match[0].length - delimiter.length,
+			fullTo: fullFrom + match[0].length,
+		});
+	}
+	return ranges;
+}
+
+function findEnclosingBoldRange(
+	source: string,
+	selectionFrom: number,
+	selectionTo: number,
+): MarkdownDelimiterRange | null {
+	const candidates = collectBoldRanges(source)
+		.filter((range) =>
+			(range.contentFrom <= selectionFrom && range.contentTo >= selectionTo) ||
+			(range.fullFrom === selectionFrom && range.fullTo === selectionTo),
+		)
+		.sort((a, b) => (a.contentTo - a.contentFrom) - (b.contentTo - b.contentFrom));
+	return candidates[0] ?? null;
+}
+
+/**
+ * Toggles standard Markdown bold around the visible selection while preserving
+ * gvkit color layers and keeping the visible text selected for another click.
+ */
+export function toggleBoldInSourceSelection(
+	source: string,
+	selectionFrom: number,
+	selectionTo: number,
+): SourceSelectionResult {
+	if (selectionFrom === selectionTo) return { source, selectionFrom, selectionTo };
+	if (selectionFrom > selectionTo) [selectionFrom, selectionTo] = [selectionTo, selectionFrom];
+
+	const rawSelection = source.slice(selectionFrom, selectionTo);
+	if (rawSelection.includes('\n')) {
+		const replacement = rawSelection
+			.split('\n')
+			.map((line) => line.length === 0 ? line : `**${line}**`)
+			.join('\n');
+		return {
+			source: replaceSourceRange(source, selectionFrom, selectionTo, replacement),
+			selectionFrom,
+			selectionTo: selectionFrom + replacement.length,
+		};
+	}
+
+	const existing = findEnclosingBoldRange(source, selectionFrom, selectionTo);
+	if (existing) {
+		const selectedFullWrapper = selectionFrom === existing.fullFrom && selectionTo === existing.fullTo;
+		const withoutClose = replaceSourceRange(source, existing.contentTo, existing.fullTo, '');
+		const nextSource = replaceSourceRange(withoutClose, existing.fullFrom, existing.contentFrom, '');
+		return {
+			source: nextSource,
+			selectionFrom: selectedFullWrapper ? existing.fullFrom : selectionFrom - existing.open.length,
+			selectionTo: selectedFullWrapper
+				? existing.fullFrom + (existing.contentTo - existing.contentFrom)
+				: selectionTo - existing.open.length,
+		};
+	}
+
+	const selected = source.slice(selectionFrom, selectionTo);
+	const delimiter = '**';
+	return {
+		source: replaceSourceRange(source, selectionFrom, selectionTo, `${delimiter}${selected}${delimiter}`),
+		selectionFrom: selectionFrom + delimiter.length,
+		selectionTo: selectionTo + delimiter.length,
+	};
+}

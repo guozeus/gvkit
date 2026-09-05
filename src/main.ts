@@ -1,6 +1,7 @@
-import { addIcon, Editor, MarkdownView, Notice, Platform, Plugin, removeIcon, type EditorPosition } from 'obsidian';
+import { addIcon, Editor, MarkdownView, Notice, Platform, Plugin, removeIcon, setIcon, type EditorPosition } from 'obsidian';
 import {
 	applyStyleToSourceSelection,
+	toggleBoldInSourceSelection,
 	type StyleAction,
 } from './formatting';
 import { gvkitEditorDecorations } from './editorDecorations';
@@ -55,7 +56,7 @@ function computeMinimalChange(oldSource: string, newSource: string): { from: num
 	return { from, to: oldTo, text: newSource.slice(from, newTo) };
 }
 
-interface ToolbarAction {
+interface ColorAction {
 	action: StyleAction;
 	label: string;
 	title: string;
@@ -63,42 +64,55 @@ interface ToolbarAction {
 	className?: string;
 }
 
-const TOOLBAR_ACTIONS: ToolbarAction[] = [
+type DesktopToolbarAction = ColorAction | {
+	action: 'bold';
+	label: string;
+	title: string;
+	icon: string;
+	className?: string;
+};
+
+const COLOR_ACTIONS: ColorAction[] = [
 	{
 		action: 'text-blue',
 		label: '蓝字',
 		title: '蓝色文字',
 		icon: 'gvkit-text-blue',
-		className: 'gvkit-action-text-blue',
 	},
 	{
 		action: 'text-purple',
 		label: '紫字',
 		title: '紫色文字',
 		icon: 'gvkit-text-purple',
-		className: 'gvkit-action-text-purple',
 	},
 	{
 		action: 'bg-blue',
 		label: '蓝底',
 		title: '蓝色背景',
 		icon: 'gvkit-bg-blue',
-		className: 'gvkit-action-bg-blue',
 	},
 	{
 		action: 'bg-purple',
 		label: '紫底',
 		title: '紫色背景',
 		icon: 'gvkit-bg-purple',
-		className: 'gvkit-action-bg-purple',
 	},
 	{
 		action: 'clear',
 		label: '清除',
 		title: '清除 gvkit 标色',
 		icon: 'eraser',
-		className: 'gvkit-action-clear',
 	},
+];
+
+const DESKTOP_TOOLBAR_ACTIONS: DesktopToolbarAction[] = [
+	{
+		action: 'bold',
+		label: '粗体',
+		title: '粗体',
+		icon: 'bold',
+	},
+	...COLOR_ACTIONS.slice(0, 4),
 ];
 
 export default class GvkitPlugin extends Plugin {
@@ -130,7 +144,7 @@ export default class GvkitPlugin extends Plugin {
 	}
 
 	private registerStyleCommands(): void {
-		for (const item of TOOLBAR_ACTIONS) {
+		for (const item of COLOR_ACTIONS) {
 			this.addCommand({
 				id: `format-${item.action}`,
 				name: `标色：${item.title}`,
@@ -146,14 +160,14 @@ export default class GvkitPlugin extends Plugin {
 		const toolbar = document.createElement('div');
 		toolbar.className = 'gvkit-format-toolbar';
 		toolbar.setAttribute('role', 'toolbar');
-		toolbar.setAttribute('aria-label', 'gvkit 标色工具条');
+		toolbar.setAttribute('aria-label', 'gvkit 格式工具条');
 		toolbar.hidden = true;
 
-		for (const item of TOOLBAR_ACTIONS) {
+		for (const item of DESKTOP_TOOLBAR_ACTIONS) {
 			const button = document.createElement('button');
 			button.type = 'button';
 			button.className = `gvkit-format-button ${item.className ?? ''}`.trim();
-			button.textContent = item.label;
+			setIcon(button, item.icon);
 			button.title = item.title;
 			button.setAttribute('aria-label', item.title);
 
@@ -165,9 +179,9 @@ export default class GvkitPlugin extends Plugin {
 				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 				if (!view) return;
 
-				this.applyAction(view.editor, item.action);
-				this.hideToolbar();
+				this.applyToolbarAction(view.editor, item.action);
 				view.editor.focus();
+				this.scheduleToolbarRefresh();
 			});
 
 			toolbar.appendChild(button);
@@ -267,6 +281,50 @@ export default class GvkitPlugin extends Plugin {
 		this.toolbarEl.style.visibility = 'hidden';
 	}
 
+	private applyToolbarAction(editor: Editor, action: StyleAction | 'bold'): void {
+		if (action === 'bold') {
+			this.applyBold(editor);
+			return;
+		}
+		this.applyAction(editor, action);
+	}
+
+	private applyBold(editor: Editor): void {
+		if (!editor.somethingSelected()) {
+			new Notice('请先选中文字');
+			return;
+		}
+
+		const source = editor.getValue();
+		const selectionFrom = editor.posToOffset(editor.getCursor('from'));
+		const selectionTo = editor.posToOffset(editor.getCursor('to'));
+		const result = toggleBoldInSourceSelection(source, selectionFrom, selectionTo);
+		this.applySourceResult(editor, source, result.source, result.selectionFrom, result.selectionTo);
+	}
+
+	private applySourceResult(
+		editor: Editor,
+		source: string,
+		nextSource: string,
+		selectionFrom: number,
+		selectionTo: number,
+	): void {
+		const change = computeMinimalChange(source, nextSource);
+		if (!change) return;
+
+		editor.transaction({
+			changes: [{
+				from: editor.offsetToPos(change.from),
+				to: editor.offsetToPos(change.to),
+				text: change.text,
+			}],
+			selection: {
+				from: offsetToPosition(nextSource, selectionFrom),
+				to: offsetToPosition(nextSource, selectionTo),
+			},
+		});
+	}
+
 	private applyAction(editor: Editor, action: StyleAction): void {
 		if (!editor.somethingSelected()) {
 			new Notice('请先选中文字');
@@ -277,19 +335,6 @@ export default class GvkitPlugin extends Plugin {
 		const selectionFrom = editor.posToOffset(editor.getCursor('from'));
 		const selectionTo = editor.posToOffset(editor.getCursor('to'));
 		const result = applyStyleToSourceSelection(source, selectionFrom, selectionTo, action);
-		const change = computeMinimalChange(source, result.source);
-		if (!change) return;
-
-		editor.transaction({
-			changes: [{
-				from: editor.offsetToPos(change.from),
-				to: editor.offsetToPos(change.to),
-				text: change.text,
-			}],
-			selection: {
-				from: offsetToPosition(result.source, result.selectionFrom),
-				to: offsetToPosition(result.source, result.selectionTo),
-			},
-		});
+		this.applySourceResult(editor, source, result.source, result.selectionFrom, result.selectionTo);
 	}
 }

@@ -41,9 +41,9 @@
 }
 
 .gvkit-format-button {
-	min-width: 38px;
-	height: 30px;
-	padding: 0 var(--size-4-2, 8px);
+	width: 32px;
+	height: 32px;
+	padding: 6px;
 	border: 0;
 	border-radius: var(--radius-s, 5px);
 	background: transparent;
@@ -52,6 +52,12 @@
 	font-weight: var(--font-semibold, 600);
 	line-height: 1;
 	cursor: pointer;
+}
+
+.gvkit-format-button svg {
+	width: 20px;
+	height: 20px;
+	stroke-width: 2;
 }
 
 .gvkit-format-button:hover {
