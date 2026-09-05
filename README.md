@@ -2,7 +2,15 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
-## 0.1 scope
+## 0.2 file identity
+
+- New target Markdown files receive a stable `gvid` in frontmatter using UUID v7.
+- Automatic assignment is registered only after Obsidian workspace startup is ready, so Vault initialization never becomes an ID scan.
+- The plugin settings page provides one manual `补齐缺失 ID` action for existing notes.
+- The real template source directory `settings/模板/` is excluded so template content cannot copy a file identity into newly created notes.
+- A batch of 10,000 or more missing IDs requires explicit confirmation; large writes yield between small batches instead of blocking the UI continuously.
+
+## 0.1 formatting scope
 
 The first version solves one daily-use problem: fast blue/purple text and background coloring on desktop and mobile.
 

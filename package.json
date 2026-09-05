@@ -1,7 +1,7 @@
 {
   "name": "gvkit",
-  "version": "0.1.6",
-  "description": "Format selected text with blue or purple text and background colors.",
+  "version": "0.2.0",
+  "description": "Lightweight Obsidian toolkit for fast formatting and stable Markdown file identity.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -17,5 +17,8 @@
     "happy-dom": "20.14.0",
     "obsidian": "^1.13.1",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "uuid": "^14.0.2"
   }
 }

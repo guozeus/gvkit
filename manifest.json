@@ -1,9 +1,9 @@
 {
   "id": "gvkit",
   "name": "gvkit",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "minAppVersion": "1.13.0",
-  "description": "Add fast blue and purple text and background coloring while preserving Markdown formatting.",
+  "description": "Add fast formatting plus stable UUID v7 file identity for Markdown notes.",
   "author": "Guozeus",
   "isDesktopOnly": false
 }

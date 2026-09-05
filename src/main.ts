@@ -1,4 +1,4 @@
-import { addIcon, Editor, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, removeIcon, setIcon, type EditorPosition } from 'obsidian';
+import { addIcon, Editor, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, removeIcon, setIcon, TFile, type EditorPosition } from 'obsidian';
 import {
 	applyStyleToSourceSelection,
 	toggleBoldInSourceSelection,
@@ -6,6 +6,8 @@ import {
 } from './formatting';
 import { gvkitEditorDecorations } from './editorDecorations';
 import { renderGvkitStyles } from './readingView';
+import { FileIdManager } from './fileIds';
+import { GvkitSettingTab } from './fileIdSettings';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -133,9 +135,27 @@ export default class GvkitPlugin extends Plugin {
 	private toolbarEl: HTMLDivElement | null = null;
 	private refreshFrame: number | null = null;
 	private readingObserver: IntersectionObserver | null = null;
+	private fileIds: FileIdManager | null = null;
 
 	onload(): void {
 		registerGvkitIcons();
+
+		this.fileIds = new FileIdManager(this.app);
+		this.addSettingTab(new GvkitSettingTab(this.app, this, this.fileIds));
+
+		// Obsidian emits vault create events for existing files during initialization.
+		// Register only after layoutReady so startup never turns into a Vault-wide ID pass.
+		this.app.workspace.onLayoutReady(() => {
+			const fileIds = this.fileIds;
+			if (!fileIds) return;
+			this.registerEvent(this.app.vault.on('create', (file) => {
+				if (!(file instanceof TFile)) return;
+				void fileIds.ensureGvid(file).catch((error) => {
+					console.error(`gvkit: failed to add gvid to ${file.path}`, error);
+				});
+			}));
+		});
+
 		this.registerStyleCommands();
 		this.registerEditorExtension(gvkitEditorDecorations);
 
@@ -176,6 +196,7 @@ export default class GvkitPlugin extends Plugin {
 		}
 		this.toolbarEl?.remove();
 		this.toolbarEl = null;
+		this.fileIds = null;
 		for (const iconId of CUSTOM_ICON_IDS) removeIcon(iconId);
 	}
 
