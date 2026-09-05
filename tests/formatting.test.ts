@@ -11,8 +11,8 @@ test('applies blue text with non-HTML gvkit syntax', () => {
 	assert.equal(applyGvkitStyleMarkup('重要结论', 'text-blue'), '~={gv-blue}重要结论=~');
 });
 
-test('applies purple background with Obsidian colored-highlight syntax', () => {
-	assert.equal(applyGvkitStyleMarkup('需要关注', 'bg-purple'), '==🟣需要关注==');
+test('applies purple background with independent gvkit syntax', () => {
+	assert.equal(applyGvkitStyleMarkup('需要关注', 'bg-purple'), '~={gv-bg-purple}需要关注=bg~');
 });
 
 test('preserves bold inside text color as an independent formatting layer', () => {
@@ -20,18 +20,18 @@ test('preserves bold inside text color as an independent formatting layer', () =
 });
 
 test('preserves bold inside background color as an independent formatting layer', () => {
-	assert.equal(applyGvkitStyleMarkup('**重要结论**', 'bg-blue'), '==🔵**重要结论**==');
+	assert.equal(applyGvkitStyleMarkup('**重要结论**', 'bg-blue'), '~={gv-bg-blue}**重要结论**=bg~');
 });
 
 test('text color and background color compose without replacing each other', () => {
 	const blueText = applyGvkitStyleMarkup('**结论**', 'text-blue');
-	assert.equal(applyGvkitStyleMarkup(blueText, 'bg-purple'), '==🟣~={gv-blue}**结论**=~==');
+	assert.equal(applyGvkitStyleMarkup(blueText, 'bg-purple'), '~={gv-bg-purple}~={gv-blue}**结论**=~=bg~');
 });
 
 test('styles multi-line selections line-by-line', () => {
 	assert.equal(
 		applyGvkitStyleMarkup('第一行\n第二行', 'bg-blue'),
-		'==🔵第一行==\n==🔵第二行==',
+		'~={gv-bg-blue}第一行=bg~\n~={gv-bg-blue}第二行=bg~',
 	);
 });
 
@@ -40,19 +40,19 @@ test('same text color toggles off when the full wrapper is selected', () => {
 });
 
 test('same background color toggles off when the full wrapper is selected', () => {
-	assert.equal(applyGvkitStyleMarkup('==🔵结论==', 'bg-blue'), '结论');
+	assert.equal(applyGvkitStyleMarkup('~={gv-bg-blue}结论=bg~', 'bg-blue'), '结论');
 });
 
 test('same style kind switches colors without nesting', () => {
-	assert.equal(applyGvkitStyleMarkup('==🔵结论==', 'bg-purple'), '==🟣结论==');
+	assert.equal(applyGvkitStyleMarkup('==🔵结论==', 'bg-purple'), '~={gv-bg-purple}结论=bg~');
 });
 
 test('converts a normal Obsidian highlight to a colored highlight without nesting', () => {
-	assert.equal(applyGvkitStyleMarkup('==结论==', 'bg-blue'), '==🔵结论==');
+	assert.equal(applyGvkitStyleMarkup('==结论==', 'bg-blue'), '~={gv-bg-blue}结论=bg~');
 });
 
 test('clear removes gvkit color layers but preserves Markdown bold', () => {
-	const source = '==🟣~={gv-blue}**结论**=~==';
+	const source = '~={gv-bg-purple}~={gv-blue}**结论**=~=bg~';
 	assert.equal(removeGvkitStyleMarkup(source), '**结论**');
 });
 
@@ -71,8 +71,8 @@ test('second tap toggles text color off while only visible text is selected', ()
 });
 
 test('second tap toggles background off while only visible text is selected', () => {
-	const open = '==🟣';
-	const source = `${open}重要结论==`;
+	const open = '~={gv-bg-purple}';
+	const source = `${open}重要结论=bg~`;
 	const result = applyStyleToSourceSelection(source, open.length, open.length + '重要结论'.length, 'bg-purple');
 	assert.equal(result.source, '重要结论');
 	assert.equal(result.selectionFrom, 0);
@@ -80,16 +80,16 @@ test('second tap toggles background off while only visible text is selected', ()
 });
 
 test('toggling text color off preserves nested background and bold', () => {
-	const prefix = '**~={gv-blue}==🟣';
-	const source = `${prefix}结论===~**`;
+	const prefix = '**~={gv-blue}~={gv-bg-purple}';
+	const source = `${prefix}结论=bg~=~**`;
 	const from = prefix.length;
 	const result = applyStyleToSourceSelection(source, from, from + '结论'.length, 'text-blue');
-	assert.equal(result.source, '**==🟣结论==**');
+	assert.equal(result.source, '**~={gv-bg-purple}结论=bg~**');
 });
 
 test('toggling background off preserves text color and bold', () => {
-	const prefix = '**~={gv-blue}==🟣';
-	const source = `${prefix}结论===~**`;
+	const prefix = '**~={gv-blue}~={gv-bg-purple}';
+	const source = `${prefix}结论=bg~=~**`;
 	const from = prefix.length;
 	const result = applyStyleToSourceSelection(source, from, from + '结论'.length, 'bg-purple');
 	assert.equal(result.source, '**~={gv-blue}结论=~**');
@@ -111,12 +111,12 @@ test('applying style keeps the visible text selected for immediate second tap', 
 
 test('source-aware application still keeps multi-line inline markup line-scoped', () => {
 	const result = applyStyleToSourceSelection('第一行\n第二行', 0, '第一行\n第二行'.length, 'bg-blue');
-	assert.equal(result.source, '==🔵第一行==\n==🔵第二行==');
+	assert.equal(result.source, '~={gv-bg-blue}第一行=bg~\n~={gv-bg-blue}第二行=bg~');
 });
 
 test('clear from visible selection removes both color layers and keeps bold', () => {
-	const prefix = '**~={gv-blue}==🟣';
-	const source = `${prefix}结论===~**`;
+	const prefix = '**~={gv-blue}~={gv-bg-purple}';
+	const source = `${prefix}结论=bg~=~**`;
 	const from = prefix.length;
 	const result = applyStyleToSourceSelection(source, from, from + '结论'.length, 'clear');
 	assert.equal(result.source, '**结论**');
@@ -128,4 +128,24 @@ test('immediate second tap after applying color toggles it back off', () => {
 	const second = applyStyleToSourceSelection(first.source, first.selectionFrom, first.selectionTo, 'text-blue');
 	assert.equal(second.source, '结论');
 	assert.equal(second.source.slice(second.selectionFrom, second.selectionTo), '结论');
+});
+
+
+test('legacy 0.1.1 background syntax is still removable', () => {
+	assert.equal(removeGvkitStyleMarkup('==🔵旧内容=='), '旧内容');
+});
+
+test('switching a legacy colored highlight converts it to the independent background layer', () => {
+	const open = '==🔵';
+	const source = `${open}旧内容==`;
+	const result = applyStyleToSourceSelection(source, open.length, open.length + '旧内容'.length, 'bg-purple');
+	assert.equal(result.source, '~={gv-bg-purple}旧内容=bg~');
+	assert.equal(result.source.slice(result.selectionFrom, result.selectionTo), '旧内容');
+});
+
+test('converts a normal yellow highlight selected by visible content into gvkit background', () => {
+	const source = '==结论==';
+	const result = applyStyleToSourceSelection(source, 2, 4, 'bg-blue');
+	assert.equal(result.source, '~={gv-bg-blue}结论=bg~');
+	assert.equal(result.source.slice(result.selectionFrom, result.selectionTo), '结论');
 });

@@ -16,19 +16,19 @@ const CUSTOM_ICON_IDS = [
 function registerGvkitIcons(): void {
 	addIcon(
 		'gvkit-text-blue',
-		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 12 5l6 13"/><path d="M8.5 13h7"/></g><circle cx="18.5" cy="6" r="2.4" fill="var(--color-blue)" stroke="none"/>',
+		'<g transform="scale(4.1666667)"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 12 5l6 13"/><path d="M8.5 13h7"/></g><circle cx="18.5" cy="6" r="2.4" fill="var(--color-blue)" stroke="none"/></g>',
 	);
 	addIcon(
 		'gvkit-text-purple',
-		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 12 5l6 13"/><path d="M8.5 13h7"/></g><circle cx="18.5" cy="6" r="2.4" fill="var(--color-purple)" stroke="none"/>',
+		'<g transform="scale(4.1666667)"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18 12 5l6 13"/><path d="M8.5 13h7"/></g><circle cx="18.5" cy="6" r="2.4" fill="var(--color-purple)" stroke="none"/></g>',
 	);
 	addIcon(
 		'gvkit-bg-blue',
-		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/></g><rect x="15.5" y="3" width="5" height="5" rx="1.2" fill="var(--color-blue)" stroke="none"/>',
+		'<g transform="scale(4.1666667)"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/></g><rect x="15.5" y="3" width="5" height="5" rx="1.2" fill="var(--color-blue)" stroke="none"/></g>',
 	);
 	addIcon(
 		'gvkit-bg-purple',
-		'<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/></g><rect x="15.5" y="3" width="5" height="5" rx="1.2" fill="var(--color-purple)" stroke="none"/>',
+		'<g transform="scale(4.1666667)"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 5 10 10-4 4H9l-4-4L15 5"/><path d="M6 20h12"/></g><rect x="15.5" y="3" width="5" height="5" rx="1.2" fill="var(--color-purple)" stroke="none"/></g>',
 	);
 }
 

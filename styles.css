@@ -9,40 +9,17 @@
 }
 
 .gvkit-bg-blue {
-	--gvkit-highlight-bg: color-mix(in srgb, var(--color-blue) 24%, transparent);
-	--text-highlight-bg: var(--gvkit-highlight-bg);
-	background: var(--gvkit-highlight-bg) !important;
-	background-color: var(--gvkit-highlight-bg) !important;
+	background: color-mix(in srgb, var(--color-blue) 24%, transparent) !important;
 	color: inherit;
 	border-radius: 0.18em;
 	padding-inline: 0.06em;
 }
 
 .gvkit-bg-purple {
-	--gvkit-highlight-bg: color-mix(in srgb, var(--color-purple) 24%, transparent);
-	--text-highlight-bg: var(--gvkit-highlight-bg);
-	background: var(--gvkit-highlight-bg) !important;
-	background-color: var(--gvkit-highlight-bg) !important;
+	background: color-mix(in srgb, var(--color-purple) 24%, transparent) !important;
 	color: inherit;
 	border-radius: 0.18em;
 	padding-inline: 0.06em;
-}
-
-/* Obsidian 1.13 renders ==...== with the default yellow highlight.
-   These selectors deliberately outrank the native highlight rule so the
-   same 1.14-compatible source syntax is blue/purple on older mobile builds. */
-.markdown-source-view.mod-cm6 .cm-content .gvkit-bg-blue,
-.markdown-rendered mark.gvkit-bg-blue,
-.markdown-preview-view mark.gvkit-bg-blue {
-	background: var(--gvkit-highlight-bg) !important;
-	background-color: var(--gvkit-highlight-bg) !important;
-}
-
-.markdown-source-view.mod-cm6 .cm-content .gvkit-bg-purple,
-.markdown-rendered mark.gvkit-bg-purple,
-.markdown-preview-view mark.gvkit-bg-purple {
-	background: var(--gvkit-highlight-bg) !important;
-	background-color: var(--gvkit-highlight-bg) !important;
 }
 
 .gvkit-format-toolbar {

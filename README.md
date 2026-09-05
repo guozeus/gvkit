@@ -29,14 +29,14 @@ Text color uses lightweight gvkit source markers that are hidden in Live Preview
 ~={gv-purple}purple text=~
 ```
 
-Background color follows Obsidian's colored-highlight syntax introduced in Obsidian 1.14:
+Background color uses a separate gvkit layer as well, so it never falls back to Obsidian's default yellow highlight:
 
 ```md
-==🔵blue background==
-==🟣purple background==
+~={gv-bg-blue}blue background=bg~
+~={gv-bg-purple}purple background=bg~
 ```
 
-For compatibility with Obsidian 1.13, gvkit also renders these colored highlights itself. Existing 0.1.0 HTML color markup remains readable/removable, but new formatting no longer writes HTML wrappers.
+Existing 0.1.0 HTML color markup and the 0.1.1-0.1.3 `==🔵...==` / `==🟣...==` beta syntax remain removable and are converted when users interact with them. New formatting no longer relies on HTML wrappers or Obsidian's native yellow highlight layer.
 
 ## Development
 

@@ -2,7 +2,7 @@ import type { Range } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 
 const TEXT_COLOR_RE = /~=\{gv-(blue|purple)\}([\s\S]*?)=~/gu;
-const BG_COLOR_RE = /==([🔵🟣])([\s\S]*?)==/gu;
+const BG_COLOR_RE = /~=\{gv-bg-(blue|purple)\}([^\n]*?)=bg~/gu;
 
 function isLivePreview(view: EditorView): boolean {
 	return view.dom.closest('.is-live-preview') !== null;
@@ -40,22 +40,22 @@ function buildDecorations(view: EditorView): DecorationSet {
 				}
 
 				for (const match of text.matchAll(BG_COLOR_RE)) {
-					const marker = match[1] ?? '';
+					const color = match[1] ?? '';
 					const full = match[0];
 					const start = line.from + (match.index ?? 0);
-					const emojiFrom = start + 2;
-					const emojiTo = emojiFrom + marker.length;
-					const contentFrom = emojiTo;
-					const contentTo = start + full.length - 2;
-					const className = marker === '🔵' ? 'gvkit-bg-blue' : 'gvkit-bg-purple';
+					const openLength = `~={gv-bg-${color}}`.length;
+					const closeLength = '=bg~'.length;
+					const contentFrom = start + openLength;
+					const contentTo = start + full.length - closeLength;
+					const className = color === 'blue' ? 'gvkit-bg-blue' : 'gvkit-bg-purple';
 
-					// Obsidian handles the == delimiters. gvkit only hides the color marker
-					// on older versions and supplies the correct color decoration.
-					ranges.push(Decoration.replace({}).range(emojiFrom, emojiTo));
+					ranges.push(Decoration.replace({}).range(start, contentFrom));
 					if (contentTo > contentFrom) {
 						ranges.push(Decoration.mark({ class: className }).range(contentFrom, contentTo));
 					}
+					ranges.push(Decoration.replace({}).range(contentTo, start + full.length));
 				}
+
 			}
 
 			if (line.number === lastLine.number) break;

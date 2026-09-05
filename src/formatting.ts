@@ -16,7 +16,7 @@ interface Wrapper {
 
 /**
  * Text color uses gvkit's lightweight source syntax.
- * Background color intentionally follows Obsidian 1.14's native colored-highlight syntax.
+ * Background color uses its own gvkit layer as well, avoiding Obsidian's default yellow highlight.
  */
 export const WRAPPERS: Record<Exclude<StyleAction, 'clear'>, Wrapper> = {
 	'text-blue': {
@@ -32,21 +32,21 @@ export const WRAPPERS: Record<Exclude<StyleAction, 'clear'>, Wrapper> = {
 		color: 'purple',
 	},
 	'bg-blue': {
-		open: '==🔵',
-		close: '==',
+		open: '~={gv-bg-blue}',
+		close: '=bg~',
 		kind: 'bg',
 		color: 'blue',
 	},
 	'bg-purple': {
-		open: '==🟣',
-		close: '==',
+		open: '~={gv-bg-purple}',
+		close: '=bg~',
 		kind: 'bg',
 		color: 'purple',
 	},
 };
 
 const TEXT_WRAPPER_RE = /^~=\{gv-(blue|purple)\}([\s\S]*)=~$/u;
-const BG_WRAPPER_RE = /^==([🔵🟣])([\s\S]*)==$/u;
+const BG_WRAPPER_RE = /^~=\{gv-bg-(blue|purple)\}([\s\S]*)=bg~$/u;
 const STANDARD_HIGHLIGHT_RE = /^==([\s\S]*)==$/u;
 
 // Legacy 0.1.0 HTML markup remains removable so test notes are not stranded.
@@ -55,7 +55,9 @@ const LEGACY_BG_WRAPPER_RE = /^<mark class="gvkit-bg-(blue|purple)">([\s\S]*)<\/
 const COMPLETE_LEGACY_TEXT_RE = /<span class="gvkit-text-(?:blue|purple)">([\s\S]*?)<\/span>/gu;
 const COMPLETE_LEGACY_BG_RE = /<mark class="gvkit-bg-(?:blue|purple)">([\s\S]*?)<\/mark>/gu;
 const COMPLETE_TEXT_RE = /~=\{gv-(?:blue|purple)\}([\s\S]*?)=~/gu;
-const COMPLETE_BG_RE = /==[🔵🟣]([\s\S]*?)==/gu;
+const COMPLETE_BG_RE = /~=\{gv-bg-(?:blue|purple)\}([\s\S]*?)=bg~/gu;
+const LEGACY_NATIVE_BG_WRAPPER_RE = /^==([🔵🟣])([\s\S]*)==$/u;
+const COMPLETE_LEGACY_NATIVE_BG_RE = /==[🔵🟣]([\s\S]*?)==/gu;
 
 function backgroundColorFromMarker(marker: string): GvkitColor {
 	return marker === '🔵' ? 'blue' : 'purple';
@@ -71,6 +73,7 @@ export function removeGvkitStyleMarkup(text: string): string {
 		next = next
 			.replace(COMPLETE_TEXT_RE, '$1')
 			.replace(COMPLETE_BG_RE, '$1')
+			.replace(COMPLETE_LEGACY_NATIVE_BG_RE, '$1')
 			.replace(COMPLETE_LEGACY_TEXT_RE, '$1')
 			.replace(COMPLETE_LEGACY_BG_RE, '$1');
 	}
@@ -89,7 +92,12 @@ function unwrapSameKind(line: string, kind: 'text' | 'bg'): { color: GvkitColor;
 	}
 
 	const modern = line.match(BG_WRAPPER_RE);
-	if (modern) return { color: backgroundColorFromMarker(modern[1] ?? ''), inner: modern[2] ?? '' };
+	if (modern) return { color: modern[1] as GvkitColor, inner: modern[2] ?? '' };
+
+	const legacyNative = line.match(LEGACY_NATIVE_BG_WRAPPER_RE);
+	if (legacyNative) {
+		return { color: backgroundColorFromMarker(legacyNative[1] ?? ''), inner: legacyNative[2] ?? '' };
+	}
 
 	const legacy = line.match(LEGACY_BG_WRAPPER_RE);
 	if (legacy) return { color: legacy[1] as GvkitColor, inner: legacy[2] ?? '' };
@@ -158,6 +166,23 @@ function collectSourceStyleRanges(source: string): SourceStyleRange[] {
 		const close = '=~';
 		ranges.push({
 			kind: 'text',
+			color,
+			open,
+			close,
+			fullFrom,
+			contentFrom: fullFrom + open.length,
+			contentTo: fullFrom + match[0].length - close.length,
+			fullTo: fullFrom + match[0].length,
+		});
+	}
+
+	for (const match of source.matchAll(/~=\{gv-bg-(blue|purple)\}([^\n]*?)=bg~/gu)) {
+		const fullFrom = match.index ?? 0;
+		const color = match[1] as GvkitColor;
+		const open = `~={gv-bg-${color}}`;
+		const close = '=bg~';
+		ranges.push({
+			kind: 'bg',
 			color,
 			open,
 			close,
@@ -288,28 +313,34 @@ export function applyStyleToSourceSelection(
 			return removeStyleRange(source, selectionFrom, selectionTo, existing);
 		}
 
-		const nextSource = replaceSourceRange(source, existing.fullFrom, existing.contentFrom, wrapper.open);
-		const delta = wrapper.open.length - existing.open.length;
-		const selectedFullWrapper = selectionFrom === existing.fullFrom && selectionTo === existing.fullTo;
+		const inner = source.slice(existing.contentFrom, existing.contentTo);
+		const replacement = `${wrapper.open}${inner}${wrapper.close}`;
+		const nextSource = replaceSourceRange(source, existing.fullFrom, existing.fullTo, replacement);
+		const relativeFrom = Math.max(0, selectionFrom - existing.contentFrom);
+		const relativeTo = Math.min(inner.length, selectionTo - existing.contentFrom);
+		const contentStart = existing.fullFrom + wrapper.open.length;
 		return {
 			source: nextSource,
-			selectionFrom: selectedFullWrapper ? existing.fullFrom : selectionFrom + delta,
-			selectionTo: selectedFullWrapper ? selectionTo + delta : selectionTo + delta,
+			selectionFrom: contentStart + relativeFrom,
+			selectionTo: contentStart + relativeTo,
 		};
 	}
 
 	// If the visible selection is already inside a normal Obsidian highlight,
-	// upgrade that highlight to the requested colored highlight instead of nesting.
+	// replace the yellow-highlight layer with gvkit's independent background layer.
 	if (wrapper.kind === 'bg') {
 		const before = source.slice(Math.max(0, selectionFrom - 2), selectionFrom);
 		const after = source.slice(selectionTo, selectionTo + 2);
 		if (before === '==' && after === '==') {
-			const marker = wrapper.open.slice(2);
-			const nextSource = source.slice(0, selectionFrom) + marker + source.slice(selectionFrom);
+			const selected = source.slice(selectionFrom, selectionTo);
+			const fullFrom = selectionFrom - 2;
+			const replacement = `${wrapper.open}${selected}${wrapper.close}`;
+			const nextSource = replaceSourceRange(source, fullFrom, selectionTo + 2, replacement);
+			const contentStart = fullFrom + wrapper.open.length;
 			return {
 				source: nextSource,
-				selectionFrom: selectionFrom + marker.length,
-				selectionTo: selectionTo + marker.length,
+				selectionFrom: contentStart,
+				selectionTo: contentStart + selected.length,
 			};
 		}
 	}
