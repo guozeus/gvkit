@@ -38,50 +38,56 @@ function isInsideCode(node: Text): boolean {
 	return node.parentElement?.closest('code, pre') != null;
 }
 
+function collectNodeEvents(node: Text, spec: MarkerSpec): MarkerEvent[] {
+	const text = node.data;
+	const events: MarkerEvent[] = [];
+
+	spec.openRe.lastIndex = 0;
+	for (let match = spec.openRe.exec(text); match; match = spec.openRe.exec(text)) {
+		events.push({
+			type: 'open',
+			node,
+			index: match.index,
+			length: match[0].length,
+			color: match[1] as GvkitColor,
+		});
+	}
+
+	let closeIndex = text.indexOf(spec.close);
+	while (closeIndex !== -1) {
+		events.push({ type: 'close', node, index: closeIndex, length: spec.close.length });
+		closeIndex = text.indexOf(spec.close, closeIndex + spec.close.length);
+	}
+
+	events.sort((a, b) => {
+		if (a.index !== b.index) return a.index - b.index;
+		if (a.type === b.type) return 0;
+		return a.type === 'open' ? -1 : 1;
+	});
+	return events;
+}
+
 function collectMarkerPairs(root: HTMLElement, spec: MarkerSpec): MarkerPair[] {
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-	const events: MarkerEvent[] = [];
+	const pairs: MarkerPair[] = [];
+	let open: MarkerEvent | null = null;
 
 	for (let current = walker.nextNode(); current; current = walker.nextNode()) {
 		const node = current as Text;
 		if (isInsideCode(node)) continue;
-		const text = node.data;
 
-		for (const match of text.matchAll(spec.openRe)) {
-			events.push({
-				type: 'open',
-				node,
-				index: match.index ?? 0,
-				length: match[0].length,
-				color: match[1] as GvkitColor,
-			});
-		}
-
-		let closeIndex = text.indexOf(spec.close);
-		while (closeIndex !== -1) {
-			events.push({ type: 'close', node, index: closeIndex, length: spec.close.length });
-			closeIndex = text.indexOf(spec.close, closeIndex + spec.close.length);
+		for (const event of collectNodeEvents(node, spec)) {
+			if (event.type === 'open') {
+				if (open === null) open = event;
+				continue;
+			}
+			if (open !== null) {
+				pairs.push({ open, close: event });
+				open = null;
+			}
 		}
 	}
 
-	events.sort((a, b) => {
-		if (a.node === b.node) return a.index - b.index;
-		const position = a.node.compareDocumentPosition(b.node);
-		return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
-	});
-
-	const pairs: MarkerPair[] = [];
-	let open: MarkerEvent | null = null;
-	for (const event of events) {
-		if (event.type === 'open') {
-			if (open === null) open = event;
-			continue;
-		}
-		if (open !== null) {
-			pairs.push({ open, close: event });
-			open = null;
-		}
-	}
 	return pairs;
 }
 
@@ -96,22 +102,27 @@ function stripAdjacentMarker(span: HTMLElement, marker: string, before: boolean)
 	}
 }
 
+function renderMarkerPair(pair: MarkerPair, spec: MarkerSpec): void {
+	if (!pair.open.color) return;
+
+	const range = document.createRange();
+	range.setStart(pair.open.node, pair.open.index + pair.open.length);
+	range.setEnd(pair.close.node, pair.close.index);
+
+	const span = document.createElement('span');
+	span.className = spec.className(pair.open.color);
+	span.appendChild(range.extractContents());
+	range.insertNode(span);
+
+	stripAdjacentMarker(span, spec.openText(pair.open.color), true);
+	stripAdjacentMarker(span, spec.close, false);
+}
+
 function renderMarkerLayer(root: HTMLElement, spec: MarkerSpec): void {
-	for (let guard = 0; guard < 1000; guard += 1) {
-		const pair = collectMarkerPairs(root, spec)[0];
-		if (!pair || !pair.open.color) return;
-
-		const range = document.createRange();
-		range.setStart(pair.open.node, pair.open.index + pair.open.length);
-		range.setEnd(pair.close.node, pair.close.index);
-
-		const span = document.createElement('span');
-		span.className = spec.className(pair.open.color);
-		span.appendChild(range.extractContents());
-		range.insertNode(span);
-
-		stripAdjacentMarker(span, spec.openText(pair.open.color), true);
-		stripAdjacentMarker(span, spec.close, false);
+	const pairs = collectMarkerPairs(root, spec);
+	for (let index = pairs.length - 1; index >= 0; index -= 1) {
+		const pair = pairs[index];
+		if (pair) renderMarkerPair(pair, spec);
 	}
 }
 
@@ -136,6 +147,9 @@ function renderLegacyBackgroundColors(root: HTMLElement): void {
 }
 
 export function renderGvkitStyles(root: HTMLElement): void {
+	// Text and background are independent layers. Each layer scans this rendered
+	// section once, then applies collected ranges from back to front so earlier
+	// offsets remain valid while the DOM is rewritten.
 	renderMarkerLayer(root, TEXT_SPEC);
 	renderMarkerLayer(root, BG_SPEC);
 	renderLegacyBackgroundColors(root);

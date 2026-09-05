@@ -1,4 +1,4 @@
-import { addIcon, Editor, MarkdownView, Notice, Platform, Plugin, removeIcon, setIcon, type EditorPosition } from 'obsidian';
+import { addIcon, Editor, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, removeIcon, setIcon, type EditorPosition } from 'obsidian';
 import {
 	applyStyleToSourceSelection,
 	toggleBoldInSourceSelection,
@@ -115,15 +115,51 @@ const DESKTOP_TOOLBAR_ACTIONS: DesktopToolbarAction[] = [
 	...COLOR_ACTIONS.slice(0, 4),
 ];
 
+class GvkitReadingRenderChild extends MarkdownRenderChild {
+	constructor(containerEl: HTMLElement, private observer: IntersectionObserver) {
+		super(containerEl);
+	}
+
+	onload(): void {
+		this.observer.observe(this.containerEl);
+	}
+
+	onunload(): void {
+		this.observer.unobserve(this.containerEl);
+	}
+}
+
 export default class GvkitPlugin extends Plugin {
 	private toolbarEl: HTMLDivElement | null = null;
 	private refreshFrame: number | null = null;
+	private readingObserver: IntersectionObserver | null = null;
 
 	onload(): void {
 		registerGvkitIcons();
 		this.registerStyleCommands();
 		this.registerEditorExtension(gvkitEditorDecorations);
-		this.registerMarkdownPostProcessor((element) => renderGvkitStyles(element));
+
+		// Register reading-view support during plugin load, but keep the callback
+		// cheap: actual gvkit DOM conversion only happens after a rendered section
+		// enters the viewport. This keeps visual enhancement out of startup work.
+		this.readingObserver = new IntersectionObserver((entries, observer) => {
+			for (const entry of entries) {
+				if (!entry.isIntersecting) continue;
+				observer.unobserve(entry.target);
+				if (entry.target instanceof HTMLElement) {
+					renderGvkitStyles(entry.target);
+				}
+			}
+		});
+		this.register(() => {
+			this.readingObserver?.disconnect();
+			this.readingObserver = null;
+		});
+		this.registerMarkdownPostProcessor((element, context) => {
+			const observer = this.readingObserver;
+			if (!observer) return;
+			context.addChild(new GvkitReadingRenderChild(element, observer));
+		});
 
 		// V0.1 uses a floating selection toolbar on desktop and Obsidian's native
 		// mobile editor toolbar for the same registered formatting commands.
