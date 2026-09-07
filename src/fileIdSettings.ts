@@ -1,6 +1,8 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { requiresLargeBackfillConfirmation } from './fileIdCore';
 import { FileIdManager } from './fileIds';
+import { SafeMoveManager } from './safeMove';
+import { SAFE_MOVE_PLAN_PATH } from './safeMoveCore';
 
 class LargeBackfillConfirmModal extends Modal {
 	private resolved = false;
@@ -61,6 +63,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 		app: App,
 		plugin: Plugin,
 		private fileIds: FileIdManager,
+		private safeMoves: SafeMoveManager,
 	) {
 		super(app, plugin);
 	}
@@ -107,6 +110,32 @@ export class GvkitSettingTab extends PluginSettingTab {
 						new Notice('补齐文件 ID 失败，请查看控制台错误');
 					} finally {
 						button.setDisabled(false).setButtonText('补齐缺失 ID');
+					}
+				});
+			});
+
+		containerEl.createEl('h2', { text: 'AI 安全批量移动' });
+		containerEl.createEl('p', {
+			text: '按 AI 已审核清单在真实 Obsidian 内调用官方安全移动，并在移动前后按 GVID 校验受影响的页面链接关系。gvkit 不参与文件分类判断。',
+		});
+		new Setting(containerEl)
+			.setName('执行清单')
+			.setDesc(`固定读取：${SAFE_MOVE_PLAN_PATH}。整份清单预检通过前不会移动任何新文件。`)
+			.addButton((button) => {
+				button.setButtonText('执行安全批量移动').setWarning().onClick(async () => {
+					button.setDisabled(true).setButtonText('正在预检…');
+					try {
+						button.setButtonText('正在移动…');
+						const result = await this.safeMoves.executeCurrentPlan();
+						new Notice(
+							`计划 ${result.planId} 完成：移动 ${result.moved} 个，已完成跳过 ${result.skippedCompleted} 个，链接关系验证 ${result.validatedEdges} 条。`,
+							10000,
+						);
+					} catch (error) {
+						console.error('gvkit: safe batch move failed', error);
+						new Notice(error instanceof Error ? error.message : 'AI 安全批量移动失败', 12000);
+					} finally {
+						button.setDisabled(false).setButtonText('执行安全批量移动');
 					}
 				});
 			});

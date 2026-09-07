@@ -47,6 +47,10 @@ Background color uses a separate gvkit layer as well, so it never falls back to 
 
 Existing 0.1.0 HTML color markup and the 0.1.1-0.1.3 `==🔵...==` / `==🟣...==` beta syntax remain removable and are converted when users interact with them. New formatting no longer relies on HTML wrappers or Obsidian's native yellow highlight layer.
 
+## AI-safe batch moves
+
+For AI-planned vault reorganizations, gvkit can execute a reviewed batch-move plan from `inbox/tmp/ai-safe-move-plan.json`. The plugin preflights the full plan, verifies each source file by `gvid`, calls Obsidian `FileManager.renameFile()` so native internal-link updating is used, records JSONL results, and verifies affected resolved Markdown link relationships by source/target identity after the move. Classification and destination decisions stay outside gvkit.
+
 ## Development
 
 ```bash

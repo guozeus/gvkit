@@ -8,6 +8,7 @@ import { gvkitEditorDecorations } from './editorDecorations';
 import { renderGvkitStyles } from './readingView';
 import { FileIdManager } from './fileIds';
 import { GvkitSettingTab } from './fileIdSettings';
+import { SafeMoveManager } from './safeMove';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -136,12 +137,14 @@ export default class GvkitPlugin extends Plugin {
 	private refreshFrame: number | null = null;
 	private readingObserver: IntersectionObserver | null = null;
 	private fileIds: FileIdManager | null = null;
+	private safeMoves: SafeMoveManager | null = null;
 
 	onload(): void {
 		registerGvkitIcons();
 
 		this.fileIds = new FileIdManager(this.app);
-		this.addSettingTab(new GvkitSettingTab(this.app, this, this.fileIds));
+		this.safeMoves = new SafeMoveManager(this.app);
+		this.addSettingTab(new GvkitSettingTab(this.app, this, this.fileIds, this.safeMoves));
 
 		// Obsidian emits vault create events for existing files during initialization.
 		// Register only after layoutReady so startup never turns into a Vault-wide ID pass.
@@ -197,6 +200,7 @@ export default class GvkitPlugin extends Plugin {
 		this.toolbarEl?.remove();
 		this.toolbarEl = null;
 		this.fileIds = null;
+		this.safeMoves = null;
 		for (const iconId of CUSTOM_ICON_IDS) removeIcon(iconId);
 	}
 
