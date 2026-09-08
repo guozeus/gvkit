@@ -8,6 +8,7 @@ A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 - `块引用` inserts `![[^^]]` the same way for embedded block references.
 - Both are normal gvkit editor commands, so they can be added to Obsidian's native mobile editor toolbar.
 - gvkit does not build a second block index or search UI; block discovery remains native Obsidian behavior.
+- Mobile acceptance passed on 2026-09-08: both toolbar actions opened native block suggestions and produced the expected link/embed results.
 
 ## 0.2 file identity
 
