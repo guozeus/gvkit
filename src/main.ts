@@ -9,6 +9,7 @@ import { renderGvkitStyles } from './readingView';
 import { FileIdManager } from './fileIds';
 import { GvkitSettingTab } from './fileIdSettings';
 import { SafeMoveManager } from './safeMove';
+import { createBlockSearchInsertion, type BlockLinkKind } from './blockLinks';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -160,6 +161,7 @@ export default class GvkitPlugin extends Plugin {
 		});
 
 		this.registerStyleCommands();
+		this.registerBlockLinkCommands();
 		this.registerEditorExtension(gvkitEditorDecorations);
 
 		// Register reading-view support during plugin load, but keep the callback
@@ -215,6 +217,34 @@ export default class GvkitPlugin extends Plugin {
 				},
 			});
 		}
+	}
+
+	private registerBlockLinkCommands(): void {
+		const commands: Array<{ id: string; name: string; icon: string; kind: BlockLinkKind }> = [
+			{ id: 'insert-block-link', name: '块链接', icon: 'link', kind: 'link' },
+			{ id: 'insert-block-embed', name: '块引用', icon: 'quote', kind: 'embed' },
+		];
+
+		for (const command of commands) {
+			this.addCommand({
+				id: command.id,
+				name: command.name,
+				icon: command.icon,
+				editorCallback: (editor) => this.insertBlockSearch(editor, command.kind),
+			});
+		}
+	}
+
+	private insertBlockSearch(editor: Editor, kind: BlockLinkKind): void {
+		const cursor = editor.getCursor();
+		const insertion = createBlockSearchInsertion(kind);
+		const target = { line: cursor.line, ch: cursor.ch + insertion.cursorOffset };
+
+		editor.transaction({
+			changes: [{ from: cursor, to: cursor, text: insertion.text }],
+			selection: { from: target, to: target },
+		});
+		editor.focus();
 	}
 
 	private createFloatingToolbar(): void {

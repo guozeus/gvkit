@@ -2,6 +2,13 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
+## 0.4 block links
+
+- `块链接` inserts `[[^^]]` and leaves the cursor inside the link so Obsidian's native vault-wide block suggestions can take over.
+- `块引用` inserts `![[^^]]` the same way for embedded block references.
+- Both are normal gvkit editor commands, so they can be added to Obsidian's native mobile editor toolbar.
+- gvkit does not build a second block index or search UI; block discovery remains native Obsidian behavior.
+
 ## 0.2 file identity
 
 - New target Markdown files receive a stable `gvid` in frontmatter using UUID v7.
