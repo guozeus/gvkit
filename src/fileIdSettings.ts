@@ -116,21 +116,17 @@ export class GvkitSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', { text: 'AI 安全批量移动' });
 		containerEl.createEl('p', {
-			text: '按 AI 已审核清单在真实 Obsidian 内调用官方安全移动，并在移动前后按 GVID 校验受影响的页面链接关系。gvkit 不参与文件分类判断。',
+			text: '按 AI / 人工已审核的“源文件 → 目标位置”清单，在真实 Obsidian 内调用官方文件移动。gvkit 只负责执行，不参与分类判断。',
 		});
 		new Setting(containerEl)
 			.setName('执行清单')
-			.setDesc(`固定读取：${SAFE_MOVE_PLAN_PATH}。整份清单预检通过前不会移动任何新文件。`)
+			.setDesc(`固定读取：${SAFE_MOVE_PLAN_PATH}。整份清单预检通过前不会移动任何文件。`)
 			.addButton((button) => {
 				button.setButtonText('执行安全批量移动').setWarning().onClick(async () => {
-					button.setDisabled(true).setButtonText('正在预检…');
+					button.setDisabled(true).setButtonText('正在执行…');
 					try {
-						button.setButtonText('正在移动…');
 						const result = await this.safeMoves.executeCurrentPlan();
-						new Notice(
-							`计划 ${result.planId} 完成：移动 ${result.moved} 个，已完成跳过 ${result.skippedCompleted} 个，链接关系验证 ${result.validatedEdges} 条。`,
-							10000,
-						);
+						new Notice(`安全批量移动完成：${result.moved}/${result.total} 个文件。`, 8000);
 					} catch (error) {
 						console.error('gvkit: safe batch move failed', error);
 						new Notice(error instanceof Error ? error.message : 'AI 安全批量移动失败', 12000);

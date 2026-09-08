@@ -57,7 +57,7 @@ Existing 0.1.0 HTML color markup and the 0.1.1-0.1.3 `==🔵...==` / `==🟣...=
 
 ## AI-safe batch moves
 
-For AI-planned vault reorganizations, gvkit can execute a reviewed batch-move plan from `inbox/tmp/ai-safe-move-plan.json`. The plugin preflights the full plan, verifies each source file by `gvid`, calls Obsidian `FileManager.renameFile()` so native internal-link updating is used, records JSONL results, and verifies affected resolved Markdown link relationships by source/target identity after the move. Classification and destination decisions stay outside gvkit.
+For AI-planned vault reorganizations, gvkit can execute a reviewed source-to-destination list from `inbox/tmp/ai-safe-move-plan.json`. The JSON file is a non-empty array of `{ "from": "...", "to": "..." }` entries. Before moving anything, gvkit rejects unsafe paths, duplicate sources or destinations, missing source files, occupied destinations, and missing destination folders. Actual moves use Obsidian `FileManager.renameFile()` so Obsidian's native safe rename/move and internal-link update behavior is preserved. gvkit does not classify files, create folders, maintain a second migration database, or implement a rollback transaction layer.
 
 ## Development
 

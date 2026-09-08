@@ -1,89 +1,100 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-	baselinePathForLog,
-	currentPathForIdentity,
 	parseSafeMovePlan,
+	validateSafeMovePreflight,
 	type SafeMovePlan,
+	type VaultPathKind,
 } from '../src/safeMoveCore.ts';
 
-const GVID_A = '01a070b1-2bf3-7277-8ff8-4474c260d344';
-const GVID_B = '01a070b1-2c3b-730d-9830-ba01ae81fd8b';
-
 function validPlan(): SafeMovePlan {
-	return {
-		version: 1,
-		plan_id: 'notion-001',
-		log_path: 'inbox/bak/导入信息已整理记录/Notion-20260828迁移/001.jsonl',
-		moves: [
-			{ gvid: GVID_A, from: 'inbox/A.md', to: 'knowledge/insights/A.md' },
-			{ gvid: GVID_B, from: 'inbox/B.md', to: 'knowledge/toolkit/B.md' },
-		],
-	};
+	return [
+		{ from: 'inbox/A.md', to: 'Knowledge/insights/A.md' },
+		{ from: 'inbox/B.md', to: 'Knowledge/toolkit/B.md' },
+	];
 }
 
-test('parses a minimal safe-move execution contract', () => {
+function pathKinds(entries: Record<string, VaultPathKind>): (path: string) => VaultPathKind {
+	return (path) => entries[path] ?? 'missing';
+}
+
+test('parses a minimal source-to-destination move list', () => {
 	const plan = validPlan();
 	assert.deepEqual(parseSafeMovePlan(JSON.stringify(plan)), plan);
 });
 
-test('rejects duplicate gvid, source path, and destination path before execution', () => {
-	for (const mutate of [
-		(plan: SafeMovePlan) => { plan.moves[1]!.gvid = plan.moves[0]!.gvid; },
-		(plan: SafeMovePlan) => { plan.moves[1]!.from = plan.moves[0]!.from; },
-		(plan: SafeMovePlan) => { plan.moves[1]!.to = plan.moves[0]!.to; },
+test('rejects malformed, empty, duplicate, and same-path lists before execution', () => {
+	assert.throws(() => parseSafeMovePlan('{}'));
+	assert.throws(() => parseSafeMovePlan('[]'));
+
+	for (const plan of [
+		[
+			{ from: 'inbox/A.md', to: 'Knowledge/A.md' },
+			{ from: 'INBOX/a.md', to: 'Knowledge/B.md' },
+		],
+		[
+			{ from: 'inbox/A.md', to: 'Knowledge/A.md' },
+			{ from: 'inbox/B.md', to: 'knowledge/a.md' },
+		],
+		[{ from: 'inbox/A.md', to: 'INBOX/a.md' }],
 	]) {
-		const plan = validPlan();
-		mutate(plan);
 		assert.throws(() => parseSafeMovePlan(JSON.stringify(plan)));
 	}
 });
 
-test('rejects unsafe paths and non-Markdown moves', () => {
+test('rejects unsafe vault paths and Obsidian control directories', () => {
 	for (const [field, value] of [
 		['from', '../A.md'],
-		['to', '/knowledge/A.md'],
-		['to', 'knowledge\\A.md'],
-		['to', 'knowledge/A.txt'],
+		['to', '/Knowledge/A.md'],
+		['to', 'Knowledge\\A.md'],
+		['to', 'Knowledge//A.md'],
+		['from', '.obsidian/plugins/a.md'],
+		['to', '.trash/A.md'],
 	] as const) {
 		const plan = validPlan();
-		(plan.moves[0] as unknown as Record<string, string>)[field] = value;
+		(plan[0] as unknown as Record<string, string>)[field] = value;
 		assert.throws(() => parseSafeMovePlan(JSON.stringify(plan)));
 	}
 });
 
-test('requires execution logs to stay in inbox/bak as JSONL', () => {
-	for (const logPath of [
-		'inbox/tmp/result.jsonl',
-		'inbox/bak/result.json',
-	]) {
-		const plan = validPlan();
-		plan.log_path = logPath;
-		assert.throws(() => parseSafeMovePlan(JSON.stringify(plan)));
-	}
+test('preflight accepts existing source files with free targets and existing target folders', () => {
+	const errors = validateSafeMovePreflight(
+		validPlan(),
+		pathKinds({
+			'inbox/A.md': 'file',
+			'inbox/B.md': 'file',
+			'Knowledge/insights': 'folder',
+			'Knowledge/toolkit': 'folder',
+		}),
+	);
+	assert.deepEqual(errors, []);
 });
 
-test('derives the immutable link-baseline path beside the execution log', () => {
-	assert.equal(
-		baselinePathForLog('inbox/bak/records/batch.jsonl'),
-		'inbox/bak/records/batch.links.json',
+test('preflight rejects missing sources, occupied targets, and missing target folders', () => {
+	const plan: SafeMovePlan = [
+		{ from: 'inbox/missing.md', to: 'Knowledge/insights/missing.md' },
+		{ from: 'inbox/conflict.md', to: 'Knowledge/insights/conflict.md' },
+		{ from: 'inbox/no-folder.md', to: 'Knowledge/unknown/no-folder.md' },
+	];
+	const errors = validateSafeMovePreflight(
+		plan,
+		pathKinds({
+			'inbox/conflict.md': 'file',
+			'inbox/no-folder.md': 'file',
+			'Knowledge/insights/conflict.md': 'file',
+		}),
 	);
+	assert.deepEqual(errors, [
+		'源文件不存在：inbox/missing.md',
+		'目标路径已存在：Knowledge/insights/conflict.md',
+		'目标目录不存在：Knowledge/unknown',
+	]);
 });
 
-test('maps moved GVID identities to their destination while leaving unrelated identities stable', () => {
-	const plan = validPlan();
-	assert.equal(
-		currentPathForIdentity(
-			{ kind: 'gvid', value: GVID_A, original_path: 'inbox/A.md' },
-			plan,
-		),
-		'knowledge/insights/A.md',
+test('preflight allows moves to the vault root without inventing a parent folder', () => {
+	const errors = validateSafeMovePreflight(
+		[{ from: 'inbox/A.md', to: 'A.md' }],
+		pathKinds({ 'inbox/A.md': 'file' }),
 	);
-	assert.equal(
-		currentPathForIdentity(
-			{ kind: 'path', value: 'settings/模板/T.md', original_path: 'settings/模板/T.md' },
-			plan,
-		),
-		'settings/模板/T.md',
-	);
+	assert.deepEqual(errors, []);
 });
