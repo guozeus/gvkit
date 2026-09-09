@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
 	parseSafeMovePlan,
 	requiredTargetFolders,
+	SAFE_MOVE_PLAN_PATH,
 	validateSafeMovePreflight,
 	type SafeMovePlan,
 	type VaultPathKind,
@@ -18,6 +19,10 @@ function validPlan(): SafeMovePlan {
 function pathKinds(entries: Record<string, VaultPathKind>): (path: string) => VaultPathKind {
 	return (path) => entries[path] ?? 'missing';
 }
+
+test('uses the permanent gvkit control-file path for safe moves', () => {
+	assert.equal(SAFE_MOVE_PLAN_PATH, 'settings/gvkit/ai-safe-move-plan.json');
+});
 
 test('parses a minimal source-to-destination move list', () => {
 	const plan = validPlan();
