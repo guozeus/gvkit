@@ -1,7 +1,7 @@
 {
   "id": "gvkit",
   "name": "gvkit",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "minAppVersion": "1.13.0",
   "description": "Fast formatting, block-link shortcuts, stable UUID v7 file identity, and AI-safe batch moves with link preservation.",
   "author": "Guozeus",

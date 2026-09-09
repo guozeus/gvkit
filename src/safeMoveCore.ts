@@ -72,6 +72,24 @@ export function parentPath(path: string): string {
 	return index === -1 ? '' : path.slice(0, index);
 }
 
+export function parentPaths(path: string): string[] {
+	const parents: string[] = [];
+	let current = parentPath(path);
+	while (current !== '') {
+		parents.push(current);
+		current = parentPath(current);
+	}
+	return parents;
+}
+
+export function requiredTargetFolders(plan: SafeMovePlan): string[] {
+	const folders = new Set<string>();
+	for (const item of plan) {
+		for (const parent of parentPaths(item.to)) folders.add(parent);
+	}
+	return [...folders].sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+}
+
 export function validateSafeMovePreflight(
 	plan: SafeMovePlan,
 	getPathKind: (path: string) => VaultPathKind,
@@ -86,9 +104,11 @@ export function validateSafeMovePreflight(
 			errors.push(`目标路径已存在：${item.to}`);
 			continue;
 		}
-		const parent = parentPath(item.to);
-		if (parent !== '' && getPathKind(parent) !== 'folder') {
-			errors.push(`目标目录不存在：${parent}`);
+		for (const parent of parentPaths(item.to)) {
+			if (getPathKind(parent) === 'file') {
+				errors.push(`目标目录路径被文件占用：${parent}`);
+				break;
+			}
 		}
 	}
 	return errors;

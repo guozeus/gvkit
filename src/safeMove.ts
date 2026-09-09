@@ -1,6 +1,7 @@
 import { App, TFile, TFolder } from 'obsidian';
 import {
 	parseSafeMovePlan,
+	requiredTargetFolders,
 	SAFE_MOVE_PLAN_PATH,
 	validateSafeMovePreflight,
 	type SafeMovePlan,
@@ -28,6 +29,7 @@ export class SafeMoveManager {
 	async executeCurrentPlan(): Promise<SafeMoveRunResult> {
 		const plan = await this.readPlan();
 		this.preflight(plan);
+		await this.ensureTargetFolders(plan);
 
 		let moved = 0;
 		for (let index = 0; index < plan.length; index += 1) {
@@ -71,6 +73,19 @@ export class SafeMoveManager {
 					errors.length > 20 ? `\n……另有 ${errors.length - 20} 项` : ''
 				}`,
 			);
+		}
+	}
+
+	private async ensureTargetFolders(plan: SafeMovePlan): Promise<void> {
+		for (const path of requiredTargetFolders(plan)) {
+			const kind = this.getPathKind(path);
+			if (kind === 'folder') continue;
+			if (kind === 'file') throw new Error(`目标目录路径被文件占用：${path}`);
+			try {
+				await this.app.vault.createFolder(path);
+			} catch (error) {
+				throw new Error(`创建目标目录失败（尚未移动文件）：${path}：${formatError(error)}`);
+			}
 		}
 	}
 

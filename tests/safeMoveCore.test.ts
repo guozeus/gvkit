@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
 	parseSafeMovePlan,
+	requiredTargetFolders,
 	validateSafeMovePreflight,
 	type SafeMovePlan,
 	type VaultPathKind,
@@ -70,24 +71,38 @@ test('preflight accepts existing source files with free targets and existing tar
 	assert.deepEqual(errors, []);
 });
 
-test('preflight rejects missing sources, occupied targets, and missing target folders', () => {
+test('preflight rejects missing sources, occupied targets, and file-blocked target ancestors', () => {
 	const plan: SafeMovePlan = [
 		{ from: 'inbox/missing.md', to: 'Knowledge/insights/missing.md' },
 		{ from: 'inbox/conflict.md', to: 'Knowledge/insights/conflict.md' },
-		{ from: 'inbox/no-folder.md', to: 'Knowledge/unknown/no-folder.md' },
+		{ from: 'inbox/blocked.md', to: 'Knowledge/blocked/deeper/blocked.md' },
 	];
 	const errors = validateSafeMovePreflight(
 		plan,
 		pathKinds({
 			'inbox/conflict.md': 'file',
-			'inbox/no-folder.md': 'file',
+			'inbox/blocked.md': 'file',
 			'Knowledge/insights/conflict.md': 'file',
+			'Knowledge/blocked': 'file',
 		}),
 	);
 	assert.deepEqual(errors, [
 		'源文件不存在：inbox/missing.md',
 		'目标路径已存在：Knowledge/insights/conflict.md',
-		'目标目录不存在：Knowledge/unknown',
+		'目标目录路径被文件占用：Knowledge/blocked',
+	]);
+});
+
+test('preflight allows missing target folders because the executor creates them first', () => {
+	const errors = validateSafeMovePreflight(
+		[{ from: 'inbox/A.md', to: 'Knowledge/new/deeper/A.md' }],
+		pathKinds({ 'inbox/A.md': 'file', Knowledge: 'folder' }),
+	);
+	assert.deepEqual(errors, []);
+	assert.deepEqual(requiredTargetFolders([{ from: 'inbox/A.md', to: 'Knowledge/new/deeper/A.md' }]), [
+		'Knowledge',
+		'Knowledge/new',
+		'Knowledge/new/deeper',
 	]);
 });
 
