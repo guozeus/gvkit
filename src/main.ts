@@ -146,6 +146,21 @@ export default class GvkitPlugin extends Plugin {
 		this.fileIds = new FileIdManager(this.app);
 		this.safeMoves = new SafeMoveManager(this.app);
 		this.addSettingTab(new GvkitSettingTab(this.app, this, this.fileIds, this.safeMoves));
+		this.addCommand({
+			id: 'execute-safe-batch-move',
+			name: '执行安全批量移动',
+			callback: async () => {
+				const safeMoves = this.safeMoves;
+				if (!safeMoves) return;
+				try {
+					const result = await safeMoves.executeCurrentPlan();
+					new Notice(`安全批量移动完成：${result.moved}/${result.total} 个文件。`, 8000);
+				} catch (error) {
+					console.error('gvkit: safe batch move command failed', error);
+					new Notice(error instanceof Error ? error.message : 'AI 安全批量移动失败', 12000);
+				}
+			},
+		});
 
 		// Obsidian emits vault create events for existing files during initialization.
 		// Register only after layoutReady so startup never turns into a Vault-wide ID pass.
