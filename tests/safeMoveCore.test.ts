@@ -29,6 +29,12 @@ test('parses a minimal source-to-destination move list', () => {
 	assert.deepEqual(parseSafeMovePlan(JSON.stringify(plan)), plan);
 });
 
+test('tolerates legacy frontmatter on the Markdown control file', () => {
+	const plan = validPlan();
+	const source = `---\ngvid: 01900000-0000-7000-8000-000000000000\n---\n${JSON.stringify(plan)}`;
+	assert.deepEqual(parseSafeMovePlan(source), plan);
+});
+
 test('rejects malformed, empty, duplicate, and same-path lists before execution', () => {
 	assert.throws(() => parseSafeMovePlan('{}'));
 	assert.throws(() => parseSafeMovePlan('[]'));

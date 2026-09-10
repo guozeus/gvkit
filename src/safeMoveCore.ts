@@ -34,11 +34,19 @@ function assertSafeVaultPath(value: unknown, label: string): asserts value is st
 	}
 }
 
+function stripOptionalFrontmatter(source: string): string {
+	if (!source.startsWith('---\n') && !source.startsWith('---\r\n')) return source;
+	const match = source.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+	if (!match) throw new Error('移动清单 frontmatter 不完整');
+	return source.slice(match[0].length);
+}
+
 export function parseSafeMovePlan(source: string): SafeMovePlan {
 	let value: unknown;
 	try {
-		value = JSON.parse(source);
-	} catch {
+		value = JSON.parse(stripOptionalFrontmatter(source));
+	} catch (error) {
+		if (error instanceof Error && error.message === '移动清单 frontmatter 不完整') throw error;
 		throw new Error('移动清单不是合法 JSON');
 	}
 	if (!Array.isArray(value) || value.length === 0) {
