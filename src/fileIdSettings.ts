@@ -73,7 +73,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.createEl('h2', { text: '文件 ID' });
 		containerEl.createEl('p', {
-			text: '新建 Markdown 文件自动获得永久唯一的 gvid，采用 UUID v7。实际模板源目录 settings/模板/ 不参与赋 ID。',
+			text: '新建 Markdown 文件自动获得永久唯一的 gvid，采用 UUID v7。实际模板源目录 settings/模板/ 与 settings/gvkit/ 控制文件不参与赋 ID。',
 		});
 
 		new Setting(containerEl)

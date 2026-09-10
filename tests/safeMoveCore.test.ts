@@ -21,7 +21,7 @@ function pathKinds(entries: Record<string, VaultPathKind>): (path: string) => Va
 }
 
 test('uses the permanent gvkit control-file path for safe moves', () => {
-	assert.equal(SAFE_MOVE_PLAN_PATH, 'settings/gvkit/ai-safe-move-plan.json');
+	assert.equal(SAFE_MOVE_PLAN_PATH, 'settings/gvkit/ai-safe-move-plan.md');
 });
 
 test('parses a minimal source-to-destination move list', () => {

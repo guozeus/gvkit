@@ -3,6 +3,7 @@ import { validate as validateUuid, v7 as uuidv7, version as uuidVersion } from '
 export const GVID_FIELD = 'gvid';
 export const LARGE_ID_BACKFILL_THRESHOLD = 10_000;
 export const TEMPLATE_SOURCE_PREFIX = 'settings/模板/';
+export const GVKIT_CONTROL_PREFIX = 'settings/gvkit/';
 
 export function createGvid(): string {
 	return uuidv7();
@@ -21,7 +22,11 @@ export function hasOwnGvid(frontmatter: unknown): boolean {
 }
 
 export function isTargetMarkdownPath(path: string): boolean {
-	return path.toLowerCase().endsWith('.md') && !path.startsWith(TEMPLATE_SOURCE_PREFIX);
+	return (
+		path.toLowerCase().endsWith('.md') &&
+		!path.startsWith(TEMPLATE_SOURCE_PREFIX) &&
+		!path.startsWith(GVKIT_CONTROL_PREFIX)
+	);
 }
 
 export function requiresLargeBackfillConfirmation(missingCount: number): boolean {

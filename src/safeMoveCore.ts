@@ -1,4 +1,4 @@
-export const SAFE_MOVE_PLAN_PATH = 'settings/gvkit/ai-safe-move-plan.json';
+export const SAFE_MOVE_PLAN_PATH = 'settings/gvkit/ai-safe-move-plan.md';
 
 export interface SafeMoveItem {
 	from: string;

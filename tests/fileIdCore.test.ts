@@ -61,11 +61,13 @@ test('does not mistake an indented YAML literal separator for the frontmatter cl
 	assert.equal(insertGvidPreservingSource(source, FIXED_ID, true), expected);
 });
 
-test('targets ordinary Markdown files but excludes the real Obsidian template source directory', () => {
+test('targets ordinary Markdown files but excludes templates and gvkit control files', () => {
 	assert.equal(isTargetMarkdownPath('日志/2026/09/2026-09-05.md'), true);
 	assert.equal(isTargetMarkdownPath('项目/资料/角色卡模板.md'), true);
 	assert.equal(isTargetMarkdownPath('settings/模板/基础日记模板.md'), false);
 	assert.equal(isTargetMarkdownPath('settings/模板/子目录/其他模板.md'), false);
+	assert.equal(isTargetMarkdownPath('settings/gvkit/ai-safe-move-plan.md'), false);
+	assert.equal(isTargetMarkdownPath('settings/gvkit/other-control.md'), false);
 	assert.equal(isTargetMarkdownPath('assets/image.png'), false);
 });
 
