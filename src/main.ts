@@ -154,7 +154,10 @@ export default class GvkitPlugin extends Plugin {
 				if (!safeMoves) return;
 				try {
 					const result = await safeMoves.executeCurrentPlan();
-					new Notice(`安全批量移动完成：${result.moved}/${result.total} 个文件。`, 8000);
+					new Notice(
+						`安全批量移动完成：${result.moved}/${result.total} 个文件；修复 ${result.linksRepaired} 条内部链接。`,
+						8000,
+					);
 				} catch (error) {
 					console.error('gvkit: safe batch move command failed', error);
 					new Notice(error instanceof Error ? error.message : 'AI 安全批量移动失败', 12000);

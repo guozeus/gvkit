@@ -2,13 +2,20 @@ import { App, TFile, TFolder } from 'obsidian';
 import {
 	parseSafeMovePlan,
 	requiredTargetFolders,
+	rewriteSafeMoveWikiLinks,
 	SAFE_MOVE_PLAN_PATH,
+	validateCompletedSafeMovePlan,
 	validateSafeMovePreflight,
 	type SafeMovePlan,
 	type VaultPathKind,
 } from './safeMoveCore';
 
-export interface SafeMoveRunResult {
+export interface SafeMoveLinkRepairResult {
+	filesChanged: number;
+	linksRepaired: number;
+}
+
+export interface SafeMoveRunResult extends SafeMoveLinkRepairResult {
 	moved: number;
 	total: number;
 }
@@ -54,7 +61,22 @@ export class SafeMoveManager {
 			if ((index + 1) % MOVE_YIELD_EVERY === 0) await yieldToUi();
 		}
 
-		return { moved, total: plan.length };
+		await yieldToUi();
+		const repaired = await this.repairResidualLinks(plan);
+		return { moved, total: plan.length, ...repaired };
+	}
+
+	async repairCompletedCurrentPlanLinks(): Promise<SafeMoveLinkRepairResult> {
+		const plan = await this.readPlan();
+		const errors = validateCompletedSafeMovePlan(plan, (path) => this.getPathKind(path));
+		if (errors.length > 0) {
+			throw new Error(
+				`当前清单不是完整的“已执行”状态，未修改任何链接：\n${errors.slice(0, 20).join('\n')}${
+					errors.length > 20 ? `\n……另有 ${errors.length - 20} 项` : ''
+				}`,
+			);
+		}
+		return this.repairResidualLinks(plan);
 	}
 
 	private async readPlan(): Promise<SafeMovePlan> {
@@ -74,6 +96,38 @@ export class SafeMoveManager {
 				}`,
 			);
 		}
+	}
+
+	private async repairResidualLinks(plan: SafeMovePlan): Promise<SafeMoveLinkRepairResult> {
+		let linksRepaired = 0;
+		const changedFiles: TFile[] = [];
+		const files = this.app.vault.getMarkdownFiles();
+
+		for (let index = 0; index < files.length; index += 1) {
+			const file = files[index]!;
+			if (file.path === SAFE_MOVE_PLAN_PATH) continue;
+			const source = await this.app.vault.read(file);
+			const rewritten = rewriteSafeMoveWikiLinks(source, plan);
+			if (rewritten.replacements > 0) {
+				await this.app.vault.modify(file, rewritten.source);
+				changedFiles.push(file);
+				linksRepaired += rewritten.replacements;
+			}
+			if ((index + 1) % MOVE_YIELD_EVERY === 0) await yieldToUi();
+		}
+
+		await yieldToUi();
+		let residualLinks = 0;
+		for (let index = 0; index < changedFiles.length; index += 1) {
+			const source = await this.app.vault.read(changedFiles[index]!);
+			residualLinks += rewriteSafeMoveWikiLinks(source, plan).replacements;
+			if ((index + 1) % MOVE_YIELD_EVERY === 0) await yieldToUi();
+		}
+		if (residualLinks > 0) {
+			throw new Error(`文件移动已完成，但仍有 ${residualLinks} 条旧路径内部链接未修复`);
+		}
+
+		return { filesChanged: changedFiles.length, linksRepaired };
 	}
 
 	private async ensureTargetFolders(plan: SafeMovePlan): Promise<void> {

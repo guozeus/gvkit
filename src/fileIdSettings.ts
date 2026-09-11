@@ -116,7 +116,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', { text: 'AI 安全批量移动' });
 		containerEl.createEl('p', {
-			text: '按 AI / 人工已审核的“源文件 → 目标位置”清单，在真实 Obsidian 内调用官方文件移动。gvkit 只负责执行，不参与分类判断。',
+			text: '按 AI / 人工已审核的“源文件 → 目标位置”清单，在真实 Obsidian 内调用官方文件移动。移动后会检查并修复仍指向旧路径的内部链接；gvkit 不参与分类判断。',
 		});
 		new Setting(containerEl)
 			.setName('执行清单')
@@ -126,12 +126,36 @@ export class GvkitSettingTab extends PluginSettingTab {
 					button.setDisabled(true).setButtonText('正在执行…');
 					try {
 						const result = await this.safeMoves.executeCurrentPlan();
-						new Notice(`安全批量移动完成：${result.moved}/${result.total} 个文件。`, 8000);
+						new Notice(
+							`安全批量移动完成：${result.moved}/${result.total} 个文件；修复 ${result.linksRepaired} 条内部链接。`,
+							8000,
+						);
 					} catch (error) {
 						console.error('gvkit: safe batch move failed', error);
 						new Notice(error instanceof Error ? error.message : 'AI 安全批量移动失败', 12000);
 					} finally {
 						button.setDisabled(false).setButtonText('执行安全批量移动');
+					}
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('修复已执行清单链接')
+			.setDesc('用于清单已经完成移动、但旧版本执行后仍残留旧路径链接的情况。仅当所有旧源已不存在且所有新目标都存在时才会修改。')
+			.addButton((button) => {
+				button.setButtonText('检查并修复').onClick(async () => {
+					button.setDisabled(true).setButtonText('正在检查…');
+					try {
+						const result = await this.safeMoves.repairCompletedCurrentPlanLinks();
+						new Notice(
+							`链接检查完成：修复 ${result.linksRepaired} 条，涉及 ${result.filesChanged} 个文件。`,
+							8000,
+						);
+					} catch (error) {
+						console.error('gvkit: completed safe move link repair failed', error);
+						new Notice(error instanceof Error ? error.message : '安全移动链接修复失败', 12000);
+					} finally {
+						button.setDisabled(false).setButtonText('检查并修复');
 					}
 				});
 			});

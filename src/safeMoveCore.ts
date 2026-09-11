@@ -8,6 +8,11 @@ export interface SafeMoveItem {
 export type SafeMovePlan = SafeMoveItem[];
 export type VaultPathKind = 'file' | 'folder' | 'missing';
 
+export interface SafeMoveLinkRewriteResult {
+	source: string;
+	replacements: number;
+}
+
 function assertPlainObject(value: unknown, label: string): asserts value is Record<string, unknown> {
 	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
 		throw new Error(`${label} 必须是对象`);
@@ -75,6 +80,41 @@ export function parseSafeMovePlan(source: string): SafeMovePlan {
 	return moves;
 }
 
+function linkPathMap(plan: SafeMovePlan): Map<string, string> {
+	const paths = new Map<string, string>();
+	for (const item of plan) {
+		paths.set(item.from, item.to);
+		if (item.from.toLowerCase().endsWith('.md') && item.to.toLowerCase().endsWith('.md')) {
+			paths.set(item.from.slice(0, -3), item.to.slice(0, -3));
+		}
+	}
+	return paths;
+}
+
+function linkPathEnd(inner: string): number {
+	let end = inner.length;
+	for (const separator of ['|', '#', '^']) {
+		const index = inner.indexOf(separator);
+		if (index !== -1 && index < end) end = index;
+	}
+	return end;
+}
+
+export function rewriteSafeMoveWikiLinks(source: string, plan: SafeMovePlan): SafeMoveLinkRewriteResult {
+	const paths = linkPathMap(plan);
+	const wikiLinkPattern = new RegExp('(!?\\[\\[)([^\\]\\n]+)(\\]\\])', 'g');
+	let replacements = 0;
+	const rewritten = source.replace(wikiLinkPattern, (whole, open: string, inner: string, close: string) => {
+		const end = linkPathEnd(inner);
+		const path = inner.slice(0, end);
+		const replacement = paths.get(path);
+		if (!replacement) return whole;
+		replacements += 1;
+		return open + replacement + inner.slice(end) + close;
+	});
+	return { source: rewritten, replacements };
+}
+
 export function parentPath(path: string): string {
 	const index = path.lastIndexOf('/');
 	return index === -1 ? '' : path.slice(0, index);
@@ -117,6 +157,23 @@ export function validateSafeMovePreflight(
 				errors.push(`目标目录路径被文件占用：${parent}`);
 				break;
 			}
+		}
+	}
+	return errors;
+}
+
+export function validateCompletedSafeMovePlan(
+	plan: SafeMovePlan,
+	getPathKind: (path: string) => VaultPathKind,
+): string[] {
+	const errors: string[] = [];
+	for (const item of plan) {
+		if (getPathKind(item.from) !== 'missing') {
+			errors.push(`旧源路径仍然存在：${item.from}`);
+			continue;
+		}
+		if (getPathKind(item.to) !== 'file') {
+			errors.push(`已移动目标文件不存在：${item.to}`);
 		}
 	}
 	return errors;

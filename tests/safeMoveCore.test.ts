@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
 	parseSafeMovePlan,
 	requiredTargetFolders,
+	rewriteSafeMoveWikiLinks,
 	SAFE_MOVE_PLAN_PATH,
+	validateCompletedSafeMovePlan,
 	validateSafeMovePreflight,
 	type SafeMovePlan,
 	type VaultPathKind,
@@ -123,4 +125,59 @@ test('preflight allows moves to the vault root without inventing a parent folder
 		pathKinds({ 'inbox/A.md': 'file' }),
 	);
 	assert.deepEqual(errors, []);
+});
+
+test('rewrites residual moved wikilinks while preserving aliases, headings, blocks, and embeds', () => {
+	const plan: SafeMovePlan = [
+		{ from: 'inbox/old/A.md', to: 'knowledge/new/A.md' },
+		{ from: 'inbox/old/image.png', to: 'assets/image.png' },
+	];
+	const source = [
+		'[[inbox/old/A|A]]',
+		'![[inbox/old/A#Heading|标题]]',
+		'[[inbox/old/A.md#^block|块]]',
+		'![[inbox/old/image.png|图]]',
+		'[[inbox/old/AB|不应变化]]',
+		'plain inbox/old/A text',
+	].join('\n');
+	const result = rewriteSafeMoveWikiLinks(source, plan);
+	assert.equal(result.replacements, 4);
+	assert.equal(result.source, [
+		'[[knowledge/new/A|A]]',
+		'![[knowledge/new/A#Heading|标题]]',
+		'[[knowledge/new/A.md#^block|块]]',
+		'![[assets/image.png|图]]',
+		'[[inbox/old/AB|不应变化]]',
+		'plain inbox/old/A text',
+	].join('\n'));
+});
+
+test('link repair leaves links outside the move plan untouched', () => {
+	const result = rewriteSafeMoveWikiLinks('[[inbox/kept/C|C]]', validPlan());
+	assert.deepEqual(result, { source: '[[inbox/kept/C|C]]', replacements: 0 });
+});
+
+test('completed-plan validation accepts only missing old sources with existing target files', () => {
+	const errors = validateCompletedSafeMovePlan(
+		validPlan(),
+		pathKinds({
+			'Knowledge/insights/A.md': 'file',
+			'Knowledge/toolkit/B.md': 'file',
+		}),
+	);
+	assert.deepEqual(errors, []);
+});
+
+test('completed-plan validation refuses repair when a source remains or a target is missing', () => {
+	const errors = validateCompletedSafeMovePlan(
+		validPlan(),
+		pathKinds({
+			'inbox/A.md': 'file',
+			'Knowledge/insights/A.md': 'file',
+		}),
+	);
+	assert.deepEqual(errors, [
+		'旧源路径仍然存在：inbox/A.md',
+		'已移动目标文件不存在：Knowledge/toolkit/B.md',
+	]);
 });
