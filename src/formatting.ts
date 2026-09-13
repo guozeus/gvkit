@@ -345,13 +345,40 @@ export function applyStyleToSourceSelection(
 		}
 	}
 
-	const selected = source.slice(selectionFrom, selectionTo);
+	// A color marker starts/ends with punctuation. In continuous text,
+	// **~={gv-blue}text=~** no longer satisfies Markdown's emphasis boundaries.
+	// When the visible selection is exactly a bold span, put color outside its
+	// existing delimiters. Keep the same text selected and never color extra text.
+	let wrapFrom = selectionFrom;
+	let wrapTo = selectionTo;
+	const delimiter = source.slice(Math.max(0, selectionFrom - 2), selectionFrom);
+	if (
+		(delimiter === '**' || delimiter === '__') &&
+		source.slice(selectionTo, selectionTo + 2) === delimiter &&
+		source[selectionFrom - 3] !== delimiter[0] &&
+		source[selectionTo + 2] !== delimiter[0] &&
+		!isEscapedDelimiter(source, selectionFrom - 2) &&
+		!isEscapedDelimiter(source, selectionTo)
+	) {
+		wrapFrom -= 2;
+		wrapTo += 2;
+	}
+
+	const selected = source.slice(wrapFrom, wrapTo);
 	const replacement = `${wrapper.open}${selected}${wrapper.close}`;
 	return {
-		source: replaceSourceRange(source, selectionFrom, selectionTo, replacement),
+		source: replaceSourceRange(source, wrapFrom, wrapTo, replacement),
 		selectionFrom: selectionFrom + wrapper.open.length,
 		selectionTo: selectionTo + wrapper.open.length,
 	};
+}
+
+function isEscapedDelimiter(source: string, offset: number): boolean {
+	let backslashes = 0;
+	for (let index = offset - 1; index >= 0 && source[index] === '\\'; index -= 1) {
+		backslashes += 1;
+	}
+	return backslashes % 2 === 1;
 }
 
 

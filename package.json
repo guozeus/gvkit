@@ -1,6 +1,6 @@
 {
   "name": "gvkit",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Lightweight Obsidian toolkit for fast formatting and stable Markdown file identity.",
   "main": "main.js",
   "type": "module",
@@ -12,9 +12,11 @@
   "private": true,
   "license": "UNLICENSED",
   "devDependencies": {
+    "@lezer/markdown": "1.7.2",
     "@types/node": "^22.15.17",
     "esbuild": "0.25.5",
     "happy-dom": "20.14.0",
+    "markdown-it": "15.0.2",
     "obsidian": "^1.13.1",
     "typescript": "^5.8.3"
   },

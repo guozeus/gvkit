@@ -37,7 +37,7 @@ The first version solves one daily-use problem: fast blue/purple text and backgr
 
 ## Formatting model
 
-Color is an independent formatting layer. Markdown bold, italic, links, and other inline formatting remain Markdown and can coexist with gvkit colors.
+Color is an independent formatting layer. Markdown bold, italic, links, and other inline formatting remain Markdown and can coexist with gvkit colors. Applying bold and then text/background color to the same selected text preserves native bold, including inside continuous Chinese sentences. Repeating a color action removes only that color layer.
 
 Text color uses lightweight gvkit source markers that are hidden in Live Preview:
 
