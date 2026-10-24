@@ -17,16 +17,26 @@ function iconButton(parent: HTMLElement, label: string, icon: string, action: (e
 export function registerArrange(plugin: Plugin): void {
 	const store = new ArrangeStore(plugin.app);
 	plugin.registerView(ARRANGE_VIEW, leaf => new ArrangeView(leaf, store));
+	const syncChrome = () => document.body.classList.toggle(
+		'gvkit-arrange-active', Platform.isMobileApp && plugin.app.workspace.getActiveViewOfType(ArrangeView) !== null,
+	);
 	const open = async () => {
 		const leaf = plugin.app.workspace.getLeavesOfType(ARRANGE_VIEW)[0] ?? plugin.app.workspace.getLeaf('tab');
 		await leaf.setViewState({ type: ARRANGE_VIEW, active: true });
 		await plugin.app.workspace.revealLeaf(leaf);
+		if (Platform.isMobileApp) syncChrome();
 	};
 	plugin.addCommand({ id: 'open-arrange', name: '打开自御安排', callback: () => { void open(); } });
 	plugin.addRibbonIcon('list-checks', '自御安排', () => { void open(); });
 	plugin.registerObsidianProtocolHandler('gvkit-arrange', () => {
 		plugin.app.workspace.onLayoutReady(() => { void open(); });
 	});
+	// Only hide Obsidian's mobile navigation when the Arrange view is active.
+	if (Platform.isMobileApp) {
+		plugin.registerEvent(plugin.app.workspace.on('active-leaf-change', syncChrome));
+		plugin.app.workspace.onLayoutReady(syncChrome);
+		plugin.register(() => document.body.classList.remove('gvkit-arrange-active'));
+	}
 }
 
 export class ArrangeView extends ItemView {
@@ -131,7 +141,7 @@ export class ArrangeView extends ItemView {
 		this.today = facts.day;
 		this.headline.empty();
 		this.headline.createSpan({ text: `今天达成 ${facts.x}/${facts.y}` });
-		this.headline.createEl('small', { text: `今日尚有 ${facts.remaining} 项必做` });
+		this.headline.setAttribute('aria-label', `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换必做筛选`);
 		this.headline.dataset.color = facts.color;
 		this.headline.setAttribute('aria-pressed', String(this.filter === 'today'));
 		const scroll = this.list.scrollTop;

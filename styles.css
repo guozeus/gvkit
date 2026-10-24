@@ -94,6 +94,13 @@
 .gvkit-action-clear {
 	color: var(--text-muted);
 }
+/* Obsidian's floating mobile navbar overlaps Arrange's one fixed input.
+ * Keep normal Obsidian navigation unchanged whenever Arrange is not active. */
+body.gvkit-arrange-active .mobile-navbar,
+body.gvkit-arrange-active .mobile-toolbar,
+body.gvkit-arrange-active .mobile-toolbar-options-container {
+	display: none !important;
+}
 /* Display-only publication prefix: filenames, editor text and links stay intact. */
 .gvkit-zhouyou-published::before {
   content: "✅ 已发布 · ";
@@ -111,10 +118,9 @@
 	box-sizing: border-box;
 }
 .gvkit-arrange button { touch-action: manipulation; }
-.gvkit-arrange-header { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--background-modifier-border); }
-.gvkit-arrange-today { flex: 1; display: flex; gap: 4px; flex-direction: column; align-items: flex-start; height: auto; padding: 8px; box-shadow: none; background: transparent; }
-.gvkit-arrange-today > span { font-size: 20px; font-weight: 650; }
-.gvkit-arrange-today small { color: var(--text-muted); font-size: 12px; }
+.gvkit-arrange-header { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; padding: 2px 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.gvkit-arrange-today { flex: 1; display: flex; align-items: center; height: 40px; min-width: 0; padding: 3px 6px; box-shadow: none; background: transparent; white-space: nowrap; }
+.gvkit-arrange-today > span { font-size: 14px; font-weight: 600; }
 .gvkit-arrange-today[data-color="red"] > span { color: var(--color-red); }
 .gvkit-arrange-today[data-color="blue"] > span { color: var(--color-blue); }
 .gvkit-arrange-today[data-color="gold"] > span { color: #b68a16; }
