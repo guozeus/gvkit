@@ -27,16 +27,21 @@ export function defaultArrangeState(): ArrangeState {
 export function pendingOrder(items: ArrangeItem[], order: string[]): string[] {
 	const pending = new Set(items.filter(item => !item.completedAt).map(item => item.id));
 	const known = new Set(order);
-	return [...items.filter(item => pending.has(item.id) && !known.has(item.id)).map(item => item.id).reverse(),
-		...order.filter((id, index) => pending.has(id) && order.indexOf(id) === index)];
+	let result = order.filter((id, index) => pending.has(id) && order.indexOf(id) === index);
+	for (const item of items.filter(item => pending.has(item.id) && !known.has(item.id))) {
+		// A restored or externally created item occupies the first free slot too.
+		// A new ID has no protected position until it enters the global sequence.
+		result = moveInOrder(result, items.filter(other => other.id !== item.id), item.id);
+	}
+	return result;
 }
 
 /** Rearrange only unprotected slots. Pinned rows keep their current absolute position. */
-export function moveInOrder(order: string[], items: ArrangeItem[], id: string, before?: string): string[] {
+export function moveInOrder(order: string[], items: ArrangeItem[], id: string, before?: string, after = false): string[] {
 	const pinned = new Set(items.filter(item => item.pinned && !item.completedAt).map(item => item.id));
 	if (pinned.has(id)) return [...order];
 	const movable = order.filter(value => !pinned.has(value) && value !== id);
-	const target = before ? order.indexOf(before) : 0;
+	const target = before ? order.indexOf(before) + (after ? 1 : 0) : 0;
 	const index = before && target >= 0
 		? order.slice(0, target).filter(value => !pinned.has(value) && value !== id).length : 0;
 	movable.splice(index, 0, id);

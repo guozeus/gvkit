@@ -3,7 +3,7 @@ import test from 'node:test';
 import { build } from 'esbuild';
 import { mkdtemp, readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 // Production Store bundled against a small disk-backed Vault adapter. Every
@@ -19,10 +19,6 @@ export const stringifyYaml = value => JSON.stringify(value, null, 2)+'\\n';
 test('disk Markdown create, sibling context, edit, reload, pin, complete/undo preserve children and other notes', async () => {
 	const root = await mkdtemp(join(tmpdir(), 'gvkit-arrange-test-'));
 	try {
-		await build({ entryPoints: ['src/arrangeStore.ts'], absWorkingDir: process.cwd(), bundle: true, platform: 'node', format: 'esm', outfile: join(root, 'store.mjs'), plugins: [{ name: 'obsidian-test', setup(b) {
-			b.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'shim' }));
-			b.onLoad({ filter: /.*/, namespace: 'shim' }, () => ({ contents: shim, loader: 'js' }));
-		} }] });
 		// Export the same shim class identities as used by the bundled module.
 		await build({ stdin: { contents: `export {ArrangeStore} from './src/arrangeStore'; export {TFile,TFolder} from 'obsidian';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(root, 'store.mjs'), plugins: [{ name: 'obsidian-test', setup(b) {
 			b.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'shim' }));
@@ -43,6 +39,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		} } };
 		const untouched = '# 既有安排\n\n正文与链接 [[保留]]\n';
 		await vault.create('安排/待执行/旧事项.md', untouched);
+		await vault.create('安排/待执行/无关旧属性.md', '---\nlegacy: [\n---\n不由本功能接管');
 		const store = new ArrangeStore(app);
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);

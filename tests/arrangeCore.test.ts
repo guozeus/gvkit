@@ -16,6 +16,7 @@ test('only third pinned stays third under inserts and reorder, completion closes
 	const order = items.map(x => x.id);
 	assert.deepEqual(moveInOrder(order, items, 'new'), ['new','a','c','b','d','e']);
 	assert.deepEqual(moveInOrder(order, items, 'e', 'b'), ['a','e','c','b','d']);
+	assert.deepEqual(moveInOrder(order, items, 'a', 'e', true), ['b','d','c','e','a']);
 	items[0]!.completedAt = '2026-10-24T04:00:00Z';
 	const after = pendingOrder(items, order);
 	assert.deepEqual(after, ['b','c','d','e']);
@@ -28,6 +29,10 @@ test('parent relationships accept arbitrary depth but refuse ancestors and missi
 	assert.equal(validParent(items, 'a', 'a'), false);
 	assert.equal(validParent(items, 'a', 'missing'), false);
 	assert.equal(validParent(items, 'b', null), true);
+});
+test('restoring a completion after the order was saved does not displace a pinned item', () => {
+	const items = ['new', 'pinned', 'other', 'restored'].map(id => item(id, { pinned: id === 'pinned' }));
+	assert.deepEqual(pendingOrder(items, ['new', 'pinned', 'other']), ['restored', 'pinned', 'new', 'other']);
 });
 test('8/5 stays red with one required remaining; blue/gold are independent of x', () => {
 	const state = defaultArrangeState();

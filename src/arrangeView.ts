@@ -48,6 +48,7 @@ export class ArrangeView extends ItemView {
 	private expanded = new Set<string>();
 	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; parent: HTMLSelectElement } | null = null;
 	private timer: number | null = null;
+	private today = '';
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -117,7 +118,7 @@ export class ArrangeView extends ItemView {
 		this.busy = true;
 		this.createButton.disabled = true;
 		try { await action(); this.paintLists(); if (!this.editing) this.paintDetail(); return true; }
-		catch (error) { this.error(error); return false; }
+		catch (error) { this.error(error); await this.reload(); return false; }
 		finally { this.busy = false; this.createButton.disabled = false; }
 	}
 	private ordered(): ArrangeItem[] {
@@ -127,6 +128,7 @@ export class ArrangeView extends ItemView {
 	private paintLists(): void {
 		if (!this.headline || this.closed) return;
 		const facts = todayFacts(this.store.items, this.store.state);
+		this.today = facts.day;
 		this.headline.empty();
 		this.headline.createSpan({ text: `今天达成 ${facts.x}/${facts.y}` });
 		this.headline.createEl('small', { text: `今日尚有 ${facts.remaining} 项必做` });
@@ -178,8 +180,8 @@ export class ArrangeView extends ItemView {
 		label.onclick = () => { void this.select(this.selected === item.id ? null : item.id); };
 		if (item.date) {
 			label.dataset.date = item.date;
-			label.title = `${item.title} · ${item.date}${item.date < todayFacts(this.store.items, this.store.state).day && !item.completedAt ? ' · 逾期' : ''}`;
-			if (!item.completedAt && item.date < todayFacts(this.store.items, this.store.state).day) label.addClass('is-overdue');
+			label.title = `${item.title} · ${item.date}${item.date < this.today && !item.completedAt ? ' · 逾期' : ''}`;
+			if (!item.completedAt && item.date < this.today) label.addClass('is-overdue');
 		}
 		const actionArea = row.createDiv('gvkit-arrange-actions');
 		const visible = this.expanded.has(item.id) ? ['parent', 'date', 'top', 'pin'] as RowAction[] : this.store.state.rowActions;
@@ -206,11 +208,14 @@ export class ArrangeView extends ItemView {
 			handle.setPointerCapture(event.pointerId);
 			row.addClass('is-dragging');
 			let target: HTMLElement | null = null;
+			let after = false;
 			const move = (e: PointerEvent) => {
 				target?.removeClass('is-drop-target');
 				const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
 				target = hit && hit !== row && hit.parentElement === row.parentElement ? hit : null;
+				after = Boolean(target && e.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
 				target?.addClass('is-drop-target');
+				if (target) target.dataset.dropAfter = String(after);
 				const scroller = row.closest<HTMLElement>('.gvkit-arrange-detail-scroll') ?? this.list;
 				const bounds = scroller.getBoundingClientRect();
 				if (e.clientY < bounds.top + 32) scroller.scrollTop -= 14;
@@ -219,7 +224,7 @@ export class ArrangeView extends ItemView {
 			const end = (e: PointerEvent) => {
 				handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end);
 				row.removeClass('is-dragging'); target?.removeClass('is-drop-target');
-				if (e.type === 'pointerup' && target?.dataset.id) void this.run(() => this.store.move(item.id, target!.dataset.id));
+				if (e.type === 'pointerup' && target?.dataset.id) void this.run(() => this.store.move(item.id, target!.dataset.id, after));
 			};
 			handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
 		});
@@ -383,20 +388,24 @@ export class ArrangeView extends ItemView {
 	}
 	private settings(): void {
 		const modal = new Modal(this.app); modal.setTitle('安排界面设置');
+		let rowActions = [...this.store.state.rowActions];
+		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
+			void this.store.configure(changes).then(() => this.paintLists()).catch(error => this.error(error));
+		};
 		new Setting(modal.contentEl).setName('松手后全屏阈值').setDesc('占底部输入区以上可用高度的百分比；默认 80%。')
 			.addSlider(slider => slider.setLimits(55, 95, 5).setValue(this.store.state.fullscreenThreshold).setDynamicTooltip()
-				.onChange(value => { void this.run(() => this.store.configure({ fullscreenThreshold: value })); }));
+				.onChange(value => configure({ fullscreenThreshold: value })));
 		for (const key of ['parent', 'date', 'top', 'pin'] as RowAction[]) {
 			new Setting(modal.contentEl).setName(`常驻${actions[key].title}`).addToggle(toggle => toggle.setValue(this.store.state.rowActions.includes(key)).onChange(value => {
-				const rowActions = this.store.state.rowActions.filter(action => action !== key);
+				rowActions = rowActions.filter(action => action !== key);
 				if (value) rowActions.push(key);
-				void this.run(() => this.store.configure({ rowActions }));
+				configure({ rowActions: [...rowActions] });
 			}));
 		}
 		modal.contentEl.createEl('p', { text: '更多始终在最右侧。未常驻的操作仍可从左滑或更多进入。' });
 		new Setting(modal.contentEl).setName('统一日界时区').setDesc('所有设备使用同一时区计算“今天”。')
 			.addText(text => text.setValue(this.store.state.timezone).onChange(value => {
-				try { new Intl.DateTimeFormat('en', { timeZone: value }); void this.run(() => this.store.configure({ timezone: value })); } catch { /* Wait for a complete timezone. */ }
+				try { new Intl.DateTimeFormat('en', { timeZone: value }); configure({ timezone: value }); } catch { /* Wait for a complete timezone. */ }
 			}));
 		modal.open();
 	}

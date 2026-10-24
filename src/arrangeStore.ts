@@ -26,7 +26,9 @@ export class ArrangeStore {
 		const items: ArrangeItem[] = [];
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (!file.path.startsWith('安排/')) continue;
-			const { fields, body } = documentParts(await this.app.vault.read(file));
+			const source = await this.app.vault.read(file);
+			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
+			const { fields, body } = documentParts(source);
 			if (fields.gvkit_arrange !== true) continue;
 			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
 			if (items.some(item => item.id === fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
@@ -94,10 +96,10 @@ export class ArrangeStore {
 			await this.requireFolder('settings/gvkit');
 			const id = createGvid();
 			if (!validParent(this.items, id, parent)) throw Error('上级事项已不存在');
-			await this.app.vault.create(`${TODO}/${id}.md`, markdown({ gvid: id, gvkit_arrange: true,
-				title: title.trim(), parent, date: null, completed_at: null, pinned: false }, ''));
 			this.state.order = moveInOrder(this.state.order, this.items, id);
 			await this.saveState();
+			await this.app.vault.create(`${TODO}/${id}.md`, markdown({ gvid: id, gvkit_arrange: true,
+				title: title.trim(), parent, date: null, completed_at: null, pinned: false }, ''));
 			await this.load();
 			return id;
 		});
@@ -116,6 +118,8 @@ export class ArrangeStore {
 			await this.requireFolder(folder);
 			const item = this.items.find(item => item.id === id);
 			if (!item || Boolean(item.completedAt) === done) return;
+			const destination = `${folder}/${this.file(id).name}`;
+			if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
 			await this.patch(id, { completed_at: done ? new Date().toISOString() : null, pinned: false });
 			const file = this.file(id);
 			await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
@@ -132,10 +136,10 @@ export class ArrangeStore {
 			await this.patch(id, { pinned: !item.pinned }); await this.load();
 		});
 	}
-	move(id: string, before?: string): Promise<void> {
+	move(id: string, before?: string, after = false): Promise<void> {
 		return this.serial(async () => {
 			if (!this.state.order.includes(id)) return;
-			this.state.order = moveInOrder(this.state.order, this.items, id, before);
+			this.state.order = moveInOrder(this.state.order, this.items, id, before, after);
 			await this.saveState();
 		});
 	}

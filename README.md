@@ -2,6 +2,24 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
+## 0.6.0 自御安排（A 阶段试用）
+
+在 Obsidian 内随手记录、按父子关系组织，并按唯一扁平顺序从上往下执行。事项和顺序均保存在 Markdown，沿用当前 Vault 的同步。
+
+1. 在 BRAT 更新 `guozeus/gvkit` 到 0.6.0，重新加载插件。新设备可用 BRAT 添加同一仓库。
+2. 从侧边栏「自御安排」或命令面板「gvkit: 打开自御安排」进入。打开时不自动弹出键盘。
+3. 使用已有的 `安排/待执行`、`安排/已完成`、`settings/gvkit` 目录。插件不会自动创建或改变一级、二级目录；新测试库须自行准备这三个目录。
+4. 未选中时底部输入创建独立事项；点标题查看详情后，同一输入框连续创建其直接下级。收起详情恢复独立事项。完成框只完成本项，子项继续保留。
+5. 拖动把手调整全局顺序；置顶跳过钉住位置。左滑或更多可钉住。设置日期表示当天必做，不会改变顺序。
+6. 点「今天达成 x/y」切换今日必做筛选；更多内有今日完成明细、逾期检查、基础特产投入达标确认和界面设置。x 是今日全部完成数；y 是今日必做总数；剩余数单独按必做事实计算。
+7. 手机入口：在安排更多中「复制手机快捷入口」，在 iPhone 快捷指令添加「打开 URL」并粘贴，再添加到主屏幕。入口形式为 `obsidian://gvkit-arrange?vault=<编码后的库名>`，同一入口复用安排视图。
+
+**数据格式**：新建事项使用 UUID v7 文件名与 `gvid`，属性含 `gvkit_arrange: true`、`title`、`parent`（直接上级 GVID 或 null）、`date`（YYYY-MM-DD 或 null）、`completed_at`（ISO 时间或 null）、`pinned`。正文仍为普通 Markdown，编辑不改变 GVID。全局顺序与设置位于 `settings/gvkit/arrange.md` 的 frontmatter：`gvkit_arrange_state: 1`、`order`、`achievedDays`、`timezone`、`fullscreenThreshold`、`rowActions`。只接管明确标记的新事项，不自动导入原有清单。外部编辑顺序时使用同一份 order，不另建局部顺序；多设备先完成现有同步再继续编辑。
+
+**最少手机验收**：分别在 Obsidian 冷启动、后台、打开其他笔记时点主屏幕入口；创建父项和两个下级；核对键盘/语音输入时底部输入可见、切换详情不丢草稿；拖动半屏至全屏后返回；完成父项后下级仍在，重新进入后数据保持。电脑自动测试及窄屏模拟不能替代这些实机验收。
+
+本轮没有重复、奖励点、后台提醒或批量多选；这些属于后续增量，继续保留既有可靠提醒。iPhone 快捷指令图标不支持 GVKit 实时设置数字角标，页面内可查看准确剩余必做数。首版尚待真实 iPhone 手势与键盘体验确认。
+
 ## 协作板发布（2026-10-22 首轮本地候选）
 
 - Obsidian 设置 → gvkit → 协作板：为当前 Vault 生成/填写跨设备共享命名空间；在协作板网页「我的机器凭据」签发本人的 `publication_device`，使用 Obsidian 原生机密控件存放/选择该凭据，不要将 Token 写进笔记、聊天或仓库。
