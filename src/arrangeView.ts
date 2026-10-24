@@ -98,7 +98,8 @@ export class ArrangeView extends ItemView {
 		}
 		this.registerInterval(window.setInterval(() => this.paintLists(), 60_000));
 		this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.reload(); });
-		// Keep the one composer inside the visible WebView when iOS opens its keyboard.
+		// Only compensate for overlap the host has not already removed. Obsidian
+		// can resize this view AFTER the visualViewport event during keyboard changes.
 		const fit = () => {
 			const viewport = window.visualViewport;
 			const bottom = root.getBoundingClientRect().bottom;
@@ -107,9 +108,19 @@ export class ArrangeView extends ItemView {
 		};
 		if (window.visualViewport) {
 			const viewport = window.visualViewport;
+			const observer = new ResizeObserver(fit);
+			// Padding changes the content box; watch the host-controlled border box
+			// so our own compensation does not trigger a resize feedback loop.
+			observer.observe(root, { box: 'border-box' });
 			viewport.addEventListener('resize', fit);
 			viewport.addEventListener('scroll', fit);
-			this.register(() => { viewport.removeEventListener('resize', fit); viewport.removeEventListener('scroll', fit); });
+			this.register(() => {
+				observer.disconnect();
+				viewport.removeEventListener('resize', fit);
+				viewport.removeEventListener('scroll', fit);
+				root.style.paddingBottom = '';
+			});
+			fit();
 		}
 		await this.reload();
 	}
