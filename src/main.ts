@@ -21,6 +21,7 @@ import { openZhouyouPublishDialog } from './publishDialog';
 import { DeviceZhouyouSecret } from './publishSecretSettings';
 import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
 import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
+import { registerArrange } from './arrangeView';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -180,6 +181,7 @@ export default class GvkitPlugin extends Plugin {
 	onload(): void {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
+		registerArrange(this);
 
 		this.fileIds = new FileIdManager(this.app);
 		this.registerEvent(this.app.vault.on('rename', (file, previousPath) => {
