@@ -124,6 +124,7 @@ export class ArrangeStore {
 			const file = this.file(id);
 			await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
 			await this.load();
+			await this.saveState();
 		});
 	}
 	setDate(id: string, date: string | null): Promise<void> {

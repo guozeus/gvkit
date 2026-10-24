@@ -66,5 +66,14 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await store.configure({ fullscreenThreshold: 70, rowActions: ['pin'] });
 		await fresh.load(); assert.equal(fresh.state.fullscreenThreshold, 70);
 		assert.deepEqual(fresh.state.rowActions, ['pin']);
+		const first = store.state.order[0];
+		const protectedId = store.state.order[2];
+		await store.togglePin(protectedId);
+		await store.complete(first, true);
+		const protectedPosition = store.state.order.indexOf(protectedId);
+		await store.complete(first, false);
+		assert.equal(store.state.order.indexOf(protectedId), protectedPosition, 'immediate undo preserves the new protected slot');
+		await fresh.load();
+		assert.deepEqual(fresh.state.order, store.state.order, 'completion and undo order survive reopening');
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
