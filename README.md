@@ -2,6 +2,25 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
+## 协作板发布（2026-10-22 首轮本地候选）
+
+- Obsidian 设置 → gvkit → 协作板：为当前 Vault 生成/填写跨设备共享命名空间；在协作板网页「我的机器凭据」签发本人的 `publication_device`，使用 Obsidian 原生机密控件存放/选择该凭据，不要将 Token 写进笔记、聊天或仓库。
+- 打开 `项目/**` 或 `安排/**` 下合规单篇 Markdown，点击标题栏「发布」→「发布到协作板」→「确认发布」。首次成功仅进入协作板全局管理池，默认**零业务项目授权**；然后在 <https://grealm.net/collab-board/> 管理页勾选策划所在项目。与宙游文档中心的独立同步/业务发布完全无关。
+- 正常保存原路径、已绑定的已协作文档会在 GVKit 运行时自动推送变更，重启仅核对已绑定单篇；未知或冲突回执保留操作 ID，不会静默新建。移到禁发位置时会尝试立即撤回，离线的待撤回由下次启动重试。
+- **现状**：协作板功能已完成代码构建及自动化测试，尚未完成个人真实设备和实际业务凭据的联调验收；目前不承诺其已达到完整长期协作状态。
+
+## 0.5.1 宙游文档发布试用
+
+1. 在 BRAT 更新 `guozeus/gvkit`，重新加载插件。
+2. 打开 Obsidian 设置 → gvkit → 宙游文档中心，在每台设备自行填写获授权的业务接口地址和个人凭据。
+3. 打开一篇 Markdown，从顶部「发布」或 `··· → 发布` 选择「宙游文档中心」，选择获授权产品。
+4. 「同步保存」只保存当前稿；修改后可再次同步。「发布业务版本」需填写说明，才新增业务版本。
+5. 每次发送前确认源文件和产品；服务端返回并读回核对后才显示完成。可到产品管理系统文档中心检查正文和版本。
+
+仅发送当前确认的单篇文档。研究所入口暂未接入。Key 使用 Obsidian 本机 SecretStorage，不写入同步设置；需支持该能力的 Obsidian 版本。网络结果未确认时保留原操作，避免重复发布。
+
+本版完成生产代码与模拟接口链路验证；真实账号发布、电脑和 iPhone 操作需要本人设备试用确认。
+
 ## 0.4 block links
 
 - `块链接` inserts `[[^^]]` and leaves the cursor inside the link so Obsidian's native vault-wide block suggestions can take over.
@@ -26,8 +45,8 @@ The first version solves one daily-use problem: fast blue/purple text and backgr
 
 1. Select text in a Markdown note.
 2. A compact floating toolbar appears near the selection.
-3. The toolbar uses the same icon language as mobile, with `粗体` first, followed by `蓝字`, `紫字`, `蓝底`, `紫底`.
-4. The selection and toolbar stay active after an action so multiple formats can be applied in sequence.
+3. The floating toolbar groups common native operations: **粗体 / 斜体 / 删除线 / 行内代码 / 内部链接 / Markdown 链接**, **无序列表 / 有序列表 / 待办项**, followed by the original `蓝字`, `紫字`, `蓝底`, `紫底`. The toolbar scrolls horizontally when a note pane is narrow.
+4. It resolves the editor's actual selection (including Live Preview checkbox items) instead of requiring a matching browser DOM selection. Bold and gvkit colors retain the text selection for consecutive clicks; link and list commands follow Obsidian's native selection behavior.
 
 ### Mobile
 

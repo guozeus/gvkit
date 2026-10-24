@@ -1,15 +1,26 @@
-import { addIcon, Editor, MarkdownRenderChild, MarkdownView, Notice, Platform, Plugin, removeIcon, setIcon, TFile, type EditorPosition } from 'obsidian';
+import { addIcon, Editor, getFrontMatterInfo, MarkdownRenderChild, MarkdownView, Menu, Notice, parseYaml, Platform, Plugin, removeIcon, requestUrl, setIcon, TFile, type EditorPosition } from 'obsidian';
 import {
 	applyStyleToSourceSelection,
 	toggleBoldInSourceSelection,
 	type StyleAction,
 } from './formatting';
 import { gvkitEditorDecorations } from './editorDecorations';
+import { resolveEditorSelectionRect, type CodeMirrorSelectionGeometry } from './toolbarSelection';
 import { renderGvkitStyles } from './readingView';
 import { FileIdManager } from './fileIds';
 import { GvkitSettingTab } from './fileIdSettings';
 import { SafeMoveManager } from './safeMove';
 import { createBlockSearchInsertion, type BlockLinkKind } from './blockLinks';
+import { DocumentActions, isPublishableMarkdownPath, type PublishDocumentContext } from './documentActions';
+import { PublishSettings } from './publishSettings';
+import { ZhouyouAutoPublisher } from './zhouyouAutoPublish';
+import { PublishWorkflow, recordNativeRename, matchesNativeRename, resolveExistingRemoteByRead, type NativeRenameTrail } from './publishWorkflow';
+import { readPublishBindings } from './publishBindings';
+import { observeLegacyForCurrentNote } from './publishLegacy';
+import { openZhouyouPublishDialog } from './publishDialog';
+import { DeviceZhouyouSecret } from './publishSecretSettings';
+import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
+import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -74,6 +85,13 @@ type DesktopToolbarAction = ColorAction | {
 	title: string;
 	icon: string;
 	className?: string;
+} | {
+	action: 'native';
+	commandId: string;
+	label: string;
+	title: string;
+	icon: string;
+	className?: string;
 };
 
 const COLOR_ACTIONS: ColorAction[] = [
@@ -116,6 +134,14 @@ const DESKTOP_TOOLBAR_ACTIONS: DesktopToolbarAction[] = [
 		title: '粗体',
 		icon: 'bold',
 	},
+	{ action: 'native', commandId: 'editor:toggle-italics', label: '斜体', title: '斜体', icon: 'italic' },
+	{ action: 'native', commandId: 'editor:toggle-strikethrough', label: '删除线', title: '删除线', icon: 'strikethrough' },
+	{ action: 'native', commandId: 'editor:toggle-code', label: '行内代码', title: '行内代码', icon: 'code' },
+	{ action: 'native', commandId: 'editor:insert-wikilink', label: '内部链接', title: '添加内部链接', icon: 'link' },
+	{ action: 'native', commandId: 'editor:insert-link', label: '普通链接', title: '添加 Markdown 链接', icon: 'external-link' },
+	{ action: 'native', commandId: 'editor:toggle-bullet-list', label: '无序列表', title: '无序列表', icon: 'list' },
+	{ action: 'native', commandId: 'editor:toggle-numbered-list', label: '有序列表', title: '有序列表', icon: 'list-ordered' },
+	{ action: 'native', commandId: 'editor:toggle-checklist-status', label: '待办项', title: '待办清单 / 切换勾选', icon: 'check-square' },
 	...COLOR_ACTIONS.slice(0, 4),
 ];
 
@@ -139,13 +165,41 @@ export default class GvkitPlugin extends Plugin {
 	private readingObserver: IntersectionObserver | null = null;
 	private fileIds: FileIdManager | null = null;
 	private safeMoves: SafeMoveManager | null = null;
+	private documentActions: DocumentActions | null = null;
+	private publishSettings: PublishSettings | null = null;
+	private autoPublisher: ZhouyouAutoPublisher | null = null;
+	private publishWorkflow: PublishWorkflow | null = null;
+    private collabBoard: CollabBoardPublisher | null = null;
+	private publishSecretRuntime: DeviceZhouyouSecret | null = null;
+	private publishDialog: { close(): void } | null = null;
+	private readonly recentFileRenames = new WeakMap<TFile, NativeRenameTrail>();
+	private readonly publishFileChanges = new WeakMap<TFile, number>();
+	private gvkitSettingsTab: GvkitSettingTab | null = null;
+	private publishLifecycleActive = false;
 
 	onload(): void {
+		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 
 		this.fileIds = new FileIdManager(this.app);
+		this.registerEvent(this.app.vault.on('rename', (file, previousPath) => {
+			if (file instanceof TFile) {
+				this.publishFileChanges.set(file, (this.publishFileChanges.get(file) ?? 0) + 1);
+				this.recentFileRenames.set(file,
+					recordNativeRename(this.recentFileRenames.get(file), previousPath, file.path));
+                void this.collabBoard?.onRename(file, previousPath).catch(() => new Notice('协作板文档已移入禁发目录，撤回未确认；请恢复网络以完成撤回。', 10000));
+			}
+		}));
+		this.registerEvent(this.app.vault.on('modify', file => {
+			if (file instanceof TFile) {
+                this.publishFileChanges.set(file, (this.publishFileChanges.get(file) ?? 0) + 1);
+                this.collabBoard?.onModify(file);
+            }
+		}));
 		this.safeMoves = new SafeMoveManager(this.app);
-		this.addSettingTab(new GvkitSettingTab(this.app, this, this.fileIds, this.safeMoves));
+		this.publishSettings = new PublishSettings({ loadData: () => this.loadData(), saveData: data => this.saveData(data) });
+		this.gvkitSettingsTab = new GvkitSettingTab(this.app, this, this.fileIds, this.safeMoves, () => this.publishSettings);
+		this.addSettingTab(this.gvkitSettingsTab);
 		this.addCommand({
 			id: 'execute-safe-batch-move',
 			name: '执行安全批量移动',
@@ -181,6 +235,7 @@ export default class GvkitPlugin extends Plugin {
 		this.registerStyleCommands();
 		this.registerBlockLinkCommands();
 		this.registerEditorExtension(gvkitEditorDecorations);
+		void this.initializeDocumentActions();
 
 		// Register reading-view support during plugin load, but keep the callback
 		// cheap: actual gvkit DOM conversion only happens after a rendered section
@@ -212,7 +267,193 @@ export default class GvkitPlugin extends Plugin {
 		}
 	}
 
+	/** Read ONLY the selected file and native metadata index on explicit target selection.
+	 * No background Vault body scan and no access to legacy private settings or Key. */
+	private publishSourceRevision(context: PublishDocumentContext): string {
+		const file = context.file;
+		return JSON.stringify([file.path, file.stat.mtime, file.stat.size,
+			this.publishFileChanges.get(file) ?? 0]);
+	}
+	private async observePublishDocument(context: PublishDocumentContext, productId?: string) {
+		const file = context.file;
+		const path = file.path;
+		if (!context.isCurrent() || !isPublishableMarkdownPath(path) || file.extension !== 'md') throw Error('invalid-publish-source');
+		let sourceRevision = this.publishSourceRevision(context);
+		let content = await this.app.vault.read(file);
+		let info = getFrontMatterInfo(content);
+		let frontmatter = info.exists ? parseYaml(info.frontmatter) : null;
+		if (info.exists && (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)))
+			throw Error('invalid-frontmatter');
+		const missingGvid = !info.exists ||
+			!Object.prototype.hasOwnProperty.call(frontmatter, 'gvid');
+		if (missingGvid) {
+			if (!this.fileIds?.isTargetFile(file)) throw Error('ineligible-gvid');
+			await this.fileIds.ensureGvid(file); // explicit current file only; no ID replacement
+			if (!context.isCurrent() || file.path !== path) throw Error('source-changed');
+			sourceRevision = this.publishSourceRevision(context);
+			content = await this.app.vault.read(file);
+			info = getFrontMatterInfo(content);
+			frontmatter = info.exists ? parseYaml(info.frontmatter) : null;
+		}
+		if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) throw Error('invalid-frontmatter');
+		// An unsaved editor is not the same revision as the on-disk body to upload.
+		if (context.view.editor.getValue() !== content) throw Error('source-unsaved');
+		const fields = frontmatter as Record<string, unknown>;
+		const gvid = fields.gvid;
+		let identity: 'verified' | 'duplicate' | 'unknown' = 'verified';
+		const cached = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		if (!cached || cached.gvid !== gvid) identity = 'unknown';
+		for (const another of this.app.vault.getMarkdownFiles()) {
+			const otherCache = this.app.metadataCache.getFileCache(another);
+			if (!otherCache) continue;
+			if (another !== file && otherCache.frontmatter?.gvid === gvid) { identity = 'duplicate'; break; }
+		}
+		const trail = this.recentFileRenames.get(file);
+		const previousPaths = trail?.currentPath === path ? trail.earlierPaths : [];
+		const rows = readPublishBindings(this.publishSettings?.getPublishBindingsSnapshot());
+		const selected = rows.find(row => row.gvid === gvid && row.productId === productId);
+		const pathProof = selected && matchesNativeRename(trail, path, selected.pathHint)
+			? 'same-file-rename' as const : 'unverified' as const;
+		const configDir = this.app.vault.configDir;
+		const referencePath = configDir + '/plugins/zhouyou-producer-sync/data.json';
+		const adapter = this.app.vault.adapter;
+		const legacy = await observeLegacyForCurrentNote({ path, frontmatter: fields }, {
+			configDir, verifiedRenamedFrom: previousPaths,
+			existsConfigFile: exactPath => {
+				if (exactPath !== referencePath) throw Error('unexpected-reference-path');
+				return adapter.exists(exactPath);
+			},
+			readConfigFile: exactPath => {
+				if (exactPath !== referencePath) throw Error('unexpected-reference-path');
+				return adapter.read(exactPath);
+			},
+			nativePath: async candidatePath => {
+				if (!context.isCurrent() || file.path !== path) return 'unknown';
+				const found = this.app.vault.getAbstractFileByPath(candidatePath);
+				return found === file ? 'current-file' : found === null ? 'absent' : 'other-file';
+			},
+		});
+		if (!context.isCurrent() || file.path !== path ||
+			this.publishSourceRevision(context) !== sourceRevision ||
+			context.view.editor.getValue() !== content) throw Error('source-changed');
+		return { note: { gvid, path, identity, pathProof },
+			legacy, title: file.basename, content, sourceRevision };
+	}
+
+	private async initializeDocumentActions(): Promise<void> {
+		try {
+			const settings = this.publishSettings;
+			if (!settings) return;
+			await settings.load();
+			if (this.publishLifecycleActive && this.gvkitSettingsTab?.containerEl.isConnected) this.gvkitSettingsTab.display();
+			if (!this.publishLifecycleActive) return;
+			// One device-only SecretStorage provider, shared by the dialog and client.
+			// No runtime credential is inspected here; only the installed Obsidian app
+			// invokes this callback after an explicit user operation.
+			const device = new DeviceZhouyouSecret({
+				secretStorage: this.app.secretStorage,
+				loadLocalStorage: key => this.app.loadLocalStorage(key),
+				saveLocalStorage: (key, value) => this.app.saveLocalStorage(key, value),
+			}, () => settings.getZhouyouSecretReference());
+			this.publishSecretRuntime = device;
+			const autoPublisher = new ZhouyouAutoPublisher(this.app, settings, device);
+			this.autoPublisher = autoPublisher;
+			this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+				if (file instanceof TFile) void autoPublisher.renamed(file, oldPath);
+			}));
+			this.registerEvent(this.app.workspace.on('layout-change', () => autoPublisher.refreshMarkers()));
+			this.registerEvent(this.app.workspace.on('file-open', () => autoPublisher.refreshMarkers()));
+			this.registerEvent(this.app.metadataCache.on('changed', () => autoPublisher.refreshMarkers()));
+			this.app.workspace.onLayoutReady(() => autoPublisher.refreshMarkers());
+			const workflow = new PublishWorkflow(settings, {
+				availability: () => {
+					if (typeof requestUrl !== 'function') return 'unsupported';
+					try { validateZhouyouEndpoint(settings.getZhouyouUrl()); }
+					catch { return 'url-missing'; }
+					const state = device.status();
+					if (state === 'unsupported') return 'unsupported';
+					if (state !== 'configured') return 'key-unconfigured';
+					return 'ready'; // Product/status READ operations are available.
+				},
+				credentialIdentity: () => String(device.runtimeRevision()),
+				observe: (context, productId) => this.observePublishDocument(context, productId),
+				currentSourceRevision: context => this.publishSourceRevision(context),
+				client: endpoint => new ZhouyouClient(endpoint,
+					() => device.runtimeCredential(),
+					createZhouyouRequestUrlTransport(requestUrl)),
+				resolveRemote: (observation, productId) =>
+					resolveExistingRemoteByRead(observation, productId,
+						new ZhouyouClient(validateZhouyouEndpoint(settings.getZhouyouUrl()),
+							() => device.runtimeCredential(),
+							createZhouyouRequestUrlTransport(requestUrl))),
+				// Company integration reply confirms UUIDv7, source uniqueness, CAS and idempotency.
+				contracts: () => ({
+					stableSourceVerified: true, atomicFirstCreateVerified: true,
+					multiProductVerified: false,
+				}),
+				writePermitted: () => true,
+			});
+			this.publishWorkflow = workflow;
+            const collab = new CollabBoardPublisher(this.app, settings, this.fileIds!);
+            this.collabBoard = collab;
+            void collab.resumeKnown();
+			const actions = new DocumentActions({
+				getMarkdownLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
+				isMarkdownFile: (file): file is TFile => file instanceof TFile && file.extension === 'md',
+				createMenu: () => new Menu(),
+				zhouyouStatusLabel: context => autoPublisher.statusLabel(context),
+				notify: (message) => { new Notice(message); },
+                onCollabTarget: async context => {
+                    if (!this.publishLifecycleActive || !context.isCurrent() || !validCollabPath(context.file.path)) {
+                        new Notice('当前文件不属于协作板可发布范围'); return;
+                    }
+                    if (!(await confirmCollabPublish(this.app, context.file.path)) || !context.isCurrent()) return;
+                    try { new Notice(await collab.publish(context), 8000); }
+                    catch (error) { new Notice(error instanceof Error ? error.message : '协作板发布结果未知', 10000); }
+                },
+				onZhouyouTarget: async context => {
+					if (!this.publishLifecycleActive || !context.isCurrent()) return;
+					await autoPublisher.publish(context);
+				},
+			}, settings);
+			this.publishSettings = settings;
+			this.documentActions = actions;
+			this.registerEvent(this.app.workspace.on('file-menu', (menu, file, source, leaf) => {
+				actions.onFileMenu(menu, file, source, leaf);
+			}));
+			for (const name of ['layout-change', 'file-open', 'active-leaf-change', 'window-open', 'window-close'] as const) {
+				// The following event names have distinct signatures, but need the same lifecycle refresh.
+				if (name === 'layout-change') this.registerEvent(this.app.workspace.on(name, () => actions.refresh()));
+				else if (name === 'file-open') this.registerEvent(this.app.workspace.on(name, () => actions.refresh()));
+				else if (name === 'active-leaf-change') this.registerEvent(this.app.workspace.on(name, () => actions.refresh()));
+				else if (name === 'window-open') this.registerEvent(this.app.workspace.on(name, () => actions.refresh()));
+				else this.registerEvent(this.app.workspace.on('window-close', () => actions.refresh()));
+			}
+			this.app.workspace.onLayoutReady(() => {
+				if (this.publishLifecycleActive && this.documentActions === actions) actions.refresh();
+			});
+		} catch {
+			if (this.publishLifecycleActive) new Notice('GVKit 发布入口暂不可用，请重新加载插件。');
+		}
+	}
+
 	onunload(): void {
+		this.publishLifecycleActive = false;
+		this.autoPublisher?.stop();
+		this.autoPublisher = null;
+		this.publishDialog?.close();
+		this.publishDialog = null;
+		this.publishWorkflow?.stop();
+        this.collabBoard?.stop();
+        this.collabBoard = null;
+		this.publishWorkflow = null;
+		this.publishSecretRuntime?.disposeRuntime();
+		this.publishSecretRuntime = null;
+		this.documentActions?.destroy();
+		this.documentActions = null;
+		this.gvkitSettingsTab?.dispose();
+		this.gvkitSettingsTab = null;
+		this.publishSettings = null;
 		if (this.refreshFrame !== null) {
 			window.cancelAnimationFrame(this.refreshFrame);
 			this.refreshFrame = null;
@@ -273,6 +514,15 @@ export default class GvkitPlugin extends Plugin {
 		toolbar.hidden = true;
 
 		for (const item of DESKTOP_TOOLBAR_ACTIONS) {
+			if (
+				(item.action === 'native' && item.commandId === 'editor:toggle-bullet-list') ||
+				item.action === 'text-blue'
+			) {
+				const divider = document.createElement('span');
+				divider.className = 'gvkit-format-separator';
+				divider.setAttribute('aria-hidden', 'true');
+				toolbar.appendChild(divider);
+			}
 			const button = document.createElement('button');
 			button.type = 'button';
 			button.className = `gvkit-format-button ${item.className ?? ''}`.trim();
@@ -282,13 +532,17 @@ export default class GvkitPlugin extends Plugin {
 
 			// Prevent the editor from losing its selection before the action runs.
 			button.addEventListener('pointerdown', (event: PointerEvent) => {
+				if (event.button !== 0) return;
 				event.preventDefault();
 				event.stopPropagation();
 
 				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (!view) return;
+				if (!view || !view.editor.getSelection().trim()) {
+					this.hideToolbar();
+					return;
+				}
 
-				this.applyToolbarAction(view.editor, item.action);
+				this.applyToolbarAction(view.editor, item);
 				view.editor.focus();
 				this.scheduleToolbarRefresh();
 			});
@@ -318,7 +572,11 @@ export default class GvkitPlugin extends Plugin {
 		});
 
 		this.registerDomEvent(window, 'resize', () => this.hideToolbar());
-		this.registerDomEvent(window, 'scroll', () => this.hideToolbar(), true);
+		this.registerDomEvent(window, 'scroll', (event: Event) => {
+			// Narrow panes scroll the toolbar horizontally; that must not dismiss it.
+			if (event.target instanceof Node && this.toolbarEl?.contains(event.target)) return;
+			this.hideToolbar();
+		}, true);
 	}
 
 	private scheduleToolbarRefresh(): void {
@@ -342,27 +600,17 @@ export default class GvkitPlugin extends Plugin {
 			return;
 		}
 
-		const selection = window.getSelection();
-		const anchorNode = selection?.anchorNode ?? null;
-		if (
-			!selection ||
-			selection.isCollapsed ||
-			selection.rangeCount === 0 ||
-			!anchorNode ||
-			!view.containerEl.contains(anchorNode)
-		) {
+		// CodeMirror is not part of Obsidian's public Editor interface, but its
+		// live selection/coordinates are required for Live Preview task widgets.
+		const cm = (view.editor as Editor & { cm?: CodeMirrorSelectionGeometry }).cm;
+		const rect = resolveEditorSelectionRect(view.editor, view.containerEl, cm, window.getSelection());
+		if (!rect) {
 			this.hideToolbar();
 			return;
 		}
 
-		const range = selection.getRangeAt(0);
-		const clientRects = range.getClientRects();
-		const rect = clientRects.length > 0 ? clientRects[0] : range.getBoundingClientRect();
-		if (!rect || (rect.width === 0 && rect.height === 0)) {
-			this.hideToolbar();
-			return;
-		}
-
+		const pane = view.containerEl.getBoundingClientRect();
+		toolbar.style.maxWidth = `${Math.max(120, Math.min(window.innerWidth, pane.width) - 16)}px`;
 		toolbar.hidden = false;
 		toolbar.style.visibility = 'hidden';
 		toolbar.style.left = '0px';
@@ -372,12 +620,11 @@ export default class GvkitPlugin extends Plugin {
 		const toolbarHeight = toolbar.offsetHeight;
 		const margin = 8;
 		const desiredLeft = rect.left + rect.width / 2 - toolbarWidth / 2;
-		const left = Math.max(
-			margin,
-			Math.min(desiredLeft, window.innerWidth - toolbarWidth - margin),
-		);
+		const minLeft = Math.max(margin, pane.left + margin);
+		const maxLeft = Math.max(minLeft, Math.min(window.innerWidth, pane.right) - toolbarWidth - margin);
+		const left = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
 		const above = rect.top - toolbarHeight - margin;
-		const top = above >= margin ? above : rect.bottom + margin;
+		const top = above >= margin ? above : Math.min(rect.bottom + margin, window.innerHeight - toolbarHeight - margin);
 
 		toolbar.style.left = `${Math.round(left)}px`;
 		toolbar.style.top = `${Math.round(top)}px`;
@@ -390,12 +637,21 @@ export default class GvkitPlugin extends Plugin {
 		this.toolbarEl.style.visibility = 'hidden';
 	}
 
-	private applyToolbarAction(editor: Editor, action: StyleAction | 'bold'): void {
-		if (action === 'bold') {
+	private applyToolbarAction(editor: Editor, item: DesktopToolbarAction): void {
+		if (item.action === 'bold') {
 			this.applyBold(editor);
-			return;
+		} else if (item.action === 'native') {
+			// Reuse Obsidian's own Markdown/link/list semantics rather than
+			// maintaining a second parser for these standard operations.
+			const commands = (this.app as typeof this.app & {
+				commands?: { executeCommandById(id: string): boolean };
+			}).commands;
+			if (!commands || commands.executeCommandById(item.commandId) === false) {
+				new Notice(`${item.label}在当前 Obsidian 版本不可用`);
+			}
+		} else {
+			this.applyAction(editor, item.action);
 		}
-		this.applyAction(editor, action);
 	}
 
 	private applyBold(editor: Editor): void {

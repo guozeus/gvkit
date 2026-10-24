@@ -34,13 +34,24 @@
 	background: var(--background-primary);
 	box-shadow: var(--shadow-s);
 	user-select: none;
+	max-width: calc(100vw - 16px);
+	overflow-x: auto;
+	overflow-y: hidden;
 }
 
 .gvkit-format-toolbar[hidden] {
 	display: none;
 }
 
+.gvkit-format-separator {
+	flex: 0 0 1px;
+	height: 20px;
+	background: var(--background-modifier-border);
+	margin-inline: 2px;
+}
+
 .gvkit-format-button {
+	flex: 0 0 32px;
 	width: 32px;
 	height: 32px;
 	padding: 6px;
@@ -82,4 +93,12 @@
 
 .gvkit-action-clear {
 	color: var(--text-muted);
+}
+/* Display-only publication prefix: filenames, editor text and links stay intact. */
+.gvkit-zhouyou-published::before {
+  content: "✅ 已发布 · ";
+  color: var(--color-green);
+  font-weight: 800;
+  font-size: .85em;
+  pointer-events: none;
 }
