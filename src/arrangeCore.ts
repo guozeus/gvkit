@@ -15,11 +15,12 @@ export interface ArrangeState {
 	achievedDays: string[];
 	timezone: string;
 	fullscreenThreshold: number;
+	keyboardGap: number;
 	rowActions: RowAction[];
 }
 
 export function defaultArrangeState(): ArrangeState {
-	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80,
+	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		rowActions: ['parent', 'date', 'top'] };
 }
 

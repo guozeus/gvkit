@@ -70,14 +70,24 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	} });
 	let view: any;
 	try {
-		const store = { load: async () => {}, items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [] } };
+		const store = { load: async () => {}, items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [], keyboardGap: 7 } };
 		view = new module.exports.ArrangeView({ contentEl: root, app: { vault: { on: () => ({}) } } }, store);
 		await view.onOpen();
 		assert.equal(root.style.paddingBottom, '344px', 'opening with an already visible keyboard fits immediately');
 		assert.equal(observedTarget, root);
 		assert.equal(observedBox, 'border-box');
 		const input = root.querySelector('textarea')!;
+		const submit = root.querySelector<HTMLButtonElement>('.gvkit-arrange-submit')!;
+		assert.equal(submit.hidden, true, 'empty input does not show a submit button');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-keyboard-gap'), '7px');
 		input.value = '尚未提交的中文草稿'; input.focus();
+		input.dispatchEvent(new window.Event('input'));
+		assert.equal(submit.hidden, false);
+		input.value = ' \n '; input.dispatchEvent(new window.Event('input'));
+		assert.equal(submit.hidden, true, 'whitespace cannot be submitted');
+		input.value = '尚未提交的中文草稿'; input.dispatchEvent(new window.Event('input'));
+		store.state.keyboardGap = 0; await view.reload();
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-keyboard-gap'), '0px');
 		// Native host catches up after the last visualViewport event.
 		hostBottom = 500; notifyResize();
 		assert.equal(root.style.paddingBottom, '', 'host-reserved space must not be subtracted twice');
@@ -99,19 +109,6 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(window.document.activeElement, input);
 		viewport.height = 500; viewport.dispatchEvent(new window.Event('resize'));
 		assert.equal(root.style.paddingBottom, '344px');
-		view.keyboardDiagnostics.select('off');
-		assert.equal(root.style.paddingBottom, '', 'A/B off removes existing padding immediately');
-		viewport.height = 460; viewport.dispatchEvent(new window.Event('resize')); notifyResize();
-		assert.equal(root.style.paddingBottom, '', 'viewport and observer cannot reapply compensation while off');
-		assert.equal(root.querySelector('textarea'), input);
-		assert.equal(input.value, '尚未提交的中文草稿');
-		assert.equal(window.document.activeElement, input);
-		view.keyboardDiagnostics.select('current');
-		assert.equal(root.style.paddingBottom, '384px', 'the original calculation is reversible');
-		view.keyboardDiagnostics.select('off');
-		view.keyboardDiagnostics.stop();
-		assert.equal(root.style.paddingBottom, '384px', 'ending diagnosis restores default behavior');
-		assert.equal(view.keyboardDiagnostics.active, false);
 		// iPhone trace: viewport stays 956; CSS inset arrives before the host shrinks.
 		Object.defineProperty(window, 'innerHeight', { value: 956 });
 		const hostStyle = window.document.createElement('style');
@@ -127,10 +124,6 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(root.style.paddingBottom, '0px', 'explicit zero prevents the host CSS inset returning');
 		assert.equal(window.getComputedStyle(root).paddingBottom, '0px');
 		assert.equal(root.style.getPropertyPriority('padding-bottom'), 'important');
-		view.keyboardDiagnostics.select('off');
-		assert.equal(window.getComputedStyle(root).paddingBottom, '378px', 'raw host CSS reproduces the diagnosed double reservation');
-		view.keyboardDiagnostics.stop();
-		assert.equal(window.getComputedStyle(root).paddingBottom, '0px');
 		// A keyboard height change is also phased: only its uncovered difference is reserved.
 		root.style.setProperty('--keyboard-height', '400px');
 		root.style.setProperty('--safe-area-inset-bottom', '400px');
@@ -153,6 +146,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(disconnected, true);
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);
 		assert.equal(root.style.paddingBottom, '');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-keyboard-gap'), '');
 		viewport.height = 400; viewport.dispatchEvent(new window.Event('resize'));
 		assert.equal(root.style.paddingBottom, '', 'closed view has no viewport listeners');
 	} finally {

@@ -1,7 +1,6 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
 import { dayKey, offsetDay, todayFacts, validParent, type ArrangeItem, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
-import { ArrangeKeyboardDiagnostics } from './arrangeKeyboardDiagnostics';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -60,7 +59,6 @@ export class ArrangeView extends ItemView {
 	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; parent: HTMLSelectElement } | null = null;
 	private timer: number | null = null;
 	private today = '';
-	private keyboardDiagnostics: ArrangeKeyboardDiagnostics | null = null;
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -84,7 +82,11 @@ export class ArrangeView extends ItemView {
 		this.detail.hidden = true;
 		const composer = root.createDiv('gvkit-arrange-composer');
 		this.input = composer.createEl('textarea', { attr: { rows: '1', placeholder: '想到就记…', 'aria-label': '新增事项' } });
-		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
+		this.createButton = iconButton(composer, '创建事项', 'corner-down-left', () => { void this.create(); });
+		this.createButton.addClass('gvkit-arrange-submit');
+		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
+		this.updateComposer();
+		this.applyComposerSettings();
 		this.input.onkeydown = event => {
 			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void this.create(); }
 		};
@@ -102,33 +104,31 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.reload(); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
-		const fit = (reason = 'open') => {
+		const fit = () => {
 			const viewport = window.visualViewport;
 			const bottom = root.getBoundingClientRect().bottom;
+			const css = window.getComputedStyle(root);
 			const keyboard = Platform.isIosApp
-				? Math.max(0, parseFloat(window.getComputedStyle(root).getPropertyValue('--keyboard-height')) || 0) : 0;
+				? Math.max(0, parseFloat(css.getPropertyValue('--keyboard-height')) || 0) : 0;
+			// Let only the input strip span the host's side insets; list/header stay put.
+			composer.style.marginLeft = `-${css.paddingLeft}`;
+			composer.style.marginRight = `-${css.paddingRight}`;
 			root.classList.toggle('gvkit-arrange-keyboard-open', keyboard > 0);
 			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : window.innerHeight,
 				keyboard > 0 ? window.innerHeight - keyboard : Infinity);
 			const overlap = Math.max(0, bottom - visibleBottom);
-			const previous = root.style.paddingBottom;
-			if (!this.keyboardDiagnostics?.compensationOff && (keyboard > 0 || overlap > 0)) {
+			if (keyboard > 0 || overlap > 0) {
 				// Explicit zero must override the host CSS inset after it has resized.
 				root.style.setProperty('padding-bottom', `${overlap}px`, keyboard > 0 ? 'important' : '');
 			} else root.style.removeProperty('padding-bottom');
-			this.keyboardDiagnostics?.recordFit(reason, previous);
 		};
-		if (Platform.isMobileApp) {
-			this.keyboardDiagnostics = new ArrangeKeyboardDiagnostics(root, () => fit('mode-fit'));
-			this.register(() => this.keyboardDiagnostics?.dispose());
-		}
 		if (window.visualViewport) {
 			const viewport = window.visualViewport;
-			const observer = new ResizeObserver(() => fit('host-resize'));
+			const observer = new ResizeObserver(fit);
 			// Padding changes the content box; watch the host-controlled border box
 			// so our own compensation does not trigger a resize feedback loop.
 			observer.observe(root, { box: 'border-box' });
-			const resize = () => fit('viewport-resize'), scroll = () => fit('viewport-scroll');
+			const resize = () => fit(), scroll = () => fit();
 			viewport.addEventListener('resize', resize);
 			viewport.addEventListener('scroll', scroll);
 			this.register(() => {
@@ -137,6 +137,7 @@ export class ArrangeView extends ItemView {
 				viewport.removeEventListener('scroll', scroll);
 				root.style.paddingBottom = '';
 				root.classList.remove('gvkit-arrange-keyboard-open');
+				root.style.removeProperty('--gvkit-arrange-keyboard-gap');
 			});
 			fit();
 		}
@@ -144,22 +145,29 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
-		this.keyboardDiagnostics?.dispose();
 		if (this.timer !== null) window.clearTimeout(this.timer);
 		await this.saveEdit();
 	}
 	private async reload(): Promise<void> {
-		try { await this.store.load(); if (!this.closed) { this.paintLists(); if (!this.editing) this.paintDetail(); } }
+		try { await this.store.load(); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.editing) this.paintDetail(); } }
 		catch (error) { this.error(error); }
 	}
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
+	private applyComposerSettings(): void {
+		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
+	}
+	private updateComposer(): void {
+		const empty = !this.input.value.trim();
+		this.createButton.hidden = empty;
+		this.createButton.disabled = this.busy || empty;
+	}
 	private async run(action: () => Promise<unknown>): Promise<boolean> {
 		if (this.busy) return false;
 		this.busy = true;
-		this.createButton.disabled = true;
+		this.updateComposer();
 		try { await action(); this.paintLists(); if (!this.editing) this.paintDetail(); return true; }
 		catch (error) { this.error(error); await this.reload(); return false; }
-		finally { this.busy = false; this.createButton.disabled = false; }
+		finally { this.busy = false; this.updateComposer(); }
 	}
 	private ordered(): ArrangeItem[] {
 		const byId = new Map(this.store.items.map(item => [item.id, item]));
@@ -409,6 +417,7 @@ export class ArrangeView extends ItemView {
 		let id: string | undefined;
 		if (await this.run(async () => { id = await this.store.create(draft, parent); })) {
 			if (this.input.value === draft) this.input.value = '';
+			this.updateComposer();
 			if (id) this.reveal(id);
 		}
 	}
@@ -424,31 +433,17 @@ export class ArrangeView extends ItemView {
 			catch { new Notice('无法复制，请使用命令面板“打开自御安排”'); }
 		}));
 		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { void this.reload(); }));
-		const diagnostic = this.keyboardDiagnostics;
-		if (diagnostic) {
-			menu.addSeparator();
-			menu.addItem(item => item.setTitle('键盘诊断：现有补偿').setChecked(diagnostic.mode === 'current').onClick(() => {
-				diagnostic.select('current'); new Notice('现有补偿：点新增框，等 2 秒。只记录布局数字，不含输入内容。');
-			}));
-			menu.addItem(item => item.setTitle('键盘诊断：关闭额外补偿').setChecked(diagnostic.mode === 'off').onClick(() => {
-				diagnostic.select('off'); new Notice('额外补偿已关闭：再点新增框，等 2 秒并比较位置。');
-			}));
-			menu.addItem(item => item.setTitle('复制键盘诊断结果').setDisabled(!diagnostic.active).onClick(async () => {
-				try { await navigator.clipboard.writeText(diagnostic.serialize()); new Notice('已复制两种模式的布局数据；请同时说明关闭补偿后是否改善。'); }
-				catch { new Notice('复制失败，请重试；诊断数据仍保留在本次视图中。'); }
-			}));
-			menu.addItem(item => item.setTitle('结束键盘诊断并恢复默认').setDisabled(!diagnostic.active).onClick(() => {
-				diagnostic.stop(); new Notice('已恢复现有补偿并清除临时诊断数据。');
-			}));
-		}
 		menu.showAtMouseEvent(event);
 	}
 	private settings(): void {
 		const modal = new Modal(this.app); modal.setTitle('安排界面设置');
 		let rowActions = [...this.store.state.rowActions];
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
-			void this.store.configure(changes).then(() => this.paintLists()).catch(error => this.error(error));
+			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
 		};
+		new Setting(modal.contentEl).setName('键盘上方留白').setDesc('输入区与键盘之间的留白（像素）；0 为贴紧，默认 7。键盘收起后保留系统安全区。')
+			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.keyboardGap).setDynamicTooltip()
+				.onChange(value => configure({ keyboardGap: value })));
 		new Setting(modal.contentEl).setName('松手后全屏阈值').setDesc('占底部输入区以上可用高度的百分比；默认 80%。')
 			.addSlider(slider => slider.setLimits(55, 95, 5).setValue(this.store.state.fullscreenThreshold).setDynamicTooltip()
 				.onChange(value => configure({ fullscreenThreshold: value })));

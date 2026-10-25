@@ -41,6 +41,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await vault.create('安排/待执行/旧事项.md', untouched);
 		await vault.create('安排/待执行/无关旧属性.md', '---\nlegacy: [\n---\n不由本功能接管');
 		const store = new ArrangeStore(app);
+		await store.load(); assert.equal(store.state.keyboardGap, 7, 'new installs use the accepted 7px gap');
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);
 		const child2 = await store.create('第二项', parent);
@@ -64,8 +65,19 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(await readFile(join(root, '安排/待执行/旧事项.md'), 'utf8'), untouched);
 		await assert.rejects(store.edit(parent, '父', '', child1), /下级/);
 		await store.configure({ fullscreenThreshold: 70, rowActions: ['pin'] });
+		// An existing configuration without the new field remains compatible.
+		const stateFile = entries.get('settings/gvkit/arrange.md');
+		await vault.process(stateFile, source => source.replace('  "keyboardGap": 7,\n', ''));
 		await fresh.load(); assert.equal(fresh.state.fullscreenThreshold, 70);
 		assert.deepEqual(fresh.state.rowActions, ['pin']);
+		assert.equal(fresh.state.keyboardGap, 7);
+		for (const gap of [0, 24, 40]) {
+			await store.configure({ keyboardGap: gap });
+			await fresh.load(); assert.equal(fresh.state.keyboardGap, gap, 'gap persists across Store reloads');
+			assert.ok((await vault.read(stateFile)).includes(`"keyboardGap": ${gap}`));
+			assert.equal(fresh.state.fullscreenThreshold, 70);
+			assert.deepEqual(fresh.state.rowActions, ['pin']);
+		}
 		const first = store.state.order[0];
 		const protectedId = store.state.order[2];
 		await store.togglePin(protectedId);

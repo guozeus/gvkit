@@ -50,6 +50,8 @@ export class ArrangeStore {
 			state.achievedDays = fields.achievedDays;
 			if (typeof fields.timezone === 'string') { new Intl.DateTimeFormat('en', { timeZone: fields.timezone }); state.timezone = fields.timezone; }
 			if (typeof fields.fullscreenThreshold === 'number') state.fullscreenThreshold = Math.max(55, Math.min(95, fields.fullscreenThreshold));
+			if (typeof fields.keyboardGap === 'number' && Number.isFinite(fields.keyboardGap))
+				state.keyboardGap = Math.max(0, Math.min(40, Math.round(fields.keyboardGap)));
 			if (strings(fields.rowActions)) state.rowActions = fields.rowActions.filter((a): a is ArrangeState['rowActions'][number] => ['parent', 'date', 'top', 'pin'].includes(a));
 		}
 		state.order = pendingOrder(items, state.order);
@@ -144,7 +146,7 @@ export class ArrangeStore {
 			await this.saveState();
 		});
 	}
-	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'rowActions'>>): Promise<void> {
+	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'rowActions'>>): Promise<void> {
 		return this.serial(async () => { Object.assign(this.state, changes); await this.saveState(); });
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {
