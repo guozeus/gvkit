@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dayKey, defaultArrangeState, moveInOrder, pendingOrder, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
+import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
 
 function item(id: string, changes: Partial<ArrangeItem> = {}): ArrangeItem {
 	return { id, title: id, body: '', path: `${id}.md`, parent: null, date: null, completedAt: null, pinned: false, ...changes };
@@ -54,4 +54,33 @@ test('8/5 stays red with one required remaining; blue/gold are independent of x'
 });
 test('shared time zone uses the same day across UTC midnight and devices', () => {
 	assert.equal(dayKey(new Date('2026-10-23T17:00:00Z'), 'Asia/Shanghai'), '2026-10-24');
+});
+
+test('search periods use Monday weeks and calendar months/years across boundaries', () => {
+	assert.deepEqual(dateRange('2026-10-25', 'week'), { start: '2026-10-19', end: '2026-10-25' });
+	assert.deepEqual(dateRange('2026-01-01', 'week'), { start: '2025-12-29', end: '2026-01-04' });
+	assert.deepEqual(dateRange('2028-02-12', 'month'), { start: '2028-02-01', end: '2028-02-29' });
+	assert.deepEqual(dateRange('2026-10-25', 'year'), { start: '2026-01-01', end: '2026-12-31' });
+	assert.equal(shiftPeriod('2026-01-31', 'month', 1), '2026-02-01');
+	assert.equal(shiftPeriod('2028-02-29', 'year', 1), '2029-01-01');
+	assert.equal(shiftPeriod('2026-01-01', 'day', -1), '2025-12-31');
+	assert.equal(shiftPeriod('2026-01-01', 'week', -1), '2025-12-25');
+});
+test('search dates use pending date or actual completion day in the shared timezone', () => {
+	const range = dateRange('2026-10-25', 'day');
+	assert.equal(matchesDateRange(item('undated'), range, 'Asia/Shanghai'), false);
+	assert.equal(matchesDateRange(item('due', { date: range.start }), range, 'Asia/Shanghai'), true);
+	const done = item('done', { date: '2027-01-01', completedAt: '2026-10-24T16:01:00Z' });
+	assert.equal(matchesDateRange(done, range, 'Asia/Shanghai'), true);
+	assert.equal(matchesDateRange(done, range, 'UTC'), false);
+	assert.equal(matchesDateRange({ ...done, date: range.start, completedAt: '2026-10-23T00:00:00Z' }, range, 'Asia/Shanghai'), false);
+});
+test('date label uses the saved day boundary, relative weekdays and cross-year dates', () => {
+	assert.equal(relativeDate('2026-10-26', '2026-10-25'), '明天，10月26号');
+	assert.equal(relativeDate('2026-10-30', '2026-10-25'), '下周五，10月30号');
+	assert.equal(relativeDate('2026-10-30', '2026-10-26'), '本周五，10月30号');
+	assert.equal(relativeDate('2026-10-25', '2026-10-25'), '今天，10月25号');
+	assert.equal(relativeDate('2026-10-24', '2026-10-25'), '已逾期，10月24号');
+	assert.equal(relativeDate('2026-10-24', '2026-10-25', true), '10月24号');
+	assert.equal(relativeDate('2027-06-01', '2026-10-25'), '2027年6月1号');
 });

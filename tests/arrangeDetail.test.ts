@@ -102,7 +102,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		active = true; events.get('active-leaf-change')!();
 		assert.ok(host.querySelector('#nav')); assert.ok(host.querySelector('#native-more'));
 		// A long hold moves the same global sequence; early movement remains scrolling/swiping.
-		const pointer = (el: any, type: string, x: number, y: number) => el.dispatchEvent(new window.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse', clientX: x, clientY: y }));
+		const pointer = (el: any, type: string, x: number, y: number) => el.dispatchEvent(new window.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse', isPrimary: true, clientX: x, clientY: y }));
 		const waitHold = () => new Promise(resolve => setTimeout(resolve, 410));
 		let label = root.querySelector<HTMLElement>(`[data-id="${second}"] .gvkit-arrange-title`)!;
 		let target = root.querySelector<HTMLElement>(`[data-id="${parent}"]`)!;
@@ -144,7 +144,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(root.querySelector('.gvkit-arrange-parent-name')?.textContent, '父事项');
 		let title = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-detail-title')!;
 		assert.equal(title.value, '第一项完整标题');
-		title.click(); assert.equal(title.selectionStart, title.value.length);
+		title.setSelectionRange(3, 3); title.click(); assert.equal(title.selectionStart, 3, 'first title click must not override native hit testing');
 		const previewText = root.querySelector('.gvkit-arrange-body')!.firstChild;
 		title.focus(); title.blur(); await view.saveEdit();
 		assert.equal(root.querySelector('.gvkit-arrange-body')!.firstChild, previewText, 'title blur must not replace the text a pending pointer click is landing on');
@@ -402,6 +402,102 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await store.setAchieved(today, true); view.paintLists(); assert.equal(view.headline.dataset.color, 'gold');
 		await store.setDate(C, today); view.paintLists(); assert.equal(view.headline.dataset.color, 'red'); assert.equal(rowIds()[0], C);
 		await store.setDate(C, null); view.paintLists(); assert.equal(view.headline.dataset.color, 'gold'); assert.ok(!rowIds().includes(C));
+		// Unified search keeps keyword, completion and date filters independent.
+		view.toggleSearch(); search('');
+		const searchOrder = [...store.state.order];
+		view.completedButton.click(); assert.ok(rowIds().includes(D));
+		view.dateButton.click();
+		assert.ok(rowIds().includes(D), 'a completed item matches its completion day, not its far-future date');
+		assert.ok(!rowIds().includes(C), 'undated pending items are excluded with a date filter');
+		search('明天安排'); assert.deepEqual(rowIds(), [D]);
+		view.completedButton.click(); assert.deepEqual(rowIds(), []);
+		view.completedButton.click(); assert.deepEqual(rowIds(), [D]);
+		assert.deepEqual(store.state.order, searchOrder, 'search alone never changes global order');
+		view.list.querySelector('input').click(); await settle();
+		assert.deepEqual(rowIds(), [], 'undo switches from completion timestamp to scheduled date');
+		assert.equal(store.items.find((x: any) => x.id === D).completedAt, null);
+		view.dateBar.querySelector('[aria-label="清除日期条件"]').click(); assert.deepEqual(rowIds(), [D]);
+		assert.equal(view.searchInput.value, '明天安排');
+		view.dateButton.click();
+		await view.changeParent(first); view.toggleSearch(); search('明天安排');
+		assert.deepEqual(rowIds(), [D], 'parent selection bypasses date/completion filters');
+		assert.equal(view.dateBar.hidden, true); assert.equal(view.completedButton.hidden, true);
+		view.finishParentChoice();
+		assert.ok(view.searchDate); assert.equal(view.includeCompleted, true);
+		view.dateBar.querySelector('[aria-label="下一期"]').click();
+		assert.notEqual(view.searchDate.day, today);
+		view.dateBar.querySelector('[aria-label="上一期"]').click(); assert.equal(view.searchDate.day, today);
+		for (const [grain, name] of [['week', '周'], ['month', '月'], ['year', '年']]) {
+			[...view.dateBar.querySelectorAll('button')].find((button: any) => button.textContent === name).click();
+			assert.equal(view.searchDate.grain, grain); assert.ok(view.dateBar.textContent.includes('—'));
+		}
+		view.toggleSearch();
+		// Complete in detail flushes both fields, keeps the panel and children, and can undo.
+		await view.select(family);
+		view.editing.title.value = '详情勾选前的标题'; view.editing.body.value = '保存中的正文\n下一行';
+		view.detail.querySelector('.gvkit-arrange-detail-title-row input').click(); await settle();
+		assert.equal(view.selected, family); assert.equal(view.detail.hidden, false);
+		assert.ok(view.detail.querySelector('.gvkit-arrange-detail-title-row.is-completed'));
+		await fresh.load();
+		assert.equal(fresh.items.find((x: any) => x.id === family).body, '保存中的正文\n下一行');
+		assert.equal(fresh.items.find((x: any) => x.id === children[0]).completedAt, null);
+		view.detail.querySelector('.gvkit-arrange-detail-title-row input').click(); await settle();
+		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
+		assert.equal(view.editing.title.value, '详情勾选前的标题');
+		view.editing.body.value = '不能丢失的正文'; fail = true;
+		await view.toggleComplete(family);
+		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
+		assert.equal(view.editing.body.value, '不能丢失的正文'); assert.equal(view.editing.error.hidden, false);
+		fail = false; await view.saveEdit();
+		// First body click maps a rendered text node to its Markdown source offset.
+		await store.edit(family, '光标标题', '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字', null);
+		await view.select(family);
+		const preview = view.editing.preview;
+		preview.innerHTML = '<h2>标题</h2><p>第一段 <strong>加粗文字</strong> 尾部</p><p>第二行文字</p>';
+		const textNode = preview.querySelectorAll('p')[1].firstChild;
+		(window.document as any).caretRangeFromPoint = () => ({ startContainer: textNode, startOffset: 2 });
+		textNode.parentElement.dispatchEvent(new window.MouseEvent('click', { bubbles: true, clientX: 40, clientY: 80 }));
+		assert.equal(view.editing.body.selectionStart, view.editing.body.value.indexOf('第二行文字') + 2);
+		assert.equal(view.editing.body.value, '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字');
+		delete (window.document as any).caretRangeFromPoint;
+		view.renderBody(); const link = preview.createEl('a', { text: '链接', attr: { href: '#target' } }); link.click();
+		assert.equal(view.editing.body.hidden, true, 'links do not enter the editor');
+		// Settings update the existing editor, and new Store reads all preferences from Markdown.
+		const preferences = { listFontSize: 14, rowHeight: 40, rowDividers: false, gripHeight: 56, gripWidth: 96,
+			toolbarHeight: 56, parentFontSize: 18, closeThreshold: 10, selectionColor: 'purple' };
+		await store.configure(preferences); view.applyComposerSettings(); view.paintLists(); await fresh.load();
+		for (const [key, value] of Object.entries(preferences)) assert.equal(fresh.state[key], value);
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-row-slot'), '27px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-grip-height'), '56px');
+		assert.equal(root.dataset.rowDividers, 'false');
+		assert.equal(view.headline.dataset.selectionColor, 'purple');
+		assert.equal(view.headline.dataset.color, 'gold');
+		view.toggleSearch(); assert.equal(view.headline.getAttribute('aria-pressed'), 'false'); view.toggleSearch();
+		// The date label refreshes even while the title stays focused and un-replaced.
+		view.editing.title.focus(); const stableTitle = view.editing.title;
+		await view.run(() => store.setDate(family, today));
+		assert.equal(view.editing.title, stableTitle);
+		assert.match(view.detail.querySelector('.gvkit-arrange-detail-date').textContent, /^今天，/);
+		await view.run(() => store.setDate(family, null));
+		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-date').hidden, true);
+		// A keyboard-sized area can reach even the lowest threshold; cancel restores height.
+		view.area.getBoundingClientRect = () => ({ height: 200 } as any);
+		view.detail.getBoundingClientRect = () => ({ height: 96 } as any);
+		const grip = view.detail.querySelector('.gvkit-arrange-panel-grip'); grip.setPointerCapture = () => {};
+		pointer(grip, 'pointerdown', 30, 10); pointer(grip, 'pointermove', 30, 100);
+		assert.equal(view.detail.style.height, '6px');
+		pointer(grip, 'pointercancel', 30, 100); assert.equal(view.detail.hidden, false); assert.equal(view.detail.style.height, '');
+		pointer(grip, 'pointerdown', 30, 100); pointer(grip, 'pointermove', 30, 20); pointer(grip, 'pointerup', 30, 20);
+		assert.equal(view.full, true); assert.equal(view.detail.style.height, '100%');
+		pointer(grip, 'pointerdown', 30, 10); pointer(grip, 'pointermove', 30, 20); pointer(grip, 'pointerup', 30, 20);
+		assert.equal(view.full, false); assert.equal(view.detail.style.height, '86px');
+		view.editing.body.value = '拖动关闭前编辑';
+		view.list.scrollTop = 123; input.value = '拖动仍保留新增草稿';
+		pointer(grip, 'pointerdown', 30, 10); pointer(grip, 'pointermove', 30, 100); pointer(grip, 'pointerup', 30, 100);
+		await settle();
+		assert.equal(view.selected, null); assert.equal(view.detail.hidden, true);
+		assert.equal(view.list.scrollTop, 123); assert.equal(input.value, '拖动仍保留新增草稿');
+		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === family).body, '拖动关闭前编辑');
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

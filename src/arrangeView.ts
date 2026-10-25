@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
-import { ARRANGE_ACTIONS, dayKey, offsetDay, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_NUMBER_SETTINGS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -13,6 +13,32 @@ function iconButton(parent: HTMLElement, label: string, icon: string, action: (e
 	setIcon(button, icon);
 	button.addEventListener('click', event => { event.stopPropagation(); action(event); });
 	return button;
+}
+
+/** WebKit/Chromium caret hit → original Markdown offset. No Markdown is rewritten.
+ * Ordinary rendered text nodes match source spans; transformed embeds/entities
+ * fall back to the nearest preceding source span rather than the end of the note. */
+function bodyCaretOffset(preview: HTMLElement, source: string, event: MouseEvent): number {
+	const doc = preview.ownerDocument as Document & {
+		caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+		caretRangeFromPoint?: (x: number, y: number) => Range | null;
+	};
+	const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
+	const range = position ? null : doc.caretRangeFromPoint?.(event.clientX, event.clientY);
+	const node = position?.offsetNode ?? range?.startContainer;
+	const offset = position?.offset ?? range?.startOffset ?? 0;
+	const target = node && preview.contains(node) ? node : event.target as Node;
+	const walker = doc.createTreeWalker(preview, 4 /* SHOW_TEXT */);
+	let cursor = 0;
+	while (walker.nextNode()) {
+		const text = walker.currentNode.textContent ?? '';
+		const index = source.indexOf(text, cursor);
+		if (walker.currentNode === target || target.contains?.(walker.currentNode)) {
+			return index < 0 ? cursor : Math.min(source.length, index + (walker.currentNode === node ? offset : 0));
+		}
+		if (index >= 0) cursor = index + text.length;
+	}
+	return 0;
 }
 
 export function registerArrange(plugin: Plugin): void {
@@ -48,6 +74,11 @@ export class ArrangeView extends ItemView {
 	private searchScroll = 0;
 	private searchBar!: HTMLElement;
 	private searchInput!: HTMLInputElement;
+	private includeCompleted = false;
+	private searchDate: { day: string; grain: DateGrain } | null = null;
+	private completedButton!: HTMLButtonElement;
+	private dateButton!: HTMLButtonElement;
+	private dateBar!: HTMLElement;
 	private searchButton!: HTMLButtonElement;
 	private moreButton!: HTMLButtonElement;
 	private parentBar!: HTMLElement;
@@ -119,7 +150,15 @@ export class ArrangeView extends ItemView {
 		this.searchBar.hidden = true;
 		this.searchInput = this.searchBar.createEl('input', { type: 'search', attr: { placeholder: '搜索事项标题', 'aria-label': '搜索事项标题' } });
 		this.searchInput.oninput = () => { this.paintLists(); this.list.scrollTop = 0; };
+		this.completedButton = iconButton(this.searchBar, '包含已完成', 'list-checks', () => {
+			this.includeCompleted = !this.includeCompleted; this.syncSearch(); this.paintLists(); this.list.scrollTop = 0;
+		});
+		this.dateButton = iconButton(this.searchBar, '时间范围', 'calendar-range', () => {
+			this.searchDate = this.searchDate ? null : { day: dayKey(new Date(), this.store.state.timezone), grain: 'day' };
+			this.syncSearch(); this.paintLists(); this.list.scrollTop = 0;
+		});
 		iconButton(this.searchBar, '关闭搜索', 'x', () => this.toggleSearch());
+		this.dateBar = root.createDiv('gvkit-arrange-date-filter'); this.dateBar.hidden = true;
 		this.area = root.createDiv('gvkit-arrange-area');
 		this.list = this.area.createDiv('gvkit-arrange-list');
 		this.list.setAttribute('aria-label', '事项列表');
@@ -166,9 +205,13 @@ export class ArrangeView extends ItemView {
 			const css = window.getComputedStyle(root);
 			const keyboard = Platform.isIosApp
 				? Math.max(0, parseFloat(css.getPropertyValue('--keyboard-height')) || 0) : 0;
-			// Let only the input strip span the host's side insets; list/header stay put.
+			// Span host insets for the input and panel, retaining the list's original inset.
 			composer.style.marginLeft = `-${css.paddingLeft}`;
 			composer.style.marginRight = `-${css.paddingRight}`;
+			if (Platform.isMobileApp) {
+				this.area.style.marginLeft = `-${css.paddingLeft}`; this.area.style.marginRight = `-${css.paddingRight}`;
+				this.list.style.paddingLeft = css.paddingLeft; this.list.style.paddingRight = css.paddingRight;
+			}
 			root.classList.toggle('gvkit-arrange-keyboard-open', keyboard > 0);
 			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : window.innerHeight,
 				keyboard > 0 ? window.innerHeight - keyboard : Infinity);
@@ -227,6 +270,16 @@ export class ArrangeView extends ItemView {
 	}
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
 	private applyComposerSettings(): void {
+		const state = this.store.state;
+		for (const [name, value] of Object.entries({
+			'list-font': state.listFontSize, 'row-height': state.rowHeight,
+			'row-icon': state.listFontSize + 2, 'row-slot': state.listFontSize + 13,
+			'checkbox': state.listFontSize + 5, 'check-gap': Math.round(state.listFontSize * 0.5),
+			'grip-height': state.gripHeight, 'grip-width': state.gripWidth,
+			'toolbar-height': state.toolbarHeight, 'parent-font': state.parentFontSize,
+		})) this.contentEl.style.setProperty(`--gvkit-arrange-${name}`, `${value}px`);
+		this.contentEl.dataset.rowDividers = String(state.rowDividers);
+		this.headline.dataset.selectionColor = state.selectionColor;
 		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-size', `${this.store.state.submitArrowSize}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-color', SUBMIT_BLUE_COLORS[this.store.state.submitColor]);
@@ -291,6 +344,11 @@ export class ArrangeView extends ItemView {
 			if (this.filter === 'overdue') items = items.filter(item => item.date && item.date < facts.day);
 		}
 		if (this.searchOpen) {
+			if (!this.choosingParent) {
+				if (this.includeCompleted) items.push(...this.store.items.filter(item => item.completedAt)
+					.sort((a, b) => Date.parse(b.completedAt!) - Date.parse(a.completedAt!)));
+				if (this.searchDate) items = items.filter(item => matchesDateRange(item, dateRange(this.searchDate!.day, this.searchDate!.grain), this.store.state.timezone));
+			}
 			const query = this.searchInput.value.trim().toLowerCase();
 			items = items.filter(item => item.title.toLowerCase().includes(query));
 		}
@@ -301,6 +359,7 @@ export class ArrangeView extends ItemView {
 			this.children.empty();
 			for (const item of this.directChildren(this.selected)) this.row(this.children, item);
 		}
+		this.paintDetailState();
 	}
 	private directChildren(id: string): ArrangeItem[] {
 		return [...this.ordered().filter(item => item.parent === id),
@@ -340,6 +399,31 @@ export class ArrangeView extends ItemView {
 	private syncSearch(): void {
 		this.searchBar.hidden = !this.searchOpen;
 		this.searchButton.setAttribute('aria-pressed', String(this.searchOpen));
+		this.completedButton.hidden = Boolean(this.choosingParent);
+		this.dateButton.hidden = Boolean(this.choosingParent);
+		this.completedButton.setAttribute('aria-pressed', String(this.includeCompleted));
+		this.dateButton.setAttribute('aria-pressed', String(Boolean(this.searchDate)));
+		this.dateBar.hidden = !this.searchOpen || !this.searchDate || Boolean(this.choosingParent);
+		this.dateBar.empty();
+		if (this.dateBar.hidden || !this.searchDate) return;
+		const filter = this.searchDate;
+		const update = () => { this.syncSearch(); this.paintLists(); this.list.scrollTop = 0; };
+		const grains = this.dateBar.createDiv('gvkit-arrange-date-grains');
+		for (const [grain, name] of [['day', '日'], ['week', '周'], ['month', '月'], ['year', '年']] as const) {
+			const button = grains.createEl('button', { text: name, attr: { 'aria-pressed': String(filter.grain === grain) } });
+			button.onclick = () => { filter.grain = grain; update(); };
+		}
+		iconButton(grains, '清除日期条件', 'x', () => { this.searchDate = null; update(); });
+		const period = this.dateBar.createDiv('gvkit-arrange-date-period');
+		iconButton(period, '上一期', 'chevron-left', () => { filter.day = shiftPeriod(filter.day, filter.grain, -1); update(); });
+		if (filter.grain === 'day') {
+			const input = period.createEl('input', { type: 'date', value: filter.day, attr: { 'aria-label': '搜索日期' } });
+			input.onchange = () => { if (input.value) { filter.day = input.value; update(); } };
+		} else {
+			const range = dateRange(filter.day, filter.grain);
+			period.createSpan({ text: `${range.start} — ${range.end}` });
+		}
+		iconButton(period, '下一期', 'chevron-right', () => { filter.day = shiftPeriod(filter.day, filter.grain, 1); update(); });
 	}
 	private row(parent: HTMLElement, item: ArrangeItem): void {
 		const row = parent.createDiv('gvkit-arrange-row');
@@ -359,7 +443,7 @@ export class ArrangeView extends ItemView {
 		complete.checked = Boolean(item.completedAt);
 		complete.onclick = event => {
 			event.stopPropagation(); complete.checked = Boolean(item.completedAt);
-			void this.run(() => this.store.complete(item.id, !item.completedAt));
+			void this.toggleComplete(item.id);
 		};
 		const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { title: item.title } });
 		this.paintTitle(label, item.title, parent === this.list);
@@ -571,6 +655,31 @@ export class ArrangeView extends ItemView {
 		this.detail.style.maxHeight = '';
 		this.paintLists(); this.paintDetail();
 	}
+	private async toggleComplete(id: string): Promise<void> {
+		await this.run(async () => {
+			if (!(await this.saveEdit())) return;
+			const item = this.store.items.find(item => item.id === id);
+			if (item) await this.store.complete(id, !item.completedAt);
+		});
+	}
+	private paintDetailState(): void {
+		const item = this.store.items.find(item => item.id === this.selected);
+		if (!item) return;
+		const label = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-date');
+		if (label) {
+			label.hidden = !item.date;
+			label.textContent = item.date ? relativeDate(item.date, this.today, Boolean(item.completedAt)) : '';
+			label.title = item.date ?? '';
+		}
+		const row = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-title-row');
+		row?.toggleClass('is-completed', Boolean(item.completedAt));
+		const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+		if (checkbox) {
+			checkbox.checked = Boolean(item.completedAt);
+			checkbox.setAttribute('aria-label', `${item.completedAt ? '撤销完成' : '完成'}：${item.title}`);
+		}
+		this.paintDetailActions();
+	}
 	private paintDetail(): void {
 		if (this.choosingParent) { this.detail.hidden = true; return; }
 		const item = this.store.items.find(item => item.id === this.selected);
@@ -584,6 +693,7 @@ export class ArrangeView extends ItemView {
 		this.panelGesture(grip);
 		const tools = this.detail.createDiv('gvkit-arrange-detail-tools');
 		iconButton(tools, '返回主列表', 'arrow-left', () => { void this.select(null); });
+		tools.createSpan({ cls: 'gvkit-arrange-detail-date' });
 		tools.createDiv('gvkit-arrange-detail-actions');
 		this.paintDetailActions();
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
@@ -597,7 +707,10 @@ export class ArrangeView extends ItemView {
 				nav.onclick = () => { void this.select(parent.id); };
 			}
 		}
-		const title = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
+		const titleRow = this.detailScroll.createDiv('gvkit-arrange-detail-title-row');
+		const complete = titleRow.createEl('input', { type: 'checkbox' });
+		complete.onclick = () => { complete.checked = Boolean(this.store.items.find(value => value.id === item.id)?.completedAt); void this.toggleComplete(item.id); };
+		const title = titleRow.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
 		title.value = item.title;
 		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
 		error.hidden = true;
@@ -608,17 +721,14 @@ export class ArrangeView extends ItemView {
 		this.renderBody();
 		const resize = (input: HTMLTextAreaElement) => { input.style.height = '0'; input.style.height = `${input.scrollHeight}px`; };
 		resize(title);
-		// Only the first focus places the caret at the end; later taps can position it normally.
-		let titleFocused = false;
-		title.onpointerdown = () => { titleFocused = document.activeElement === title; };
-		title.onclick = () => { if (!titleFocused) title.setSelectionRange(title.value.length, title.value.length); };
-		const openBody = () => {
+		// Native textarea hit testing handles the title, including its very first tap.
+		const openBody = (offset = 0) => {
 			preview.hidden = true; body.hidden = false; resize(body); body.focus({ preventScroll: true });
-			body.setSelectionRange(body.value.length, body.value.length);
+			body.setSelectionRange(offset, offset);
 		};
 		preview.onclick = event => {
 			if ((event.target as HTMLElement).closest('a') || window.getSelection()?.toString()) return;
-			openBody();
+			openBody(bodyCaretOffset(preview, body.value, event));
 		};
 		preview.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); openBody(); } };
 		this.detailScroll.onclick = event => { if (event.target === this.detailScroll && !window.getSelection()?.toString()) openBody(); };
@@ -634,41 +744,41 @@ export class ArrangeView extends ItemView {
 		this.children = this.detailScroll.createDiv('gvkit-arrange-children');
 		for (const child of this.directChildren(item.id)) this.row(this.children, child);
 		this.detailScroll.scrollTop = scroll;
-		this.fullscreenPull(this.detailScroll);
+		this.paintDetailState();
 	}
 	private panelGesture(grip: HTMLElement): void {
 		grip.onpointerdown = event => {
-			if (!Platform.isMobileApp) return;
+			if (!Platform.isMobileApp || event.isPrimary === false || event.button > 0) return;
+			const available = this.area.getBoundingClientRect().height;
+			if (available <= 0) return;
 			event.preventDefault(); grip.setPointerCapture(event.pointerId);
 			const startY = event.clientY, startHeight = this.detail.getBoundingClientRect().height;
-			const available = this.area.getBoundingClientRect().height;
+			const previous = { height: this.detail.style.height, maxHeight: this.detail.style.maxHeight, full: this.full };
+			const restore = () => { this.detail.style.height = previous.height; this.detail.style.maxHeight = previous.maxHeight;
+				this.full = previous.full; this.detail.toggleClass('is-full', this.full); };
 			let height = startHeight;
+			let moved = false;
 			this.detail.style.maxHeight = '100%';
 			const move = (e: PointerEvent) => {
-				height = Math.min(available, Math.max(90, startHeight + startY - e.clientY));
+				if (e.pointerId !== event.pointerId) return;
+				moved = true;
+				height = Math.min(available, Math.max(0, startHeight + startY - e.clientY));
 				this.detail.style.height = `${height}px`;
 			};
 			const end = (e: PointerEvent) => {
+				if (e.pointerId !== event.pointerId) return;
 				grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', end); grip.removeEventListener('pointercancel', end);
-				if (e.type === 'pointercancel') { this.detail.style.height = ''; this.detail.style.maxHeight = ''; return; }
+				if (e.type === 'pointercancel' || !moved) { restore(); return; }
+				if (height / available * 100 <= this.store.state.closeThreshold) {
+					void this.select(null).then(() => { if (this.selected) restore(); });
+					return;
+				}
 				this.full = height / available * 100 >= this.store.state.fullscreenThreshold;
 				this.detail.toggleClass('is-full', this.full);
 				if (this.full) this.detail.style.height = '100%';
 			};
 			grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', end); grip.addEventListener('pointercancel', end);
 		};
-	}
-	private fullscreenPull(scroll: HTMLElement): void {
-		let start: { x: number; y: number } | null = null;
-		scroll.addEventListener('touchstart', event => {
-			const p = event.touches[0];
-			start = this.full && scroll.scrollTop <= 0 && p && !(event.target as HTMLElement).closest('button,input,textarea,a') ? { x: p.clientX, y: p.clientY } : null;
-		}, { passive: true });
-		scroll.addEventListener('touchend', event => {
-			const p = event.changedTouches[0];
-			if (start && p && scroll.scrollTop <= 0 && p.clientY - start.y > 90 && Math.abs(p.clientX - start.x) < 35) void this.select(null);
-			start = null;
-		}, { passive: true });
 	}
 	private paintDetailActions(): void {
 		const item = this.store.items.find(item => item.id === this.selected);
@@ -802,6 +912,23 @@ export class ArrangeView extends ItemView {
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
 		};
+		const names: Record<keyof typeof ARRANGE_NUMBER_SETTINGS, string> = {
+			listFontSize: '列表标题字号', rowHeight: '事项行高', gripHeight: '顶部抓取触摸带高度',
+			gripWidth: '可见拖动横条宽度', toolbarHeight: '详情操作栏高度', parentFontSize: '上级导航文字字号',
+			closeThreshold: '向下拖动关闭阈值',
+		};
+		for (const key of Object.keys(names) as (keyof typeof names)[]) {
+			const [min, max, initial] = ARRANGE_NUMBER_SETTINGS[key];
+			new Setting(modal.contentEl).setName(names[key])
+				.setDesc(key === 'closeThreshold' ? `松手时剩余高度不大于此比例则关闭；默认 ${initial}%。` : `${min}～${max} 像素，默认 ${initial}。`)
+				.addSlider(slider => slider.setLimits(min, max, 1).setValue(this.store.state[key]).setDynamicTooltip()
+					.onChange(value => configure({ [key]: value })));
+		}
+		new Setting(modal.contentEl).setName('事项行分隔线')
+			.addToggle(toggle => toggle.setValue(this.store.state.rowDividers).onChange(value => configure({ rowDividers: value })));
+		new Setting(modal.contentEl).setName('今天达成筛选选中强调色').setDesc('仅改变选中底板与边框，不改变成就状态和统计。')
+			.addDropdown(dropdown => dropdown.addOptions({ blue: '蓝色（默认）', purple: '紫色', gold: '金色' })
+				.setValue(this.store.state.selectionColor).onChange(value => configure({ selectionColor: value as ArrangeState['selectionColor'] })));
 		new Setting(modal.contentEl).setName('已完成事项外观')
 			.addDropdown(dropdown => dropdown.addOptions({ background: '淡蓝底板、正常文字', text: '原底板、蓝色文字' })
 				.setValue(this.store.state.completedStyle).onChange(value => configure({ completedStyle: value as ArrangeState['completedStyle'] })));

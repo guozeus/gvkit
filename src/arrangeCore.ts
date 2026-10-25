@@ -26,13 +26,29 @@ export interface ArrangeState {
 	rowActions: RowAction[];
 	detailActions: RowAction[];
 	showCompletedChildren: boolean;
+	listFontSize: number;
+	rowHeight: number;
+	rowDividers: boolean;
+	gripHeight: number;
+	gripWidth: number;
+	toolbarHeight: number;
+	parentFontSize: number;
+	closeThreshold: number;
+	selectionColor: 'blue' | 'purple' | 'gold';
 }
+
+export const ARRANGE_NUMBER_SETTINGS = {
+	listFontSize: [14, 22, 17], rowHeight: [40, 64, 44], gripHeight: [24, 56, 32],
+	gripWidth: [24, 96, 36], toolbarHeight: [40, 56, 44], parentFontSize: [12, 18, 13], closeThreshold: [10, 40, 25],
+} as const;
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
-		rowActions: ['parent', 'date', 'top'], detailActions: [...ARRANGE_ACTIONS], showCompletedChildren: true };
+		rowActions: ['parent', 'date', 'top'], detailActions: [...ARRANGE_ACTIONS], showCompletedChildren: true,
+		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
+		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue' };
 }
 
 /** Missing IDs are new externally created items; stale/completed IDs are not slots. */
@@ -88,6 +104,41 @@ export function offsetDay(day: string, amount: number): string {
 	const date = new Date(`${day}T12:00:00Z`);
 	date.setUTCDate(date.getUTCDate() + amount);
 	return date.toISOString().slice(0, 10);
+}
+
+export type DateGrain = 'day' | 'week' | 'month' | 'year';
+export function dateRange(day: string, grain: DateGrain): { start: string; end: string } {
+	if (grain === 'day') return { start: day, end: day };
+	if (grain === 'week') {
+		const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
+		const start = offsetDay(day, -((weekday + 6) % 7));
+		return { start, end: offsetDay(start, 6) };
+	}
+	const start = grain === 'month' ? `${day.slice(0, 7)}-01` : `${day.slice(0, 4)}-01-01`;
+	const next = new Date(`${start}T12:00:00Z`);
+	if (grain === 'month') next.setUTCMonth(next.getUTCMonth() + 1);
+	else next.setUTCFullYear(next.getUTCFullYear() + 1);
+	return { start, end: offsetDay(next.toISOString().slice(0, 10), -1) };
+}
+export function shiftPeriod(day: string, grain: DateGrain, direction: number): string {
+	if (grain === 'day' || grain === 'week') return offsetDay(day, direction * (grain === 'week' ? 7 : 1));
+	const date = new Date(`${dateRange(day, grain).start}T12:00:00Z`);
+	if (grain === 'month') date.setUTCMonth(date.getUTCMonth() + direction);
+	else date.setUTCFullYear(date.getUTCFullYear() + direction);
+	return date.toISOString().slice(0, 10);
+}
+export function matchesDateRange(item: ArrangeItem, range: { start: string; end: string }, timezone: string): boolean {
+	const day = item.completedAt ? dayKey(new Date(item.completedAt), timezone) : item.date;
+	return Boolean(day && day >= range.start && day <= range.end);
+}
+export function relativeDate(date: string, today: string, completed = false): string {
+	const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+	const week = dateRange(today, 'week');
+	const relative = date === today ? '今天' : date === offsetDay(today, 1) ? '明天'
+		: date < today ? (completed ? '' : '已逾期') : date <= week.end ? `本周${'日一二三四五六'[weekday]}`
+			: date <= offsetDay(week.end, 7) ? `下周${'日一二三四五六'[weekday]}` : '';
+	const absolute = `${date.slice(0, 4) !== today.slice(0, 4) ? `${Number(date.slice(0, 4))}年` : ''}${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}号`;
+	return relative ? `${relative}，${absolute}` : absolute;
 }
 
 export function todayFacts(items: ArrangeItem[], state: ArrangeState, now = new Date()) {

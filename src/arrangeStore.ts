@@ -1,6 +1,6 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { ARRANGE_ACTIONS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_NUMBER_SETTINGS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -65,6 +65,12 @@ export class ArrangeStore {
 				if (strings(value)) state[key] = value.filter((a): a is ArrangeState['rowActions'][number] => (ARRANGE_ACTIONS as readonly string[]).includes(a));
 			}
 			if (typeof fields.showCompletedChildren === 'boolean') state.showCompletedChildren = fields.showCompletedChildren;
+			for (const key of Object.keys(ARRANGE_NUMBER_SETTINGS) as (keyof typeof ARRANGE_NUMBER_SETTINGS)[]) {
+				const value = fields[key], [min, max] = ARRANGE_NUMBER_SETTINGS[key];
+				if (typeof value === 'number' && Number.isFinite(value)) state[key] = Math.max(min, Math.min(max, Math.round(value)));
+			}
+			if (typeof fields.rowDividers === 'boolean') state.rowDividers = fields.rowDividers;
+			if (fields.selectionColor === 'blue' || fields.selectionColor === 'purple' || fields.selectionColor === 'gold') state.selectionColor = fields.selectionColor;
 		}
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
@@ -165,7 +171,7 @@ export class ArrangeStore {
 			await this.saveState();
 		});
 	}
-	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'detailShadow' | 'bodyPlaceholder' | 'completedStyle' | 'rowActions' | 'detailActions' | 'showCompletedChildren'>>): Promise<void> {
+	configure(changes: Partial<Omit<ArrangeState, 'order' | 'achievedDays'>>): Promise<void> {
 		return this.serial(async () => { Object.assign(this.state, changes); await this.saveState(); });
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {
