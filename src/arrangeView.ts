@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_NUMBER_SETTINGS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_NUMBER_SETTINGS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -97,7 +97,6 @@ export class ArrangeView extends ItemView {
 	private full = false;
 	private busy = false;
 	private closed = false;
-	private expanded = new Set<string>();
 	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; preview: HTMLElement; error: HTMLElement; savedTitle: string; savedBody: string; composing: boolean } | null = null;
 	private editTimer: number | null = null;
 	private savingEdit: Promise<boolean> | null = null;
@@ -272,9 +271,12 @@ export class ArrangeView extends ItemView {
 	private applyComposerSettings(): void {
 		const state = this.store.state;
 		for (const [name, value] of Object.entries({
-			'list-font': state.listFontSize, 'row-height': state.rowHeight,
-			'row-icon': state.listFontSize + 2, 'row-slot': state.listFontSize + 13,
+			'list-font': state.listFontSize, 'row-height': Math.max(state.rowHeight, Math.ceil(state.listFontSize * 1.4) + 2, state.listFontSize + 7),
+			'row-icon': state.listFontSize + 2, 'row-slot': state.listFontSize + 2 + state.rowIconGap,
 			'checkbox': state.listFontSize + 5, 'check-gap': Math.round(state.listFontSize * 0.5),
+			'detail-font': state.detailFontSize, 'body-font': state.bodyFontSize, 'date-font': state.dateFontSize,
+			'detail-checkbox': state.detailFontSize + 3, 'detail-icon': state.detailFontSize + 1,
+			'detail-slot': state.detailFontSize + 1 + state.detailIconGap,
 			'grip-height': state.gripHeight, 'grip-width': state.gripWidth,
 			'toolbar-height': state.toolbarHeight, 'parent-font': state.parentFontSize,
 		})) this.contentEl.style.setProperty(`--gvkit-arrange-${name}`, `${value}px`);
@@ -286,6 +288,9 @@ export class ArrangeView extends ItemView {
 		this.contentEl.style.setProperty('--gvkit-arrange-detail-shadow', this.store.state.detailShadow === 0 ? 'none' : `0 -7px ${this.store.state.detailShadow ?? 24}px #0003`);
 		const edit = this.editing;
 		if (edit) {
+			for (const input of [edit.title, edit.body]) {
+				if (!input.hidden) { input.style.height = '0'; input.style.height = `${input.scrollHeight}px`; }
+			}
 			edit.body.placeholder = this.store.state.bodyPlaceholder;
 			// Update only the empty hint; never replace an editor or its unsaved text.
 			const hint = edit.preview.querySelector<HTMLElement>('.gvkit-arrange-body-placeholder');
@@ -453,9 +458,13 @@ export class ArrangeView extends ItemView {
 			label.title = `${item.title} · ${item.date}${item.date < this.today && !item.completedAt ? ' · 逾期' : ''}`;
 			if (!item.completedAt && item.date < this.today) label.addClass('is-overdue');
 		}
+		const dateText = rowDateLabel(item, this.today);
+		if (dateText) {
+			const hint = row.createSpan({ cls: 'gvkit-arrange-row-date', text: dateText, attr: { title: item.date! } });
+			hint.toggleClass('is-overdue', item.date! < this.today);
+		}
 		const actionArea = row.createDiv('gvkit-arrange-actions');
-		const visible = this.expanded.has(item.id) ? ARRANGE_ACTIONS : this.store.state.rowActions;
-		for (const key of visible) {
+		for (const key of this.store.state.rowActions) {
 			if (!this.actionAvailable(key, item)) continue;
 			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
@@ -472,7 +481,6 @@ export class ArrangeView extends ItemView {
 		const start = (x: number, y: number, touch: boolean) => {
 			this.cancelReorder?.();
 			let dragging = false, moved = false;
-			let lastX = x, lastY = y;
 			let target: HTMLElement | null = null;
 			let after = false;
 			let topDrop = false;
@@ -493,7 +501,6 @@ export class ArrangeView extends ItemView {
 			};
 			const cancel = () => cleanup();
 			const move = (clientX: number, clientY: number, event: Event) => {
-				lastX = clientX; lastY = clientY;
 				if (!dragging) {
 					if (Math.hypot(clientX - x, clientY - y) > 8) { moved = true; window.clearTimeout(timer); }
 					return;
@@ -531,13 +538,10 @@ export class ArrangeView extends ItemView {
 				if (dragging) event.preventDefault();
 				cleanup();
 				if (dragging && (topDrop || targetId)) void this.run(() => this.store.move(item.id, topDrop ? undefined : targetId, after));
-				else if (!dragging && x - lastX > 45 && Math.abs(y - lastY) < 28) {
-					this.expanded.add(item.id); this.paintLists();
-				}
 			};
 			const extraTouch = (e: TouchEvent) => { if (e.touches.length !== 1) cancel(); };
 			const touchMove = (e: TouchEvent) => { const p = e.touches[0]; if (p && e.touches.length === 1) move(p.clientX, p.clientY, e); else cancel(); };
-			const touchEnd = (e: TouchEvent) => { const p = e.changedTouches[0]; if (p) { lastX = p.clientX; lastY = p.clientY; } end(e); };
+			const touchEnd = (e: TouchEvent) => end(e);
 			const mouseMove = (e: PointerEvent) => move(e.clientX, e.clientY, e);
 			const mouseEnd = (e: PointerEvent) => end(e);
 			if (touch) {
@@ -916,11 +920,15 @@ export class ArrangeView extends ItemView {
 			listFontSize: '列表标题字号', rowHeight: '事项行高', gripHeight: '顶部抓取触摸带高度',
 			gripWidth: '可见拖动横条宽度', toolbarHeight: '详情操作栏高度', parentFontSize: '上级导航文字字号',
 			closeThreshold: '向下拖动关闭阈值',
+			detailFontSize: '详情标题字号', bodyFontSize: '详情正文字号', dateFontSize: '日期提示字号（列表与详情共用）',
+			rowIconGap: '列表操作图标间距', detailIconGap: '详情操作图标间距',
 		};
 		for (const key of Object.keys(names) as (keyof typeof names)[]) {
 			const [min, max, initial] = ARRANGE_NUMBER_SETTINGS[key];
 			new Setting(modal.contentEl).setName(names[key])
-				.setDesc(key === 'closeThreshold' ? `松手时剩余高度不大于此比例则关闭；默认 ${initial}%。` : `${min}～${max} 像素，默认 ${initial}。`)
+				.setDesc(key === 'closeThreshold' ? `松手时剩余高度不大于此比例则关闭；默认 ${initial}%。`
+					: key === 'rowHeight' ? '24～64 像素，默认44。大字号时保留容纳文字与勾选框的最小高度。'
+						: `${min}～${max} 像素，默认 ${initial}。`)
 				.addSlider(slider => slider.setLimits(min, max, 1).setValue(this.store.state[key]).setDynamicTooltip()
 					.onChange(value => configure({ [key]: value })));
 		}
@@ -958,7 +966,7 @@ export class ArrangeView extends ItemView {
 				configure({ rowActions: [...rowActions] });
 			}));
 		}
-		modal.contentEl.createEl('p', { text: '所有操作均可从详情右侧更多进入；列表左滑也可展开快捷操作。' });
+		modal.contentEl.createEl('p', { text: '列表始终只显示已勾选的快捷图标；所有操作均可从详情右侧更多进入。' });
 		new Setting(modal.contentEl).setName('统一日界时区').setDesc('所有设备使用同一时区计算“今天”。')
 			.addText(text => text.setValue(this.store.state.timezone).onChange(value => {
 				try { new Intl.DateTimeFormat('en', { timeZone: value }); configure({ timezone: value }); } catch { /* Wait for a complete timezone. */ }

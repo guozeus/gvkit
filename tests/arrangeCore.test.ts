@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
+import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
 
 function item(id: string, changes: Partial<ArrangeItem> = {}): ArrangeItem {
 	return { id, title: id, body: '', path: `${id}.md`, parent: null, date: null, completedAt: null, pinned: false, ...changes };
@@ -83,4 +83,17 @@ test('date label uses the saved day boundary, relative weekdays and cross-year d
 	assert.equal(relativeDate('2026-10-24', '2026-10-25'), '已逾期，10月24号');
 	assert.equal(relativeDate('2026-10-24', '2026-10-25', true), '10月24号');
 	assert.equal(relativeDate('2027-06-01', '2026-10-25'), '2027年6月1号');
+});
+
+test('row deadline hints use the existing date, hide future/completed overdue dates and cross calendar boundaries', () => {
+	const today = '2026-10-28';
+	const hint = (date: string | null, completedAt: string | null = null) => rowDateLabel(item('a', { date, completedAt }), today);
+	assert.equal(hint(null), ''); assert.equal(hint('2026-10-29'), '');
+	assert.equal(hint(today), '今天'); assert.equal(hint('2026-10-27'), '昨天');
+	assert.equal(hint('2026-10-26'), '前天'); assert.equal(hint('2026-10-25'), '上周日');
+	assert.equal(hint('2026-10-20'), '上周二'); assert.equal(hint('2026-10-01'), '27天前');
+	assert.equal(hint('2026-10-25', '2026-10-25T02:00:00Z'), '');
+	assert.equal(hint(today, '2026-10-28T02:00:00Z'), '今天');
+	assert.equal(rowDateLabel(item('year', { date: '2025-12-31' }), '2026-01-01'), '昨天');
+	assert.equal(rowDateLabel(item('week', { date: '2026-10-26' }), '2026-10-30'), '本周一');
 });

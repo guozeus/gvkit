@@ -467,7 +467,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			toolbarHeight: 56, parentFontSize: 18, closeThreshold: 10, selectionColor: 'purple' };
 		await store.configure(preferences); view.applyComposerSettings(); view.paintLists(); await fresh.load();
 		for (const [key, value] of Object.entries(preferences)) assert.equal(fresh.state[key], value);
-		assert.equal(root.style.getPropertyValue('--gvkit-arrange-row-slot'), '27px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-row-slot'), '20px');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-grip-height'), '56px');
 		assert.equal(root.dataset.rowDividers, 'false');
 		assert.equal(view.headline.dataset.selectionColor, 'purple');
@@ -498,6 +498,34 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(view.selected, null); assert.equal(view.detail.hidden, true);
 		assert.equal(view.list.scrollTop, 123); assert.equal(input.value, '拖动仍保留新增草稿');
 		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === family).body, '拖动关闭前编辑');
+		// A horizontal swipe must never override the configured list shortcut set.
+		view.setFilter('all'); await store.configure({ rowActions: ['top'] }); view.applyComposerSettings(); view.paintLists();
+		const icons = () => [...view.list.querySelectorAll('.gvkit-arrange-row')].map((row: any) => [...row.querySelectorAll('.gvkit-arrange-icon')].map((button: any) => button.getAttribute('aria-label')));
+		const configuredIcons = icons();
+		label = view.list.querySelector('.gvkit-arrange-title');
+		pointer(label, 'pointerdown', 150, 30); pointer(window.document, 'pointermove', 70, 30); pointer(window.document, 'pointerup', 70, 30);
+		assert.deepEqual(icons(), configuredIcons);
+		await view.reload(); assert.deepEqual(icons(), configuredIcons);
+		assert.ok(icons().every((row: string[]) => row.length <= 1 && row.every(name => name === '置顶')));
+		// New density/detail settings persist in the same state and retain editing nodes.
+		await view.select(family);
+		const editor = view.editing.title; editor.value = '字体改变也保留此标题'; editor.focus();
+		const compact = { rowHeight: 24, listFontSize: 14, detailFontSize: 16, bodyFontSize: 20, dateFontSize: 15, rowIconGap: 0, detailIconGap: 2 };
+		await store.configure(compact); view.applyComposerSettings(); view.paintLists(); await fresh.load();
+		for (const [key, value] of Object.entries(compact)) assert.equal(fresh.state[key], value);
+		assert.equal(view.editing.title, editor); assert.equal(editor.value, '字体改变也保留此标题');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-row-height'), '24px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-checkbox'), '19px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-icon'), '17px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-slot'), '19px');
+		await store.setDate(family, today); view.paintLists();
+		let hint = view.list.querySelector('[data-id="' + family + '"] .gvkit-arrange-row-date');
+		assert.equal(hint.textContent, '今天'); assert.equal(hint.classList.contains('is-overdue'), false);
+		await store.setDate(family, '2020-01-01'); view.paintLists();
+		hint = view.list.querySelector('[data-id="' + family + '"] .gvkit-arrange-row-date');
+		assert.equal(hint.classList.contains('is-overdue'), true);
+		await view.toggleComplete(family);
+		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-date').textContent.includes('逾期'), false);
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

@@ -35,11 +35,18 @@ export interface ArrangeState {
 	parentFontSize: number;
 	closeThreshold: number;
 	selectionColor: 'blue' | 'purple' | 'gold';
+	detailFontSize: number;
+	bodyFontSize: number;
+	dateFontSize: number;
+	rowIconGap: number;
+	detailIconGap: number;
 }
 
 export const ARRANGE_NUMBER_SETTINGS = {
-	listFontSize: [14, 22, 17], rowHeight: [40, 64, 44], gripHeight: [24, 56, 32],
+	listFontSize: [14, 22, 17], rowHeight: [24, 64, 44], gripHeight: [24, 56, 32],
 	gripWidth: [24, 96, 36], toolbarHeight: [40, 56, 44], parentFontSize: [12, 18, 13], closeThreshold: [10, 40, 25],
+	detailFontSize: [16, 28, 18], bodyFontSize: [16, 24, 16], dateFontSize: [10, 16, 12],
+	rowIconGap: [0, 24, 4], detailIconGap: [0, 32, 8],
 } as const;
 
 export function defaultArrangeState(): ArrangeState {
@@ -48,7 +55,8 @@ export function defaultArrangeState(): ArrangeState {
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
 		rowActions: ['parent', 'date', 'top'], detailActions: [...ARRANGE_ACTIONS], showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
-		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue' };
+		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue',
+		detailFontSize: 18, bodyFontSize: 16, dateFontSize: 12, rowIconGap: 4, detailIconGap: 8 };
 }
 
 /** Missing IDs are new externally created items; stale/completed IDs are not slots. */
@@ -139,6 +147,21 @@ export function relativeDate(date: string, today: string, completed = false): st
 			: date <= offsetDay(week.end, 7) ? `下周${'日一二三四五六'[weekday]}` : '';
 	const absolute = `${date.slice(0, 4) !== today.slice(0, 4) ? `${Number(date.slice(0, 4))}年` : ''}${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}号`;
 	return relative ? `${relative}，${absolute}` : absolute;
+}
+
+/** A compact deadline hint, using the same calendar day as the detail and counts. */
+export function rowDateLabel(item: ArrangeItem, today: string): string {
+	const date = item.date;
+	if (!date || date > today || (item.completedAt && date < today)) return '';
+	if (date === today) return '今天';
+	if (date === offsetDay(today, -1)) return '昨天';
+	if (date === offsetDay(today, -2)) return '前天';
+	const week = dateRange(today, 'week');
+	const weekday = '日一二三四五六'[new Date(`${date}T12:00:00Z`).getUTCDay()];
+	if (date >= week.start) return `本周${weekday}`;
+	if (date >= offsetDay(week.start, -7)) return `上周${weekday}`;
+	const days = Math.round((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${date}T12:00:00Z`)) / 86400000);
+	return `${days}天前`;
 }
 
 export function todayFacts(items: ArrangeItem[], state: ArrangeState, now = new Date()) {
