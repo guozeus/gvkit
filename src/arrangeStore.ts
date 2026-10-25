@@ -56,6 +56,9 @@ export class ArrangeStore {
 				state.submitArrowSize = Math.max(16, Math.min(32, Math.round(fields.submitArrowSize)));
 			if (typeof fields.submitColor === 'string' && Object.keys(SUBMIT_BLUE_COLORS).includes(fields.submitColor))
 				state.submitColor = fields.submitColor as ArrangeState['submitColor'];
+			if (typeof fields.detailShadow === 'number' && Number.isFinite(fields.detailShadow))
+				state.detailShadow = Math.max(0, Math.min(40, Math.round(fields.detailShadow)));
+			if (typeof fields.bodyPlaceholder === 'string') state.bodyPlaceholder = fields.bodyPlaceholder;
 			if (strings(fields.rowActions)) state.rowActions = fields.rowActions.filter((a): a is ArrangeState['rowActions'][number] => ['parent', 'date', 'top', 'pin'].includes(a));
 		}
 		state.order = pendingOrder(items, state.order);
@@ -150,7 +153,7 @@ export class ArrangeStore {
 			await this.saveState();
 		});
 	}
-	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'rowActions'>>): Promise<void> {
+	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'detailShadow' | 'bodyPlaceholder' | 'rowActions'>>): Promise<void> {
 		return this.serial(async () => { Object.assign(this.state, changes); await this.saveState(); });
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {

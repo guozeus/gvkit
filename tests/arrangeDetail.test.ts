@@ -20,7 +20,7 @@ export class Modal {} export class Menu {} export class Setting {}
 export class Notice { constructor(message) { throw Error(message); } }
 export class TFile { constructor(path) { this.path=path;this.name=path.split('/').pop();this.basename=this.name.slice(0,-3); } }
 export class TFolder {} export class Plugin {} export class WorkspaceLeaf {}
-export const setIcon=()=>{};
+export const setIcon=(el,icon)=>{el.dataset.icon=icon};
 export const MarkdownRenderer={render:async(app,text,el)=>{el.textContent=text}};
 export function getFrontMatterInfo(s) { const end=s.indexOf('\\n---',4);return s.startsWith('---\\n')&&end>=0?{exists:true,frontmatter:s.slice(4,end),contentStart:end+5}:{exists:false,frontmatter:'',contentStart:0}; }
 export const parseYaml=JSON.parse;
@@ -72,13 +72,63 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 				await writeFile(disk(file.path), change(await vault.read(file)));
 			},
 		};
-		const app = { vault };
+		let active = true;
+		const events = new Map<string, () => void>();
+		const app = { vault, workspace: { getActiveViewOfType: () => active ? view : null,
+			on: (name: string, callback: () => void) => { events.set(name, callback); return {}; } } };
 		const store = new ArrangeStore(app);
 		const parent = await store.create('父事项', null);
 		const first = await store.create('第一项完整标题', parent);
 		const second = await store.create('第二项', null);
-		const root = window.document.createElement('main'); window.document.body.append(root);
-		view = new ArrangeView({ app, contentEl: root }, store); await view.onOpen();
+		const host = window.document.createElement('div'); window.document.body.append(host);
+		host.innerHTML = '<div class="view-header"><button id="nav">导航</button><div class="view-header-title-container"><div class="view-header-title">自御安排</div></div><button id="native-more">宿主更多</button></div>';
+		const hostHeader = host.querySelector<HTMLElement>('.view-header')!;
+		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
+		const root = window.document.createElement('main'); host.append(root);
+		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		const slot = host.querySelector('.view-header-title-container')!;
+		assert.equal(slot.querySelectorAll('.gvkit-arrange-header').length, 1);
+		assert.equal(root.querySelector('.gvkit-arrange-header'), null);
+		assert.equal(host.querySelector('.gvkit-arrange-status-icon')?.getAttribute('data-icon'), 'circle-check');
+		active = false; events.get('active-leaf-change')!();
+		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
+		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);
+		active = true; events.get('active-leaf-change')!();
+		assert.ok(host.querySelector('#nav')); assert.ok(host.querySelector('#native-more'));
+		// A long hold moves the same global sequence; early movement remains scrolling/swiping.
+		const pointer = (el: any, type: string, x: number, y: number) => el.dispatchEvent(new window.PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse', clientX: x, clientY: y }));
+		const waitHold = () => new Promise(resolve => setTimeout(resolve, 410));
+		let label = root.querySelector<HTMLElement>(`[data-id="${second}"] .gvkit-arrange-title`)!;
+		let target = root.querySelector<HTMLElement>(`[data-id="${parent}"]`)!;
+		target.getBoundingClientRect = () => ({ top: 100, height: 48 } as any);
+		window.document.elementFromPoint = () => target as any;
+		pointer(label, 'pointerdown', 100, 20); await waitHold();
+		assert.ok(label.parentElement!.classList.contains('is-dragging'));
+		pointer(window.document, 'pointermove', 100, 140);
+		assert.ok(target.classList.contains('is-drop-target'));
+		pointer(window.document, 'pointerup', 100, 140);
+		while (view.busy) await new Promise(resolve => setTimeout(resolve, 1));
+		assert.deepEqual(store.state.order, [first, parent, second]);
+		label = root.querySelector<HTMLElement>(`[data-id="${second}"] .gvkit-arrange-title`)!;
+		pointer(label, 'pointerdown', 100, 20); pointer(window.document, 'pointermove', 100, 40); await waitHold();
+		assert.equal(label.parentElement!.classList.contains('is-dragging'), false);
+		pointer(window.document, 'pointerup', 100, 40); label.click();
+		assert.equal(view.selected, null, 'scroll must not trigger the following click');
+		pointer(label, 'pointerdown', 100, 20); await waitHold(); pointer(window.document, 'pointercancel', 100, 20);
+		const checkbox = label.parentElement!.querySelector<HTMLInputElement>('input')!;
+		const completeClick = checkbox.onclick;
+		let clicked = 0; checkbox.onclick = event => { event.stopPropagation(); clicked++; };
+		checkbox.click(); assert.equal(clicked, 0, 'old gesture synthetic click stays suppressed');
+		pointer(checkbox, 'pointerdown', 20, 20); checkbox.click();
+		assert.equal(clicked, 1, 'a new deliberate checkbox press immediately after cancellation is accepted');
+		checkbox.onclick = completeClick;
+		await store.togglePin(parent); view.paintLists();
+		label = root.querySelector<HTMLElement>(`[data-id="${parent}"] .gvkit-arrange-title`)!;
+		pointer(label, 'pointerdown', 100, 20); await waitHold();
+		assert.equal(label.parentElement!.classList.contains('is-dragging'), false);
+		pointer(window.document, 'pointercancel', 100, 20);
+		await store.togglePin(parent); view.paintLists();
+		assert.equal(root.querySelector('.gvkit-arrange-grip'), null);
 		await view.select(first);
 		const input = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-composer textarea')!;
 		input.value = '底部未提交草稿';
@@ -96,7 +146,18 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		(root.querySelector('.gvkit-arrange-body') as any).click();
 		let body = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-inline-body')!;
 		assert.equal(body.hidden, false);
+		assert.equal(body.placeholder, '记录正文、链接、思路…');
+		for (const hint of ['写下下一步', '']) {
+			await store.configure({ detailShadow: 0, bodyPlaceholder: hint }); view.applyComposerSettings();
+			assert.equal(body.placeholder, hint);
+			assert.equal(root.querySelector('.gvkit-arrange-body-placeholder')?.textContent, hint);
+			assert.equal(body.hidden, false); assert.equal(body.value, '');
+			assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-shadow'), 'none');
+		}
 		body.value = '## 附注\n[[原链接]]\n'; body.dispatchEvent(new window.Event('input'));
+		await store.configure({ detailShadow: 16, bodyPlaceholder: '提示不是正文' }); view.applyComposerSettings();
+		assert.equal(body.value, '## 附注\n[[原链接]]\n');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-shadow'), '0 -7px 16px #0003');
 		await view.select(second);
 		const fresh = new ArrangeStore(app); await fresh.load();
 		assert.equal(fresh.items.find((x: any) => x.id === first).title, '第一项完整标题\n第二行');
@@ -136,6 +197,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		title.dispatchEvent(new window.Event('compositionend')); await view.saveEdit();
 		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === second).title, '拼音组合中');
 		await view.onClose();
+		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
+		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);
 	} finally {
 		view?.disposers.forEach((fn: () => void) => fn());
 		await window.happyDOM.close();

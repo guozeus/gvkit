@@ -62,6 +62,8 @@ export class ArrangeView extends ItemView {
 	private savingEdit: Promise<boolean> | null = null;
 	private timer: number | null = null;
 	private today = '';
+	private restoreHeader: (() => void) | null = null;
+	private cancelReorder: (() => void) | null = null;
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -78,6 +80,23 @@ export class ArrangeView extends ItemView {
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = () => this.setFilter(this.filter === 'today' ? 'all' : 'today');
 		iconButton(header, '安排更多', 'more-horizontal', event => this.headerMenu(event));
+		// Use only this leaf's title slot. Unknown/hidden host layouts keep the thin local bar.
+		const titleSlot = this.containerEl?.querySelector<HTMLElement>('.view-header-title-container');
+		const hostHeader = titleSlot?.closest<HTMLElement>('.view-header');
+		if (titleSlot && hostHeader) {
+			const syncHeader = () => {
+				const active = !this.closed && this.app.workspace.getActiveViewOfType(ArrangeView) === this;
+				const visible = hostHeader.getBoundingClientRect().height > 0;
+				titleSlot.classList.toggle('gvkit-arrange-host-title', active && visible);
+				if (active && visible) titleSlot.append(header);
+				else root.prepend(header);
+			};
+			this.restoreHeader = () => { titleSlot.classList.remove('gvkit-arrange-host-title'); root.prepend(header); };
+			this.registerEvent(this.app.workspace.on('active-leaf-change', syncHeader));
+			this.registerEvent(this.app.workspace.on('layout-change', syncHeader));
+			this.register(() => this.restoreHeader?.());
+			syncHeader();
+		}
 		this.area = root.createDiv('gvkit-arrange-area');
 		this.list = this.area.createDiv('gvkit-arrange-list');
 		this.list.setAttribute('aria-label', '事项列表');
@@ -164,6 +183,9 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.cancelReorder?.();
+		this.restoreHeader?.();
+		this.contentEl.style.removeProperty('--gvkit-arrange-detail-shadow');
 		this.contentEl.style.removeProperty('--gvkit-arrange-submit-size');
 		this.contentEl.style.removeProperty('--gvkit-arrange-submit-color');
 		this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null;
@@ -180,6 +202,14 @@ export class ArrangeView extends ItemView {
 		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-size', `${this.store.state.submitArrowSize}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-color', SUBMIT_BLUE_COLORS[this.store.state.submitColor]);
+		this.contentEl.style.setProperty('--gvkit-arrange-detail-shadow', this.store.state.detailShadow === 0 ? 'none' : `0 -7px ${this.store.state.detailShadow ?? 24}px #0003`);
+		const edit = this.editing;
+		if (edit) {
+			edit.body.placeholder = this.store.state.bodyPlaceholder;
+			// Update only the empty hint; never replace an editor or its unsaved text.
+			const hint = edit.preview.querySelector<HTMLElement>('.gvkit-arrange-body-placeholder');
+			if (hint) hint.textContent = this.store.state.bodyPlaceholder;
+		}
 	}
 	private updateComposer(): void {
 		const empty = !this.input.value.trim();
@@ -200,9 +230,12 @@ export class ArrangeView extends ItemView {
 	}
 	private paintLists(): void {
 		if (!this.headline || this.closed) return;
+		this.cancelReorder?.();
 		const facts = todayFacts(this.store.items, this.store.state);
 		this.today = facts.day;
 		this.headline.empty();
+		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
+		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
 		this.headline.createSpan({ text: `今天达成 ${facts.x}/${facts.y}` });
 		this.headline.setAttribute('aria-label', `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换必做筛选`);
 		this.headline.dataset.color = facts.color;
@@ -244,11 +277,6 @@ export class ArrangeView extends ItemView {
 			event.stopPropagation(); complete.checked = Boolean(item.completedAt);
 			void this.run(() => this.store.complete(item.id, !item.completedAt));
 		};
-		if (!item.completedAt) {
-			const handle = iconButton(row, item.pinned ? '已钉住，先取消钉住再排序' : '拖动排序', 'grip-vertical', () => {});
-			handle.addClass('gvkit-arrange-grip');
-			this.reorderHandle(handle, row, item);
-		}
 		const label = row.createEl('button', { cls: 'gvkit-arrange-title', text: item.title, attr: { title: item.title } });
 		label.onclick = () => { void this.select(this.selected === item.id ? null : item.id); };
 		if (item.date) {
@@ -265,41 +293,88 @@ export class ArrangeView extends ItemView {
 			if (key === 'date' && item.date) button.addClass('is-active');
 		}
 		iconButton(row, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
-		let x = 0, y = 0;
-		row.addEventListener('touchstart', event => { const p = event.touches[0]; if (p) { x = p.clientX; y = p.clientY; } }, { passive: true });
-		row.addEventListener('touchend', event => {
-			const p = event.changedTouches[0];
-			if (p && x - p.clientX > 45 && Math.abs(y - p.clientY) < 28) {
-				this.expanded.add(item.id); this.paintLists();
-			}
-		}, { passive: true });
+		this.rowGesture(row, label, item);
 	}
-	private reorderHandle(handle: HTMLButtonElement, row: HTMLElement, item: ArrangeItem): void {
-		handle.addEventListener('pointerdown', event => {
-			if (item.pinned || this.busy || event.button !== 0) return;
-			event.preventDefault(); event.stopPropagation();
-			handle.setPointerCapture(event.pointerId);
-			row.addClass('is-dragging');
+	private rowGesture(row: HTMLElement, label: HTMLElement, item: ArrangeItem): void {
+		let suppressClickUntil = 0;
+		row.addEventListener('click', event => {
+			if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+		}, true);
+		label.addEventListener('contextmenu', event => event.preventDefault());
+		const start = (x: number, y: number, touch: boolean) => {
+			this.cancelReorder?.();
+			let dragging = false, moved = false;
+			let lastX = x, lastY = y;
 			let target: HTMLElement | null = null;
 			let after = false;
-			const move = (e: PointerEvent) => {
+			const timer = window.setTimeout(() => {
+				if (moved || this.busy || item.pinned || item.completedAt) return;
+				dragging = true; row.addClass('is-dragging');
+				suppressClickUntil = Infinity;
+			}, 380);
+			const cleanup = () => {
+				window.clearTimeout(timer);
+				document.removeEventListener('touchmove', touchMove); document.removeEventListener('touchend', touchEnd);
+				document.removeEventListener('touchcancel', cancel); document.removeEventListener('touchstart', extraTouch);
+				document.removeEventListener('pointermove', mouseMove); document.removeEventListener('pointerup', mouseEnd);
+				document.removeEventListener('pointercancel', cancel); window.removeEventListener('blur', cancel);
+				row.removeClass('is-dragging'); row.style.removeProperty('transform'); target?.removeClass('is-drop-target');
+				if (dragging || moved) suppressClickUntil = Date.now() + 500;
+				if (this.cancelReorder === cancel) this.cancelReorder = null;
+			};
+			const cancel = () => cleanup();
+			const move = (clientX: number, clientY: number, event: Event) => {
+				lastX = clientX; lastY = clientY;
+				if (!dragging) {
+					if (Math.hypot(clientX - x, clientY - y) > 8) { moved = true; window.clearTimeout(timer); }
+					return;
+				}
+				event.preventDefault();
+				row.style.transform = `translateY(${clientY - y}px)`;
 				target?.removeClass('is-drop-target');
-				const hit = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
+				const hit = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
 				target = hit && hit !== row && hit.parentElement === row.parentElement ? hit : null;
-				after = Boolean(target && e.clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
+				after = Boolean(target && clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
 				target?.addClass('is-drop-target');
 				if (target) target.dataset.dropAfter = String(after);
 				const scroller = row.closest<HTMLElement>('.gvkit-arrange-detail-scroll') ?? this.list;
 				const bounds = scroller.getBoundingClientRect();
-				if (e.clientY < bounds.top + 32) scroller.scrollTop -= 14;
-				if (e.clientY > bounds.bottom - 32) scroller.scrollTop += 14;
+				if (clientY < bounds.top + 32) scroller.scrollTop -= 14;
+				if (clientY > bounds.bottom - 32) scroller.scrollTop += 14;
 			};
-			const end = (e: PointerEvent) => {
-				handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', end); handle.removeEventListener('pointercancel', end);
-				row.removeClass('is-dragging'); target?.removeClass('is-drop-target');
-				if (e.type === 'pointerup' && target?.dataset.id) void this.run(() => this.store.move(item.id, target!.dataset.id, after));
+			const end = (event: Event) => {
+				const targetId = target?.dataset.id;
+				if (dragging) event.preventDefault();
+				cleanup();
+				if (dragging && targetId) void this.run(() => this.store.move(item.id, targetId, after));
+				else if (!dragging && x - lastX > 45 && Math.abs(y - lastY) < 28) {
+					this.expanded.add(item.id); this.paintLists();
+				}
 			};
-			handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
+			const extraTouch = (e: TouchEvent) => { if (e.touches.length !== 1) cancel(); };
+			const touchMove = (e: TouchEvent) => { const p = e.touches[0]; if (p && e.touches.length === 1) move(p.clientX, p.clientY, e); else cancel(); };
+			const touchEnd = (e: TouchEvent) => { const p = e.changedTouches[0]; if (p) { lastX = p.clientX; lastY = p.clientY; } end(e); };
+			const mouseMove = (e: PointerEvent) => move(e.clientX, e.clientY, e);
+			const mouseEnd = (e: PointerEvent) => end(e);
+			if (touch) {
+				document.addEventListener('touchmove', touchMove, { passive: false });
+				document.addEventListener('touchend', touchEnd, { passive: false });
+				document.addEventListener('touchcancel', cancel); document.addEventListener('touchstart', extraTouch);
+			} else {
+				document.addEventListener('pointermove', mouseMove); document.addEventListener('pointerup', mouseEnd); document.addEventListener('pointercancel', cancel);
+			}
+			window.addEventListener('blur', cancel);
+			this.cancelReorder = cancel;
+		};
+		const onBody = (target: EventTarget | null) => target === row || label.contains(target as Node);
+		row.addEventListener('touchstart', event => {
+			// New presses, including checkboxes/shortcuts, are not the old gesture's synthetic click.
+			suppressClickUntil = 0;
+			if (event.touches.length === 1 && onBody(event.target)) start(event.touches[0]!.clientX, event.touches[0]!.clientY, true);
+		}, { passive: true });
+		row.addEventListener('pointerdown', event => {
+			suppressClickUntil = 0;
+			if (event.pointerType !== 'touch' && event.button === 0 && onBody(event.target)) start(event.clientX, event.clientY, false);
 		});
 	}
 	private action(key: RowAction, item: ArrangeItem, event: MouseEvent): void {
@@ -386,7 +461,7 @@ export class ArrangeView extends ItemView {
 		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
 		error.hidden = true;
 		const preview = this.detailScroll.createDiv({ cls: 'gvkit-arrange-body', attr: { tabindex: '0', 'aria-label': '编辑事项正文' } });
-		const body = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-inline-body', attr: { 'aria-label': '事项正文', rows: '1', placeholder: '记录正文、链接、思路…' } });
+		const body = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-inline-body', attr: { 'aria-label': '事项正文', rows: '1', placeholder: this.store.state.bodyPlaceholder } });
 		body.value = item.body; body.hidden = true;
 		const edit = this.editing = { id: item.id, title, body, preview, error, savedTitle: item.title, savedBody: item.body, composing: false as boolean };
 		this.renderBody();
@@ -483,7 +558,7 @@ export class ArrangeView extends ItemView {
 		if (edit.body.value) {
 			const item = this.store.items.find(item => item.id === edit.id);
 			void MarkdownRenderer.render(this.app, edit.body.value, edit.preview, item?.path ?? '', this);
-		} else edit.preview.createSpan({ cls: 'gvkit-arrange-body-placeholder', text: '记录正文、链接、思路…' });
+		} else edit.preview.createSpan({ cls: 'gvkit-arrange-body-placeholder', text: this.store.state.bodyPlaceholder });
 	}
 	private scheduleEdit(): void {
 		if (this.editTimer !== null) window.clearTimeout(this.editTimer);
@@ -548,6 +623,11 @@ export class ArrangeView extends ItemView {
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
 		};
+		new Setting(modal.contentEl).setName('详情面板顶部阴影范围').setDesc('0～40 像素，默认 24；0 为关闭阴影，可先试 12～16。')
+			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.detailShadow).setDynamicTooltip()
+				.onChange(value => configure({ detailShadow: value })));
+		new Setting(modal.contentEl).setName('空正文提示文字').setDesc('留空则不显示提示；只改变界面，不修改事项正文。')
+			.addText(text => text.setValue(this.store.state.bodyPlaceholder).onChange(value => configure({ bodyPlaceholder: value })));
 		new Setting(modal.contentEl).setName('键盘上方留白').setDesc('输入区与键盘之间的留白（像素）；0 为贴紧，默认 7。键盘收起后保留系统安全区。')
 			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.keyboardGap).setDynamicTooltip()
 				.onChange(value => configure({ keyboardGap: value })));

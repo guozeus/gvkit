@@ -44,6 +44,8 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await store.load(); assert.equal(store.state.keyboardGap, 7, 'new installs use the accepted 7px gap');
 		assert.equal(store.state.submitArrowSize, 24);
 		assert.equal(store.state.submitColor, 'classic');
+		assert.equal(store.state.detailShadow, 24);
+		assert.equal(store.state.bodyPlaceholder, '记录正文、链接、思路…');
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);
 		const child2 = await store.create('第二项', parent);
@@ -75,6 +77,17 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(fresh.state.keyboardGap, 7);
 		assert.equal(fresh.state.submitArrowSize, 24, 'existing settings retain the accepted arrow size');
 		assert.equal(fresh.state.submitColor, 'classic', 'existing settings retain the accepted blue');
+		await vault.process(stateFile, source => source.replace('  "detailShadow": 24,\n', '').replace('  "bodyPlaceholder": "记录正文、链接、思路…",\n', ''));
+		await fresh.load(); assert.equal(fresh.state.detailShadow, 24); assert.equal(fresh.state.bodyPlaceholder, '记录正文、链接、思路…');
+		const itemBytes = await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path));
+		for (const radius of [0, 12, 16, 24, 40]) {
+			await store.configure({ detailShadow: radius }); await fresh.load(); assert.equal(fresh.state.detailShadow, radius);
+		}
+		for (const hint of ['下一步与链接…', '']) {
+			await Promise.all([store.configure({ bodyPlaceholder: hint }), store.configure({ detailShadow: 16 })]);
+			await fresh.load(); assert.equal(fresh.state.bodyPlaceholder, hint); assert.equal(fresh.state.detailShadow, 16);
+			assert.equal(await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path)), itemBytes);
+		}
 		for (const gap of [0, 24, 40]) {
 			await store.configure({ keyboardGap: gap });
 			await fresh.load(); assert.equal(fresh.state.keyboardGap, gap, 'gap persists across Store reloads');
