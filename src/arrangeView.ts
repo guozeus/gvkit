@@ -51,6 +51,7 @@ export class ArrangeView extends ItemView {
 	private area!: HTMLElement;
 	private input!: HTMLTextAreaElement;
 	private createButton!: HTMLButtonElement;
+	private keyboardBackdrop: HTMLElement | null = null;
 	private headline!: HTMLButtonElement;
 	private full = false;
 	private busy = false;
@@ -87,6 +88,11 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
 		this.updateComposer();
 		this.applyComposerSettings();
+		if (Platform.isIosApp) {
+			this.keyboardBackdrop = document.body.createDiv({ cls: 'gvkit-arrange-keyboard-backdrop', attr: { 'aria-hidden': 'true' } });
+			this.keyboardBackdrop.hidden = true;
+			this.register(() => { this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null; });
+		}
 		this.input.onkeydown = event => {
 			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void this.create(); }
 		};
@@ -106,7 +112,8 @@ export class ArrangeView extends ItemView {
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
 		const fit = () => {
 			const viewport = window.visualViewport;
-			const bottom = root.getBoundingClientRect().bottom;
+			const bounds = root.getBoundingClientRect();
+			const bottom = bounds.bottom;
 			const css = window.getComputedStyle(root);
 			const keyboard = Platform.isIosApp
 				? Math.max(0, parseFloat(css.getPropertyValue('--keyboard-height')) || 0) : 0;
@@ -121,7 +128,17 @@ export class ArrangeView extends ItemView {
 				// Explicit zero must override the host CSS inset after it has resized.
 				root.style.setProperty('padding-bottom', `${overlap}px`, keyboard > 0 ? 'important' : '');
 			} else root.style.removeProperty('padding-bottom');
+			// Paint behind native keyboard corners, outside the host's clipped pane.
+			// This is decoration only: it never changes keyboard/composer geometry.
+			if (this.keyboardBackdrop) {
+				this.keyboardBackdrop.hidden = this.closed || keyboard <= 0
+					|| this.app.workspace.getActiveViewOfType(ArrangeView) !== this;
+				Object.assign(this.keyboardBackdrop.style, {
+					top: `${Math.max(0, visibleBottom - 1)}px`, left: `${bounds.left}px`, width: `${bounds.width}px`,
+				});
+			}
 		};
+		if (Platform.isIosApp) this.registerEvent(this.app.workspace.on('active-leaf-change', fit));
 		if (window.visualViewport) {
 			const viewport = window.visualViewport;
 			const observer = new ResizeObserver(fit);
@@ -145,6 +162,7 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null;
 		if (this.timer !== null) window.clearTimeout(this.timer);
 		await this.saveEdit();
 	}

@@ -48,7 +48,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	const root = window.document.createElement('div');
 	window.document.body.append(root);
 	let hostBottom = 844;
-	root.getBoundingClientRect = () => ({ bottom: hostBottom } as any);
+	root.getBoundingClientRect = () => ({ bottom: hostBottom, left: 0, width: 440 } as any);
 	const proto: any = window.HTMLElement.prototype;
 	proto.empty = function () { this.replaceChildren(); };
 	proto.addClass = function (...names: string[]) { this.classList.add(...names); };
@@ -69,9 +69,14 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		disconnect() { disconnected = true; }
 	} });
 	let view: any;
+	let active = true;
+	let changeLeaf = () => {};
 	try {
 		const store = { load: async () => {}, items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [], keyboardGap: 7 } };
-		view = new module.exports.ArrangeView({ contentEl: root, app: { vault: { on: () => ({}) } } }, store);
+		view = new module.exports.ArrangeView({ contentEl: root, app: {
+			vault: { on: () => ({}) },
+			workspace: { getActiveViewOfType: () => active ? view : null, on: (_name: string, fn: () => void) => { changeLeaf = fn; return {}; } },
+		} }, store);
 		await view.onOpen();
 		assert.equal(root.style.paddingBottom, '344px', 'opening with an already visible keyboard fits immediately');
 		assert.equal(observedTarget, root);
@@ -120,6 +125,12 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		viewport.dispatchEvent(new window.Event('scroll'));
 		assert.equal(root.style.paddingBottom, '378px', 'before host shrink the keyboard still needs avoidance');
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
+		const backdrop = window.document.querySelector<HTMLElement>('.gvkit-arrange-keyboard-backdrop')!;
+		assert.equal(backdrop.hidden, false);
+		assert.equal(backdrop.style.top, '577px');
+		assert.equal(backdrop.style.width, '440px');
+		active = false; changeLeaf(); assert.equal(backdrop.hidden, true, 'switching leaves hides decoration immediately');
+		active = true; changeLeaf(); assert.equal(backdrop.hidden, false);
 		hostBottom = 578; notifyResize();
 		assert.equal(root.style.paddingBottom, '0px', 'explicit zero prevents the host CSS inset returning');
 		assert.equal(window.getComputedStyle(root).paddingBottom, '0px');
@@ -138,11 +149,13 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(root.style.getPropertyPriority('padding-bottom'), '');
 		assert.equal(window.getComputedStyle(root).paddingBottom, '34px', 'keyboard close restores the original idle CSS');
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);
+		assert.equal(backdrop.hidden, true, 'keyboard close hides the background');
 		assert.equal(input.value, '尚未提交的中文草稿');
 		assert.equal(root.querySelector('textarea'), input);
 		root.style.setProperty('--keyboard-height', '378px'); notifyResize();
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
 		await view.onClose(); view.disposers.forEach((fn: () => void) => fn());
+		assert.equal(window.document.querySelector('.gvkit-arrange-keyboard-backdrop'), null);
 		assert.equal(disconnected, true);
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);
 		assert.equal(root.style.paddingBottom, '');
