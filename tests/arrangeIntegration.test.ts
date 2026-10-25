@@ -52,6 +52,13 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(store.items.find((x: any) => x.id === child1).parent, parent);
 		assert.equal(store.items.find((x: any) => x.id === child2).parent, parent);
 		await store.edit(child1, '完整长标题'.repeat(50), '## 正文\n[[保留链接]]\n', parent);
+		await assert.rejects(store.setParent(parent, child1), /自己或自己的下级/);
+		await assert.rejects(store.setParent(child1, child1), /自己或自己的下级/);
+		await assert.rejects(store.setParent(child1, 'missing'), /自己或自己的下级/);
+		await store.setParent(child1, child2);
+		assert.equal(store.items.find((x: any) => x.id === child1).parent, child2);
+		assert.equal(store.items.find((x: any) => x.id === child1).body, '## 正文\n[[保留链接]]\n');
+		await store.setParent(child1, parent);
 		await store.togglePin(parent);
 		const added = await store.create('独立', null);
 		assert.equal(store.state.order[2], parent, 'only third pinned remains third');

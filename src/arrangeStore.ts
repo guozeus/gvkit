@@ -59,6 +59,7 @@ export class ArrangeStore {
 			if (typeof fields.detailShadow === 'number' && Number.isFinite(fields.detailShadow))
 				state.detailShadow = Math.max(0, Math.min(40, Math.round(fields.detailShadow)));
 			if (typeof fields.bodyPlaceholder === 'string') state.bodyPlaceholder = fields.bodyPlaceholder;
+			if (fields.completedStyle === 'background' || fields.completedStyle === 'text') state.completedStyle = fields.completedStyle;
 			if (strings(fields.rowActions)) state.rowActions = fields.rowActions.filter((a): a is ArrangeState['rowActions'][number] => ['parent', 'date', 'top', 'pin'].includes(a));
 		}
 		state.order = pendingOrder(items, state.order);
@@ -121,6 +122,13 @@ export class ArrangeStore {
 			await this.load();
 		});
 	}
+	setParent(id: string, parent: string | null): Promise<void> {
+		return this.serial(async () => {
+			if (!validParent(this.items, id, parent)) throw Error('不能将自己或自己的下级设为上级');
+			await this.patch(id, { parent });
+			await this.load();
+		});
+	}
 	complete(id: string, done: boolean): Promise<void> {
 		return this.serial(async () => {
 			const folder = done ? DONE : TODO;
@@ -153,7 +161,7 @@ export class ArrangeStore {
 			await this.saveState();
 		});
 	}
-	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'detailShadow' | 'bodyPlaceholder' | 'rowActions'>>): Promise<void> {
+	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'detailShadow' | 'bodyPlaceholder' | 'completedStyle' | 'rowActions'>>): Promise<void> {
 		return this.serial(async () => { Object.assign(this.state, changes); await this.saveState(); });
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {

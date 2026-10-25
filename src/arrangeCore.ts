@@ -21,13 +21,14 @@ export interface ArrangeState {
 	submitColor: keyof typeof SUBMIT_BLUE_COLORS;
 	detailShadow: number;
 	bodyPlaceholder: string;
+	completedStyle: 'background' | 'text';
 	rowActions: RowAction[];
 }
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
-		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…',
+		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
 		rowActions: ['parent', 'date', 'top'] };
 }
 

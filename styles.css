@@ -141,7 +141,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-actions { display: flex; flex: 0 1 auto; min-width: 0; max-width: 48%; overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-actions::-webkit-scrollbar { display: none; }
 .gvkit-arrange .gvkit-arrange-icon, .gvkit-arrange-header .gvkit-arrange-icon { flex: 0 0 36px; width: 36px; min-height: 40px; padding: 8px; background: transparent; border: 0; box-shadow: none; color: var(--text-muted); touch-action: manipulation; }
-.gvkit-arrange-row .gvkit-arrange-icon { flex-basis: 32px; width: 32px; min-height: 44px; padding: 6px; }
+.gvkit-arrange .gvkit-arrange-row .gvkit-arrange-icon { flex-basis: 30px; width: 30px; min-height: 44px; padding: 5px; }
 .gvkit-arrange-icon svg { width: 19px; height: 19px; }
 .gvkit-arrange .gvkit-arrange-icon.is-active { color: var(--interactive-accent); }
 .gvkit-arrange-row.is-dragging { opacity: .9; background: var(--background-primary); box-shadow: 0 4px 14px #0003; border-radius: 8px; z-index: 4; pointer-events: none; }
@@ -163,7 +163,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 46%; min-width: 0; overflow: hidden; border-left: 1px solid var(--background-modifier-border); background: var(--background-primary); }
 .gvkit-arrange-detail[hidden] { display: none; }
 .gvkit-arrange-detail-tools { flex: 0 0 auto; display: flex; justify-content: flex-end; padding: 0 8px; }
-.gvkit-arrange-detail-tools > :first-child { margin-right: auto; }
+.gvkit-arrange-detail-actions { display: flex; flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.gvkit-arrange-detail-actions::-webkit-scrollbar { display: none; }
 .gvkit-arrange-detail-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 16px 16px; }
 .gvkit-arrange .gvkit-arrange-detail-title, .gvkit-arrange .gvkit-arrange-inline-body { display: block; box-sizing: border-box; width: 100%; resize: none; overflow: hidden; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-normal); box-shadow: none; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
 .gvkit-arrange .gvkit-arrange-detail-title { margin: 6px 0 10px; min-height: 30px; line-height: 1.4; font-size: 21px; font-weight: 600; }
@@ -171,13 +172,32 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-body { min-height: 150px; overflow-wrap: anywhere; font-size: 16px; line-height: 1.6; cursor: text; }
 .gvkit-arrange .gvkit-arrange-inline-body[hidden], .gvkit-arrange-body[hidden], .gvkit-arrange-edit-error[hidden] { display: none; }
 .gvkit-arrange-body-placeholder { color: var(--text-faint); }
-.gvkit-arrange-parent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 13px; line-height: 20px; }
+.gvkit-arrange .gvkit-arrange-parent-name { display: flex; align-items: center; justify-content: flex-start; gap: 4px; width: 100%; min-width: 0; min-height: 32px; padding: 0; border: 0; box-shadow: none; background: transparent; color: var(--text-muted); font-size: 13px; line-height: 20px; text-align: left; }
+.gvkit-arrange-parent-name > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gvkit-arrange-parent-chevron { display: flex; flex-shrink: 0; }
+.gvkit-arrange-parent-chevron svg { width: 16px; height: 16px; }
 .gvkit-arrange-edit-error { color: var(--text-error); font-size: 14px; margin-bottom: 8px; }
-.gvkit-arrange-detail-tools .gvkit-arrange-icon { flex-basis: 44px; width: 44px; min-height: 44px; }
+.gvkit-arrange .gvkit-arrange-detail-tools .gvkit-arrange-icon { flex-basis: 44px; width: 44px; min-height: 44px; }
 .gvkit-arrange-body > :first-child { margin-top: 4px; }
 .gvkit-arrange-children { margin: 8px -8px 0; }
 .gvkit-arrange-panel-grip { display: none; }
 .gvkit-arrange-empty { padding: 40px 16px; text-align: center; color: var(--text-muted); }
+.gvkit-arrange[data-completed-style="background"] .gvkit-arrange-row.is-completed { background: color-mix(in srgb, var(--color-blue) 7%, var(--background-primary)); }
+.gvkit-arrange .gvkit-arrange-row.is-completed .gvkit-arrange-title { text-decoration: none; color: var(--text-normal); }
+.gvkit-arrange[data-completed-style="text"] .gvkit-arrange-row.is-completed .gvkit-arrange-title { color: var(--color-blue); }
+.gvkit-arrange-search { display: flex; align-items: center; flex: 0 0 auto; padding: 4px 8px; }
+.gvkit-arrange-search input { flex: 1; min-width: 0; font-size: 16px; }
+.gvkit-arrange-parent-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 0 0 auto; padding: 6px 10px; background: color-mix(in srgb, var(--color-purple) 12%, var(--background-primary)); }
+.gvkit-arrange-parent-picker > span { flex: 1; color: var(--color-purple); font-weight: 600; }
+.gvkit-arrange-parent-picker .gvkit-arrange-edit-error { flex-basis: 100%; margin: 0; }
+.gvkit-arrange-search[hidden], .gvkit-arrange-parent-picker[hidden] { display: none; }
+.gvkit-arrange-menu-row { display: flex; align-items: center; }
+.gvkit-arrange-item-menu button { min-height: 44px; box-shadow: none; border: 0; background: transparent; touch-action: manipulation; }
+.gvkit-arrange-menu-action { display: flex; align-items: center; justify-content: flex-start; gap: 10px; flex: 1; min-width: 0; text-align: left; }
+.gvkit-arrange-menu-action > :first-child { display: flex; }
+.gvkit-arrange-item-menu svg { width: 20px; height: 20px; }
+.gvkit-arrange-menu-toggle { flex: 0 0 48px; display: flex; align-items: center; justify-content: center; }
+.gvkit-arrange-menu-toggle[aria-checked="true"] { color: var(--color-blue); }
 .gvkit-arrange-scope { display: flex; align-items: center; justify-content: space-between; padding-left: 12px; }
 .gvkit-arrange-mobile .gvkit-arrange-detail { position: absolute; bottom: 0; left: 0; right: 0; max-height: 100%; height: 48%; border: 1px solid var(--background-modifier-border); border-bottom: 0; border-radius: 16px 16px 0 0; box-shadow: var(--gvkit-arrange-detail-shadow, 0 -7px 24px #0003); z-index: 2; }
 .gvkit-arrange-mobile .gvkit-arrange-detail.is-full { height: 100%; max-height: 100%; border-radius: 0; }

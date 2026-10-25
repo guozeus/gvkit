@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
 import { Window } from 'happy-dom';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,7 +16,11 @@ export class ItemView {
  registerDomEvent(el,type,fn) { el.addEventListener(type,fn); this.register(()=>el.removeEventListener(type,fn)); }
 }
 export const Platform={isMobileApp:true,isIosApp:false};
-export class Modal {} export class Menu {} export class Setting {}
+export class Modal {
+ constructor() { this.contentEl=document.createElement('div'); }
+ setTitle() {} open() { document.body.append(this.contentEl); } close() { this.contentEl.remove(); }
+}
+export class Menu {} export class Setting {}
 export class Notice { constructor(message) { throw Error(message); } }
 export class TFile { constructor(path) { this.path=path;this.name=path.split('/').pop();this.basename=this.name.slice(0,-3); } }
 export class TFolder {} export class Plugin {} export class WorkspaceLeaf {}
@@ -74,7 +78,9 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		};
 		let active = true;
 		const events = new Map<string, () => void>();
-		const app = { vault, workspace: { getActiveViewOfType: () => active ? view : null,
+		const app = { vault, fileManager: { renameFile: async (file: any, path: string) => {
+			await rename(disk(file.path), disk(path)); files.delete(file.path); file.path = path; files.set(path, file);
+		} }, workspace: { getActiveViewOfType: () => active ? view : null,
 			on: (name: string, callback: () => void) => { events.set(name, callback); return {}; } } };
 		const store = new ArrangeStore(app);
 		const parent = await store.create('父事项', null);
@@ -175,7 +181,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === second).title, '第二项');
 		title.value = '失败时保留的标题'; title.dispatchEvent(new window.Event('input')); fail = true;
 		await view.select(first); assert.equal(view.selected, second); assert.equal(title.value, '失败时保留的标题');
-		assert.ok(root.querySelector('.gvkit-arrange-edit-error')!.textContent!.includes('模拟写入失败'));
+		assert.ok(root.querySelector('.gvkit-arrange-detail .gvkit-arrange-edit-error')!.textContent!.includes('模拟写入失败'));
 		fail = false; await view.select(first); assert.equal(view.selected, first);
 		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === second).title, '失败时保留的标题');
 		// A pending write and a simultaneous switch share one flush, including later keystrokes.
@@ -196,6 +202,116 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.reload(); assert.equal(root.querySelector('.gvkit-arrange-detail-title'), title);
 		title.dispatchEvent(new window.Event('compositionend')); await view.saveEdit();
 		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === second).title, '拼音组合中');
+		// P0: use the real view and disk-backed Store for today's mixed list.
+		await view.select(null);
+		const settle = async () => { while (view.busy || view.savingEdit) await new Promise(resolve => setTimeout(resolve, 1)); };
+		const rowIds = () => [...view.list.querySelectorAll('.gvkit-arrange-row')].map((el: any) => el.dataset.id);
+		const today = view.today;
+		const A = await store.create('今天必做 A', null), B = await store.create('今天必做 B', null);
+		const C = await store.create('无日期完成 C', null), D = await store.create('明天安排完成 D', null);
+		const E = await store.create('今天必做完成 E', null);
+		for (const id of [A, B, E]) await store.setDate(id, today);
+		await store.setDate(D, '2099-01-01');
+		// Complete in reverse storage order, then assign precise same-day times.
+		for (const [id, time] of [[E, '12:00'], [C, '09:00'], [D, '10:00']]) {
+			await store.complete(id, true);
+			const item = store.items.find((x: any) => x.id === id);
+			await vault.process(files.get(item.path), source => source.replace(item.completedAt, today + 'T' + time + ':00+08:00'));
+		}
+		await view.reload();
+		const allOrder = [...store.state.order];
+		input.value = '第四轮草稿'; view.updateComposer();
+		view.list.scrollTop = 188; view.headline.click();
+		assert.deepEqual(rowIds(), [B, A, C, D, E]);
+		assert.equal(view.headline.textContent, '今天达成 3/3');
+		assert.equal(view.headline.dataset.color, 'red');
+		assert.equal(root.querySelectorAll('.gvkit-arrange-row [aria-label="事项更多"]').length, 0);
+		for (const id of [C, D, E]) assert.equal(view.list.querySelector('[data-id="' + id + '"] input').checked, true);
+		assert.equal(root.dataset.completedStyle, 'background');
+		// A completed result is not a slot in the global pending order.
+		const pendingBeforeDrag = [...store.state.order];
+		label = view.list.querySelector('[data-id="' + A + '"] .gvkit-arrange-title');
+		target = view.list.querySelector('[data-id="' + C + '"]');
+		target.getBoundingClientRect = () => ({ top: 100, height: 44 } as any);
+		window.document.elementFromPoint = () => target as any;
+		pointer(label, 'pointerdown', 100, 20); await waitHold();
+		pointer(window.document, 'pointermove', 100, 120);
+		assert.equal(target.classList.contains('is-drop-target'), false);
+		pointer(window.document, 'pointerup', 100, 120); await settle();
+		assert.deepEqual(store.state.order, pendingBeforeDrag);
+		await store.configure({ completedStyle: 'text' }); view.paintLists();
+		assert.equal(root.dataset.completedStyle, 'text'); await fresh.load(); assert.equal(fresh.state.completedStyle, 'text');
+		view.list.querySelector('[data-id="' + C + '"] input').click(); await settle();
+		assert.deepEqual(rowIds(), [B, A, D, E]);
+		view.list.querySelector('[data-id="' + E + '"] input').click(); await settle();
+		assert.deepEqual(rowIds(), [E, B, A, D]); assert.equal(view.headline.textContent, '今天达成 1/3');
+		assert.deepEqual(store.state.order.filter((id: string) => id !== C && id !== E), allOrder);
+		view.headline.click(); assert.equal(view.list.scrollTop, 188); assert.ok(rowIds().includes(C));
+		assert.equal(input.value, '第四轮草稿');
+		// Search always covers pending titles, then restores the prior today list/scroll.
+		const english = await store.create('Review Alpha', null);
+		view.setFilter('today'); view.list.scrollTop = 76;
+		view.searchButton.click();
+		const search = (query: string) => { view.searchInput.value = query; view.searchInput.dispatchEvent(new window.Event('input')); };
+		search('aLPHa'); assert.deepEqual(rowIds(), [english]);
+		search('今天必做'); assert.deepEqual(rowIds(), [E, B, A]);
+		search('不存在关键词'); assert.equal(rowIds().length, 0); assert.match(view.list.textContent, /没有符合条件/);
+		search(''); assert.deepEqual(rowIds(), store.state.order);
+		view.toggleSearch(); assert.equal(view.filter, 'today'); assert.equal(view.list.scrollTop, 76);
+		// Navigation flushes inline edits; candidate mode includes completed parents.
+		await view.select(first);
+		title = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-detail-title')!;
+		title.value = '导航前编辑'; title.dispatchEvent(new window.Event('input'));
+		(root.querySelector('.gvkit-arrange-parent-name') as any).click(); await settle();
+		assert.equal(view.selected, parent); await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === first).title, '导航前编辑');
+		await view.select(first);
+		const grandchild = await store.create('自己的下级', first);
+		view.toggleSearch(); search('aLPHa'); view.list.scrollTop = 42;
+		view.full = true; view.detail.style.height = '100%'; view.detailScroll.scrollTop = 33;
+		await view.changeParent(first);
+		assert.equal(view.detail.hidden, true); assert.equal(input.disabled, true);
+		assert.equal(view.searchOpen, false); assert.ok(rowIds().includes(D));
+		assert.ok(!rowIds().includes(first)); assert.ok(!rowIds().includes(grandchild));
+		assert.equal(view.list.querySelector('input'), null); assert.equal(view.list.querySelector('.gvkit-arrange-actions'), null);
+		const originalOrder = [...store.state.order], count = store.items.length;
+		label = view.list.querySelector('.gvkit-arrange-title');
+		pointer(label, 'pointerdown', 100, 20); await waitHold();
+		assert.equal(label.parentElement!.classList.contains('is-dragging'), false);
+		await view.create(); assert.equal(store.items.length, count);
+		assert.deepEqual(store.state.order, originalOrder);
+		view.toggleSearch(); search('明天安排'); assert.deepEqual(rowIds(), [D]);
+		fail = true; await view.chooseParent(D);
+		assert.ok(view.choosingParent); assert.match(view.parentError.textContent, /模拟写入失败/); fail = false;
+		view.list.querySelector('.gvkit-arrange-title').click(); await settle();
+		assert.equal(view.choosingParent, null); assert.equal(view.selected, first);
+		assert.equal(view.searchInput.value, 'aLPHa'); assert.equal(view.searchOpen, true);
+		assert.equal(view.list.scrollTop, 42); assert.equal(view.detailScroll.scrollTop, 33); assert.equal(view.full, true);
+		assert.equal(input.value, '第四轮草稿'); assert.equal(input.disabled, false);
+		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === first).parent, D);
+		assert.equal(fresh.items.find((x: any) => x.id === first).title, '导航前编辑');
+		await view.changeParent(first); view.toggleSearch(); search('取消查询'); view.finishParentChoice();
+		assert.equal(view.searchInput.value, 'aLPHa'); assert.equal(store.items.find((x: any) => x.id === first).parent, D);
+		await view.changeParent(first); await view.chooseParent(null);
+		assert.equal(store.items.find((x: any) => x.id === first).parent, null);
+		// The two targets in a menu row are independent: toggle pin shortcut, then execute pin.
+		const current = store.items.find((x: any) => x.id === first);
+		view.itemMenu(current, new window.MouseEvent('click'));
+		const menu = window.document.querySelector('.gvkit-arrange-item-menu')!;
+		const pinToggle = menu.querySelector<HTMLElement>('[aria-label="列表显示钉住位置"]')!;
+		const beforePin = current.pinned;
+		pinToggle.click(); await settle();
+		assert.equal(store.items.find((x: any) => x.id === first).pinned, beforePin);
+		assert.equal(pinToggle.getAttribute('aria-checked'), 'true');
+		await fresh.load(); assert.ok(fresh.state.rowActions.includes('pin'));
+		(pinToggle.parentElement!.querySelector('.gvkit-arrange-menu-action') as any).click(); await settle();
+		assert.equal(store.items.find((x: any) => x.id === first).pinned, !beforePin);
+		assert.equal(window.document.querySelector('.gvkit-arrange-item-menu'), null);
+		view.toggleSearch(); view.setFilter('today');
+		for (const id of [A, B, E]) await store.complete(id, true);
+		view.paintLists(); assert.equal(view.headline.dataset.color, 'blue');
+		await store.setAchieved(today, true); view.paintLists(); assert.equal(view.headline.dataset.color, 'gold');
+		await store.setDate(C, today); view.paintLists(); assert.equal(view.headline.dataset.color, 'red'); assert.equal(rowIds()[0], C);
+		await store.setDate(C, null); view.paintLists(); assert.equal(view.headline.dataset.color, 'gold'); assert.ok(!rowIds().includes(C));
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

@@ -42,7 +42,16 @@ export function registerArrange(plugin: Plugin): void {
 export class ArrangeView extends ItemView {
 	private store: ArrangeStore;
 	private selected: string | null = null;
-	private filter: 'all' | 'today' | 'completed' | 'overdue' = 'all';
+	private filter: 'all' | 'today' | 'overdue' = 'all';
+	private searchOpen = false;
+	private searchScroll = 0;
+	private searchBar!: HTMLElement;
+	private searchInput!: HTMLInputElement;
+	private searchButton!: HTMLButtonElement;
+	private moreButton!: HTMLButtonElement;
+	private parentBar!: HTMLElement;
+	private parentError!: HTMLElement;
+	private choosingParent: { id: string; scroll: number; detailScroll: number; searchOpen: boolean; query: string; searchScroll: number } | null = null;
 	private scrolls = new Map<string, number>();
 	private list!: HTMLElement;
 	private detail!: HTMLElement;
@@ -79,7 +88,8 @@ export class ArrangeView extends ItemView {
 		const header = root.createDiv('gvkit-arrange-header');
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = () => this.setFilter(this.filter === 'today' ? 'all' : 'today');
-		iconButton(header, '安排更多', 'more-horizontal', event => this.headerMenu(event));
+		this.searchButton = iconButton(header, '搜索事项', 'search', () => this.toggleSearch());
+		this.moreButton = iconButton(header, '安排更多', 'more-horizontal', event => this.headerMenu(event));
 		// Use only this leaf's title slot. Unknown/hidden host layouts keep the thin local bar.
 		const titleSlot = this.containerEl?.querySelector<HTMLElement>('.view-header-title-container');
 		const hostHeader = titleSlot?.closest<HTMLElement>('.view-header');
@@ -97,6 +107,18 @@ export class ArrangeView extends ItemView {
 			this.register(() => this.restoreHeader?.());
 			syncHeader();
 		}
+		this.parentBar = root.createDiv('gvkit-arrange-parent-picker');
+		this.parentBar.hidden = true;
+		this.parentBar.createSpan({ text: '选择上一级事项' });
+		this.parentBar.createEl('button', { text: '无上级' }).onclick = () => { void this.chooseParent(null); };
+		this.parentBar.createEl('button', { text: '取消' }).onclick = () => this.finishParentChoice();
+		this.parentError = this.parentBar.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status' } });
+		this.parentError.hidden = true;
+		this.searchBar = root.createDiv('gvkit-arrange-search');
+		this.searchBar.hidden = true;
+		this.searchInput = this.searchBar.createEl('input', { type: 'search', attr: { placeholder: '搜索事项标题', 'aria-label': '搜索事项标题' } });
+		this.searchInput.oninput = () => { this.paintLists(); this.list.scrollTop = 0; };
+		iconButton(this.searchBar, '关闭搜索', 'x', () => this.toggleSearch());
 		this.area = root.createDiv('gvkit-arrange-area');
 		this.list = this.area.createDiv('gvkit-arrange-list');
 		this.list.setAttribute('aria-label', '事项列表');
@@ -117,7 +139,12 @@ export class ArrangeView extends ItemView {
 		this.input.onkeydown = event => {
 			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void this.create(); }
 		};
-		this.registerDomEvent(root, 'keydown', event => { if (event.key === 'Escape') void this.select(null); });
+		this.registerDomEvent(root, 'keydown', event => {
+			if (event.key !== 'Escape') return;
+			if (this.choosingParent) this.finishParentChoice();
+			else if (this.searchOpen) this.toggleSearch();
+			else void this.select(null);
+		});
 		const refresh = () => {
 			if (this.timer !== null) window.clearTimeout(this.timer);
 			this.timer = window.setTimeout(() => { this.timer = null; if (!this.busy) void this.reload(); }, 180);
@@ -214,7 +241,8 @@ export class ArrangeView extends ItemView {
 	private updateComposer(): void {
 		const empty = !this.input.value.trim();
 		this.createButton.hidden = empty;
-		this.createButton.disabled = this.busy || empty;
+		this.input.disabled = Boolean(this.choosingParent);
+		this.createButton.disabled = this.busy || empty || Boolean(this.choosingParent);
 	}
 	private async run(action: () => Promise<unknown>): Promise<boolean> {
 		if (this.busy) return false;
@@ -237,40 +265,77 @@ export class ArrangeView extends ItemView {
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
 		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
 		this.headline.createSpan({ text: `今天达成 ${facts.x}/${facts.y}` });
-		this.headline.setAttribute('aria-label', `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换必做筛选`);
+		this.headline.setAttribute('aria-label', `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
 		this.headline.dataset.color = facts.color;
-		this.headline.setAttribute('aria-pressed', String(this.filter === 'today'));
+		this.headline.setAttribute('aria-pressed', String(this.filter === 'today' && !this.searchOpen && !this.choosingParent));
+		this.headline.disabled = Boolean(this.choosingParent);
+		this.moreButton.disabled = Boolean(this.choosingParent);
+		this.contentEl.dataset.completedStyle = this.store.state.completedStyle ?? 'background';
 		const scroll = this.list.scrollTop;
 		this.list.empty();
-		if (this.filter === 'completed' || this.filter === 'overdue') {
+		if (this.filter === 'overdue' && !this.searchOpen && !this.choosingParent) {
 			const bar = this.list.createDiv('gvkit-arrange-scope');
-			bar.createSpan({ text: this.filter === 'completed' ? '今天完成' : '逾期事项' });
+			bar.createSpan({ text: '逾期事项' });
 			iconButton(bar, '返回全部事项', 'x', () => this.setFilter('all'));
 		}
 		let items = this.ordered();
-		if (this.filter === 'today') items = items.filter(item => item.date === facts.day);
-		if (this.filter === 'overdue') items = items.filter(item => item.date && item.date < facts.day);
-		if (this.filter === 'completed') items = this.store.items.filter(item => item.completedAt && dayKey(new Date(item.completedAt), this.store.state.timezone) === facts.day)
-			.sort((a, b) => b.completedAt!.localeCompare(a.completedAt!));
+		if (this.choosingParent) {
+			const id = this.choosingParent.id;
+			items = [...items, ...this.store.items.filter(item => item.completedAt)]
+				.filter(item => validParent(this.store.items, id, item.id));
+		} else if (!this.searchOpen) {
+			if (this.filter === 'today') items = [
+				...items.filter(item => item.date === facts.day),
+				...this.store.items.filter(item => item.completedAt && dayKey(new Date(item.completedAt), this.store.state.timezone) === facts.day)
+					.sort((a, b) => Date.parse(a.completedAt!) - Date.parse(b.completedAt!)),
+			];
+			if (this.filter === 'overdue') items = items.filter(item => item.date && item.date < facts.day);
+		}
+		if (this.searchOpen) {
+			const query = this.searchInput.value.trim().toLowerCase();
+			items = items.filter(item => item.title.toLowerCase().includes(query));
+		}
 		for (const item of items) this.row(this.list, item);
-		if (!items.length) this.list.createDiv({ cls: 'gvkit-arrange-empty', text: this.filter === 'all' ? '想到什么，就从下面记下来。' : '这里已经清空。' });
+		if (!items.length) this.list.createDiv({ cls: 'gvkit-arrange-empty', text: this.searchOpen || this.choosingParent ? '没有符合条件的事项' : this.filter === 'all' ? '想到什么，就从下面记下来。' : '这里已经清空。' });
 		this.list.scrollTop = scroll;
-		if (this.children && this.selected) {
+		if (this.children && this.selected && !this.choosingParent) {
 			this.children.empty();
 			for (const item of this.ordered().filter(item => item.parent === this.selected)) this.row(this.children, item);
 		}
 	}
 	private setFilter(filter: typeof this.filter): void {
+		if (this.choosingParent) return;
+		if (this.searchOpen) this.toggleSearch();
 		this.scrolls.set(this.filter, this.list.scrollTop);
 		this.filter = filter;
 		this.paintLists();
 		this.list.scrollTop = this.scrolls.get(filter) ?? 0;
+	}
+	private toggleSearch(): void {
+		if (!this.searchOpen) this.searchScroll = this.list.scrollTop;
+		this.searchOpen = !this.searchOpen;
+		if (!this.searchOpen) this.searchInput.blur();
+		this.searchInput.value = '';
+		this.syncSearch();
+		this.paintLists();
+		this.list.scrollTop = this.searchOpen ? 0 : this.searchScroll;
+		if (this.searchOpen) this.searchInput.focus({ preventScroll: true });
+	}
+	private syncSearch(): void {
+		this.searchBar.hidden = !this.searchOpen;
+		this.searchButton.setAttribute('aria-pressed', String(this.searchOpen));
 	}
 	private row(parent: HTMLElement, item: ArrangeItem): void {
 		const row = parent.createDiv('gvkit-arrange-row');
 		row.dataset.id = item.id;
 		row.toggleClass('is-selected', item.id === this.selected);
 		row.toggleClass('is-pinned', item.pinned);
+		row.toggleClass('is-completed', Boolean(item.completedAt));
+		if (this.choosingParent) {
+			const label = row.createEl('button', { cls: 'gvkit-arrange-title', text: item.title });
+			label.onclick = () => { void this.chooseParent(item.id); };
+			return;
+		}
 		const complete = row.createEl('input', { type: 'checkbox', attr: { 'aria-label': `${item.completedAt ? '撤销完成' : '完成'}：${item.title}` } });
 		complete.checked = Boolean(item.completedAt);
 		complete.onclick = event => {
@@ -292,7 +357,6 @@ export class ArrangeView extends ItemView {
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'date' && item.date) button.addClass('is-active');
 		}
-		iconButton(row, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
 		this.rowGesture(row, label, item);
 	}
 	private rowGesture(row: HTMLElement, label: HTMLElement, item: ArrangeItem): void {
@@ -333,7 +397,7 @@ export class ArrangeView extends ItemView {
 				row.style.transform = `translateY(${clientY - y}px)`;
 				target?.removeClass('is-drop-target');
 				const hit = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
-				target = hit && hit !== row && hit.parentElement === row.parentElement ? hit : null;
+				target = hit && hit !== row && hit.parentElement === row.parentElement && !hit.classList.contains('is-completed') ? hit : null;
 				after = Boolean(target && clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
 				target?.addClass('is-drop-target');
 				if (target) target.dataset.dropAfter = String(after);
@@ -392,17 +456,44 @@ export class ArrangeView extends ItemView {
 		parent?.querySelector<HTMLElement>(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
 	}
 	private itemMenu(item: ArrangeItem, event: MouseEvent): void {
-		const menu = new Menu();
+		const modal = new Modal(this.app);
+		modal.setTitle('事项操作');
+		modal.contentEl.addClass('gvkit-arrange-item-menu');
+		const entry = (title: string, icon: string, action: () => void) => {
+			const row = modal.contentEl.createDiv('gvkit-arrange-menu-row');
+			const button = row.createEl('button', { cls: 'gvkit-arrange-menu-action' });
+			setIcon(button.createSpan(), icon);
+			button.createSpan({ text: title });
+			button.onclick = () => { modal.close(); action(); };
+			return row;
+		};
 		for (const key of ['parent', 'date', 'top', 'pin'] as RowAction[]) {
 			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
-			menu.addItem(entry => entry.setTitle(key === 'pin' && item.pinned ? '取消钉住' : actions[key].title).setIcon(actions[key].icon).onClick(() => this.action(key, item, event)));
+			const row = entry(key === 'pin' && item.pinned ? '取消钉住' : actions[key].title, actions[key].icon, () => this.action(key, item, event));
+			const toggle = row.createEl('button', { cls: 'gvkit-arrange-menu-toggle', attr: { role: 'checkbox', 'aria-label': `列表显示${actions[key].title}` } });
+			const paint = () => {
+				const checked = this.store.state.rowActions.includes(key);
+				toggle.setAttribute('aria-checked', String(checked)); setIcon(toggle, checked ? 'square-check' : 'square');
+			};
+			paint();
+			toggle.onclick = async () => {
+				if (toggle.disabled) return;
+				toggle.disabled = true;
+				await this.run(() => {
+					const rowActions = this.store.state.rowActions.includes(key)
+						? this.store.state.rowActions.filter(value => value !== key) : [...this.store.state.rowActions, key];
+					return this.store.configure({ rowActions });
+				});
+				paint(); toggle.disabled = false;
+			};
 		}
-		menu.addItem(entry => entry.setTitle('修改上级').setIcon('corner-left-up').onClick(() => { void this.changeParent(item.id); }));
-		menu.addItem(entry => entry.setTitle('打开 Markdown').setIcon('file-text').onClick(() => {
+		entry('修改上级', 'corner-left-up', () => { void this.changeParent(item.id); });
+		entry('打开 Markdown', 'file-text', () => { void (async () => {
+			if (!(await this.saveEdit())) return;
 			const file = this.app.vault.getAbstractFileByPath(item.path);
 			if (file instanceof TFile) void this.app.workspace.getLeaf('tab').openFile(file);
-		}));
-		menu.showAtMouseEvent(event);
+		})(); });
+		modal.open();
 	}
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
 		const day = todayFacts(this.store.items, this.store.state).day;
@@ -423,6 +514,7 @@ export class ArrangeView extends ItemView {
 		menu.showAtMouseEvent(event);
 	}
 	private async select(id: string | null): Promise<void> {
+		if (this.choosingParent) return;
 		if (!(await this.saveEdit())) return;
 		this.editing = null;
 		this.selected = id;
@@ -432,6 +524,7 @@ export class ArrangeView extends ItemView {
 		this.paintLists(); this.paintDetail();
 	}
 	private paintDetail(): void {
+		if (this.choosingParent) { this.detail.hidden = true; return; }
 		const item = this.store.items.find(item => item.id === this.selected);
 		if (!item) { this.selected = null; this.editing = null; this.detail.hidden = true; return; }
 		const scroll = this.editing?.id === item.id ? this.detailScroll?.scrollTop ?? 0 : 0;
@@ -443,18 +536,24 @@ export class ArrangeView extends ItemView {
 		this.panelGesture(grip);
 		const tools = this.detail.createDiv('gvkit-arrange-detail-tools');
 		iconButton(tools, '返回主列表', 'arrow-left', () => { void this.select(null); });
+		const strip = tools.createDiv('gvkit-arrange-detail-actions');
 		const shortcuts = [...new Set<RowAction>([...(item.parent ? ['parent' as const] : []), ...this.store.state.rowActions])];
 		for (const key of shortcuts) {
 			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
 			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
-			const button = iconButton(tools, label, actions[key].icon, event => this.action(key, item, event));
+			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
 			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned);
 		}
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
 		this.detailScroll = this.detail.createDiv('gvkit-arrange-detail-scroll');
 		if (item.parent) {
 			const parent = this.store.items.find(candidate => candidate.id === item.parent);
-			if (parent) this.detailScroll.createDiv({ cls: 'gvkit-arrange-parent-name', text: parent.title, attr: { title: parent.title } });
+			if (parent) {
+				const nav = this.detailScroll.createEl('button', { cls: 'gvkit-arrange-parent-name', attr: { title: parent.title } });
+				nav.createSpan({ text: parent.title });
+				setIcon(nav.createSpan({ cls: 'gvkit-arrange-parent-chevron' }), 'chevron-right');
+				nav.onclick = () => { void this.select(parent.id); };
+			}
 		}
 		const title = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
 		title.value = item.title;
@@ -530,21 +629,41 @@ export class ArrangeView extends ItemView {
 		}, { passive: true });
 	}
 	private async changeParent(id: string): Promise<void> {
+		if (this.busy || this.choosingParent) return;
 		if (!(await this.saveEdit())) return;
 		const item = this.store.items.find(item => item.id === id);
 		if (!item) return;
-		const modal = new Modal(this.app); modal.setTitle('修改上级');
-		const parent = modal.contentEl.createEl('select', { attr: { 'aria-label': '上级事项' } });
-		Object.assign(parent.style, { width: '100%', fontSize: '16px' });
-		parent.createEl('option', { value: '', text: '无上级' });
-		for (const candidate of this.store.items.filter(candidate => validParent(this.store.items, item.id, candidate.id)))
-			parent.createEl('option', { value: candidate.id, text: candidate.title });
-		parent.value = item.parent ?? '';
-		new Setting(modal.contentEl).addButton(button => button.setButtonText('完成').setCta().onClick(async () => {
-			const current = this.store.items.find(item => item.id === id);
-			if (current && await this.run(() => this.store.edit(id, current.title, current.body, parent.value || null))) modal.close();
-		}));
-		modal.open();
+		this.choosingParent = { id, scroll: this.list.scrollTop, detailScroll: this.detailScroll?.scrollTop ?? 0,
+			searchOpen: this.searchOpen, query: this.searchInput.value, searchScroll: this.searchScroll };
+		this.cancelReorder?.();
+		this.searchOpen = false; this.searchInput.value = ''; this.syncSearch();
+		this.parentError.textContent = ''; this.parentError.hidden = true; this.parentBar.hidden = false;
+		this.detail.hidden = true; this.updateComposer(); this.paintLists(); this.list.scrollTop = 0;
+	}
+	private async chooseParent(parent: string | null): Promise<void> {
+		const choice = this.choosingParent;
+		if (!choice || this.busy) return;
+		this.busy = true;
+		this.parentError.textContent = '';
+		this.parentError.hidden = true;
+		try {
+			await this.store.setParent(choice.id, parent);
+			this.busy = false;
+			this.finishParentChoice();
+		} catch (error) {
+			this.parentError.textContent = error instanceof Error ? error.message : '保存失败，请重试';
+			this.parentError.hidden = false;
+		} finally { this.busy = false; this.updateComposer(); }
+	}
+	private finishParentChoice(): void {
+		const choice = this.choosingParent;
+		if (!choice || this.busy) return;
+		this.choosingParent = null;
+		this.searchInput.blur();
+		this.searchOpen = choice.searchOpen; this.searchInput.value = choice.query; this.searchScroll = choice.searchScroll;
+		this.syncSearch(); this.parentBar.hidden = true; this.parentError.hidden = true; this.updateComposer();
+		this.paintLists(); this.paintDetail(); this.list.scrollTop = choice.scroll;
+		if (this.detailScroll) this.detailScroll.scrollTop = choice.detailScroll;
 	}
 	private keepEditor(): boolean {
 		const edit = this.editing;
@@ -593,6 +712,7 @@ export class ArrangeView extends ItemView {
 		}
 	}
 	private async create(): Promise<void> {
+		if (this.choosingParent) return;
 		const draft = this.input.value;
 		if (!draft.trim()) return;
 		const parent = this.selected;
@@ -607,7 +727,6 @@ export class ArrangeView extends ItemView {
 		const facts = todayFacts(this.store.items, this.store.state);
 		const menu = new Menu();
 		menu.addItem(item => item.setTitle(facts.achieved ? '撤销今天基础特产投入达标' : '确认今天基础特产投入已达标').setIcon('sun').onClick(() => { void this.run(() => this.store.setAchieved(facts.day, !facts.achieved)); }));
-		menu.addItem(item => item.setTitle('今天完成明细').setIcon('check-check').onClick(() => this.setFilter('completed')));
 		menu.addItem(item => item.setTitle('检查逾期事项').setIcon('calendar-clock').onClick(() => this.setFilter('overdue')));
 		menu.addItem(item => item.setTitle('安排界面设置').setIcon('settings').onClick(() => this.settings()));
 		menu.addItem(item => item.setTitle('复制手机快捷入口').setIcon('link').onClick(async () => {
@@ -623,6 +742,9 @@ export class ArrangeView extends ItemView {
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
 		};
+		new Setting(modal.contentEl).setName('已完成事项外观')
+			.addDropdown(dropdown => dropdown.addOptions({ background: '淡蓝底板、正常文字', text: '原底板、蓝色文字' })
+				.setValue(this.store.state.completedStyle).onChange(value => configure({ completedStyle: value as ArrangeState['completedStyle'] })));
 		new Setting(modal.contentEl).setName('详情面板顶部阴影范围').setDesc('0～40 像素，默认 24；0 为关闭阴影，可先试 12～16。')
 			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.detailShadow).setDynamicTooltip()
 				.onChange(value => configure({ detailShadow: value })));
@@ -647,7 +769,7 @@ export class ArrangeView extends ItemView {
 				configure({ rowActions: [...rowActions] });
 			}));
 		}
-		modal.contentEl.createEl('p', { text: '更多始终在最右侧。未常驻的操作仍可从左滑或更多进入。' });
+		modal.contentEl.createEl('p', { text: '所有操作均可从详情右侧更多进入；列表左滑也可展开快捷操作。' });
 		new Setting(modal.contentEl).setName('统一日界时区').setDesc('所有设备使用同一时区计算“今天”。')
 			.addText(text => text.setValue(this.store.state.timezone).onChange(value => {
 				try { new Intl.DateTimeFormat('en', { timeZone: value }); configure({ timezone: value }); } catch { /* Wait for a complete timezone. */ }
