@@ -1,6 +1,7 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
 import { dayKey, offsetDay, todayFacts, validParent, type ArrangeItem, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
+import { ArrangeKeyboardDiagnostics } from './arrangeKeyboardDiagnostics';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -59,6 +60,7 @@ export class ArrangeView extends ItemView {
 	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; parent: HTMLSelectElement } | null = null;
 	private timer: number | null = null;
 	private today = '';
+	private keyboardDiagnostics: ArrangeKeyboardDiagnostics | null = null;
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -100,24 +102,31 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.reload(); });
 		// Only compensate for overlap the host has not already removed. Obsidian
 		// can resize this view AFTER the visualViewport event during keyboard changes.
-		const fit = () => {
+		const fit = (reason = 'open') => {
 			const viewport = window.visualViewport;
 			const bottom = root.getBoundingClientRect().bottom;
 			const overlap = viewport ? Math.max(0, bottom - viewport.height - viewport.offsetTop) : 0;
-			root.style.paddingBottom = overlap > 0 ? `${overlap}px` : '';
+			const previous = root.style.paddingBottom;
+			root.style.paddingBottom = !this.keyboardDiagnostics?.compensationOff && overlap > 0 ? `${overlap}px` : '';
+			this.keyboardDiagnostics?.recordFit(reason, previous);
 		};
+		if (Platform.isMobileApp) {
+			this.keyboardDiagnostics = new ArrangeKeyboardDiagnostics(root, () => fit('mode-fit'));
+			this.register(() => this.keyboardDiagnostics?.dispose());
+		}
 		if (window.visualViewport) {
 			const viewport = window.visualViewport;
-			const observer = new ResizeObserver(fit);
+			const observer = new ResizeObserver(() => fit('host-resize'));
 			// Padding changes the content box; watch the host-controlled border box
 			// so our own compensation does not trigger a resize feedback loop.
 			observer.observe(root, { box: 'border-box' });
-			viewport.addEventListener('resize', fit);
-			viewport.addEventListener('scroll', fit);
+			const resize = () => fit('viewport-resize'), scroll = () => fit('viewport-scroll');
+			viewport.addEventListener('resize', resize);
+			viewport.addEventListener('scroll', scroll);
 			this.register(() => {
 				observer.disconnect();
-				viewport.removeEventListener('resize', fit);
-				viewport.removeEventListener('scroll', fit);
+				viewport.removeEventListener('resize', resize);
+				viewport.removeEventListener('scroll', scroll);
 				root.style.paddingBottom = '';
 			});
 			fit();
@@ -126,6 +135,7 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.keyboardDiagnostics?.dispose();
 		if (this.timer !== null) window.clearTimeout(this.timer);
 		await this.saveEdit();
 	}
@@ -405,6 +415,23 @@ export class ArrangeView extends ItemView {
 			catch { new Notice('无法复制，请使用命令面板“打开自御安排”'); }
 		}));
 		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { void this.reload(); }));
+		const diagnostic = this.keyboardDiagnostics;
+		if (diagnostic) {
+			menu.addSeparator();
+			menu.addItem(item => item.setTitle('键盘诊断：现有补偿').setChecked(diagnostic.mode === 'current').onClick(() => {
+				diagnostic.select('current'); new Notice('现有补偿：点新增框，等 2 秒。只记录布局数字，不含输入内容。');
+			}));
+			menu.addItem(item => item.setTitle('键盘诊断：关闭额外补偿').setChecked(diagnostic.mode === 'off').onClick(() => {
+				diagnostic.select('off'); new Notice('额外补偿已关闭：再点新增框，等 2 秒并比较位置。');
+			}));
+			menu.addItem(item => item.setTitle('复制键盘诊断结果').setDisabled(!diagnostic.active).onClick(async () => {
+				try { await navigator.clipboard.writeText(diagnostic.serialize()); new Notice('已复制两种模式的布局数据；请同时说明关闭补偿后是否改善。'); }
+				catch { new Notice('复制失败，请重试；诊断数据仍保留在本次视图中。'); }
+			}));
+			menu.addItem(item => item.setTitle('结束键盘诊断并恢复默认').setDisabled(!diagnostic.active).onClick(() => {
+				diagnostic.stop(); new Notice('已恢复现有补偿并清除临时诊断数据。');
+			}));
+		}
 		menu.showAtMouseEvent(event);
 	}
 	private settings(): void {
