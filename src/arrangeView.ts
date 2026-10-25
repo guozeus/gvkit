@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
-import { dayKey, offsetDay, todayFacts, validParent, type ArrangeItem, type RowAction } from './arrangeCore';
+import { dayKey, offsetDay, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -164,6 +164,8 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.contentEl.style.removeProperty('--gvkit-arrange-submit-size');
+		this.contentEl.style.removeProperty('--gvkit-arrange-submit-color');
 		this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null;
 		if (this.timer !== null) window.clearTimeout(this.timer);
 		if (this.editTimer !== null) window.clearTimeout(this.editTimer);
@@ -176,6 +178,8 @@ export class ArrangeView extends ItemView {
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
 	private applyComposerSettings(): void {
 		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
+		this.contentEl.style.setProperty('--gvkit-arrange-submit-size', `${this.store.state.submitArrowSize}px`);
+		this.contentEl.style.setProperty('--gvkit-arrange-submit-color', SUBMIT_BLUE_COLORS[this.store.state.submitColor]);
 	}
 	private updateComposer(): void {
 		const empty = !this.input.value.trim();
@@ -547,6 +551,12 @@ export class ArrangeView extends ItemView {
 		new Setting(modal.contentEl).setName('键盘上方留白').setDesc('输入区与键盘之间的留白（像素）；0 为贴紧，默认 7。键盘收起后保留系统安全区。')
 			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.keyboardGap).setDynamicTooltip()
 				.onChange(value => configure({ keyboardGap: value })));
+		new Setting(modal.contentEl).setName('提交箭头大小').setDesc('16～32 像素，默认 24；按钮外框大小保持不变。')
+			.addSlider(slider => slider.setLimits(16, 32, 1).setValue(this.store.state.submitArrowSize).setDynamicTooltip()
+				.onChange(value => configure({ submitArrowSize: value })));
+		new Setting(modal.contentEl).setName('提交按钮颜色').setDesc('三档蓝色，均搭配白色箭头。')
+			.addDropdown(dropdown => dropdown.addOptions({ classic: '深蓝（默认）', console: '亮蓝（网页控制台）', navy: '藏蓝' })
+				.setValue(this.store.state.submitColor).onChange(value => configure({ submitColor: value as ArrangeState['submitColor'] })));
 		new Setting(modal.contentEl).setName('松手后全屏阈值').setDesc('占底部输入区以上可用高度的百分比；默认 80%。')
 			.addSlider(slider => slider.setLimits(55, 95, 5).setValue(this.store.state.fullscreenThreshold).setDynamicTooltip()
 				.onChange(value => configure({ fullscreenThreshold: value })));

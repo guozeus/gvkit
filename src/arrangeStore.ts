@@ -1,6 +1,6 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { defaultArrangeState, moveInOrder, pendingOrder, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -52,6 +52,10 @@ export class ArrangeStore {
 			if (typeof fields.fullscreenThreshold === 'number') state.fullscreenThreshold = Math.max(55, Math.min(95, fields.fullscreenThreshold));
 			if (typeof fields.keyboardGap === 'number' && Number.isFinite(fields.keyboardGap))
 				state.keyboardGap = Math.max(0, Math.min(40, Math.round(fields.keyboardGap)));
+			if (typeof fields.submitArrowSize === 'number' && Number.isFinite(fields.submitArrowSize))
+				state.submitArrowSize = Math.max(16, Math.min(32, Math.round(fields.submitArrowSize)));
+			if (typeof fields.submitColor === 'string' && Object.keys(SUBMIT_BLUE_COLORS).includes(fields.submitColor))
+				state.submitColor = fields.submitColor as ArrangeState['submitColor'];
 			if (strings(fields.rowActions)) state.rowActions = fields.rowActions.filter((a): a is ArrangeState['rowActions'][number] => ['parent', 'date', 'top', 'pin'].includes(a));
 		}
 		state.order = pendingOrder(items, state.order);
@@ -146,7 +150,7 @@ export class ArrangeStore {
 			await this.saveState();
 		});
 	}
-	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'rowActions'>>): Promise<void> {
+	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'rowActions'>>): Promise<void> {
 		return this.serial(async () => { Object.assign(this.state, changes); await this.saveState(); });
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {

@@ -10,17 +10,21 @@ export interface ArrangeItem {
 }
 
 export type RowAction = 'parent' | 'date' | 'top' | 'pin';
+export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export interface ArrangeState {
 	order: string[];
 	achievedDays: string[];
 	timezone: string;
 	fullscreenThreshold: number;
 	keyboardGap: number;
+	submitArrowSize: number;
+	submitColor: keyof typeof SUBMIT_BLUE_COLORS;
 	rowActions: RowAction[];
 }
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
+		submitArrowSize: 24, submitColor: 'classic',
 		rowActions: ['parent', 'date', 'top'] };
 }
 

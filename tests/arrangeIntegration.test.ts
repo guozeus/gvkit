@@ -42,6 +42,8 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await vault.create('安排/待执行/无关旧属性.md', '---\nlegacy: [\n---\n不由本功能接管');
 		const store = new ArrangeStore(app);
 		await store.load(); assert.equal(store.state.keyboardGap, 7, 'new installs use the accepted 7px gap');
+		assert.equal(store.state.submitArrowSize, 24);
+		assert.equal(store.state.submitColor, 'classic');
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);
 		const child2 = await store.create('第二项', parent);
@@ -67,10 +69,12 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await store.configure({ fullscreenThreshold: 70, rowActions: ['pin'] });
 		// An existing configuration without the new field remains compatible.
 		const stateFile = entries.get('settings/gvkit/arrange.md');
-		await vault.process(stateFile, source => source.replace('  "keyboardGap": 7,\n', ''));
+		await vault.process(stateFile, source => source.replace('  "keyboardGap": 7,\n', '').replace('  "submitArrowSize": 24,\n', '').replace('  "submitColor": "classic",\n', ''));
 		await fresh.load(); assert.equal(fresh.state.fullscreenThreshold, 70);
 		assert.deepEqual(fresh.state.rowActions, ['pin']);
 		assert.equal(fresh.state.keyboardGap, 7);
+		assert.equal(fresh.state.submitArrowSize, 24, 'existing settings retain the accepted arrow size');
+		assert.equal(fresh.state.submitColor, 'classic', 'existing settings retain the accepted blue');
 		for (const gap of [0, 24, 40]) {
 			await store.configure({ keyboardGap: gap });
 			await fresh.load(); assert.equal(fresh.state.keyboardGap, gap, 'gap persists across Store reloads');
@@ -78,6 +82,23 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			assert.equal(fresh.state.fullscreenThreshold, 70);
 			assert.deepEqual(fresh.state.rowActions, ['pin']);
 		}
+		for (const size of [16, 17, 24, 32]) {
+			await store.configure({ submitArrowSize: size });
+			await fresh.load(); assert.equal(fresh.state.submitArrowSize, size);
+			assert.ok((await vault.read(stateFile)).includes(`"submitArrowSize": ${size}`));
+		}
+		for (const color of ['classic', 'console', 'navy']) {
+			await store.configure({ submitColor: color });
+			await fresh.load(); assert.equal(fresh.state.submitColor, color);
+			assert.equal(fresh.state.submitArrowSize, 32);
+			assert.equal(fresh.state.keyboardGap, 40);
+			assert.equal(fresh.state.fullscreenThreshold, 70);
+			assert.deepEqual(fresh.state.rowActions, ['pin']);
+		}
+		await Promise.all([store.configure({ submitArrowSize: 20 }), store.configure({ submitColor: 'console' })]);
+		await fresh.load(); assert.equal(fresh.state.submitArrowSize, 20); assert.equal(fresh.state.submitColor, 'console');
+		await vault.process(stateFile, source => source.replace('"submitArrowSize": 20', '"submitArrowSize": 100').replace('"submitColor": "console"', '"submitColor": "unknown"'));
+		await fresh.load(); assert.equal(fresh.state.submitArrowSize, 32); assert.equal(fresh.state.submitColor, 'classic');
 		const first = store.state.order[0];
 		const protectedId = store.state.order[2];
 		await store.togglePin(protectedId);

@@ -72,7 +72,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	let active = true;
 	let changeLeaf = () => {};
 	try {
-		const store = { load: async () => {}, items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [], keyboardGap: 7 } };
+		const store = { load: async () => {}, items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [], keyboardGap: 7, submitArrowSize: 24, submitColor: 'classic' } };
 		view = new module.exports.ArrangeView({ contentEl: root, app: {
 			vault: { on: () => ({}) },
 			workspace: { getActiveViewOfType: () => active ? view : null, on: (_name: string, fn: () => void) => { changeLeaf = fn; return {}; } },
