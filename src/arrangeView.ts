@@ -1,11 +1,12 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
-import { dayKey, offsetDay, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, dayKey, offsetDay, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
 	parent: { title: '查看上级', icon: 'corner-left-up' }, date: { title: '设置日期', icon: 'calendar' },
 	top: { title: '置顶', icon: 'arrow-up-to-line' }, pin: { title: '钉住位置', icon: 'pin' },
+	changeParent: { title: '修改上级', icon: 'list-tree' }, markdown: { title: '打开 Markdown', icon: 'file-text' },
 };
 function iconButton(parent: HTMLElement, label: string, icon: string, action: (event: MouseEvent) => void): HTMLButtonElement {
 	const button = parent.createEl('button', { cls: 'gvkit-arrange-icon', attr: { type: 'button', 'aria-label': label, title: label } });
@@ -280,9 +281,7 @@ export class ArrangeView extends ItemView {
 		}
 		let items = this.ordered();
 		if (this.choosingParent) {
-			const id = this.choosingParent.id;
-			items = [...items, ...this.store.items.filter(item => item.completedAt)]
-				.filter(item => validParent(this.store.items, id, item.id));
+			items = [...items, ...this.store.items.filter(item => item.completedAt)];
 		} else if (!this.searchOpen) {
 			if (this.filter === 'today') items = [
 				...items.filter(item => item.date === facts.day),
@@ -300,8 +299,25 @@ export class ArrangeView extends ItemView {
 		this.list.scrollTop = scroll;
 		if (this.children && this.selected && !this.choosingParent) {
 			this.children.empty();
-			for (const item of this.ordered().filter(item => item.parent === this.selected)) this.row(this.children, item);
+			for (const item of this.directChildren(this.selected)) this.row(this.children, item);
 		}
+	}
+	private directChildren(id: string): ArrangeItem[] {
+		return [...this.ordered().filter(item => item.parent === id),
+			...(this.store.state.showCompletedChildren ? this.store.items.filter(item => item.parent === id && item.completedAt)
+				.sort((a, b) => Date.parse(a.completedAt!) - Date.parse(b.completedAt!)) : [])];
+	}
+	private paintTitle(label: HTMLElement, title: string, searchable: boolean): void {
+		const query = searchable && this.searchOpen ? this.searchInput.value.trim().toLowerCase() : '';
+		if (!query) { label.textContent = title; return; }
+		const lower = title.toLowerCase();
+		let cursor = 0, index = lower.indexOf(query);
+		while (index >= 0) {
+			label.append(document.createTextNode(title.slice(cursor, index)));
+			label.createSpan({ cls: 'gvkit-arrange-match', text: title.slice(index, index + query.length) });
+			cursor = index + query.length; index = lower.indexOf(query, cursor);
+		}
+		label.append(document.createTextNode(title.slice(cursor)));
 	}
 	private setFilter(filter: typeof this.filter): void {
 		if (this.choosingParent) return;
@@ -332,7 +348,10 @@ export class ArrangeView extends ItemView {
 		row.toggleClass('is-pinned', item.pinned);
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
-			const label = row.createEl('button', { cls: 'gvkit-arrange-title', text: item.title });
+			const invalid = !validParent(this.store.items, this.choosingParent.id, item.id);
+			row.toggleClass('is-invalid-parent', invalid);
+			const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { 'aria-disabled': String(invalid) } });
+			this.paintTitle(label, item.title, true);
 			label.onclick = () => { void this.chooseParent(item.id); };
 			return;
 		}
@@ -342,7 +361,8 @@ export class ArrangeView extends ItemView {
 			event.stopPropagation(); complete.checked = Boolean(item.completedAt);
 			void this.run(() => this.store.complete(item.id, !item.completedAt));
 		};
-		const label = row.createEl('button', { cls: 'gvkit-arrange-title', text: item.title, attr: { title: item.title } });
+		const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { title: item.title } });
+		this.paintTitle(label, item.title, parent === this.list);
 		label.onclick = () => { void this.select(this.selected === item.id ? null : item.id); };
 		if (item.date) {
 			label.dataset.date = item.date;
@@ -350,9 +370,9 @@ export class ArrangeView extends ItemView {
 			if (!item.completedAt && item.date < this.today) label.addClass('is-overdue');
 		}
 		const actionArea = row.createDiv('gvkit-arrange-actions');
-		const visible = this.expanded.has(item.id) ? ['parent', 'date', 'top', 'pin'] as RowAction[] : this.store.state.rowActions;
+		const visible = this.expanded.has(item.id) ? ARRANGE_ACTIONS : this.store.state.rowActions;
 		for (const key of visible) {
-			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
+			if (!this.actionAvailable(key, item)) continue;
 			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'date' && item.date) button.addClass('is-active');
@@ -371,6 +391,7 @@ export class ArrangeView extends ItemView {
 			let lastX = x, lastY = y;
 			let target: HTMLElement | null = null;
 			let after = false;
+			let topDrop = false;
 			const timer = window.setTimeout(() => {
 				if (moved || this.busy || item.pinned || item.completedAt) return;
 				dragging = true; row.addClass('is-dragging');
@@ -396,21 +417,36 @@ export class ArrangeView extends ItemView {
 				event.preventDefault();
 				row.style.transform = `translateY(${clientY - y}px)`;
 				target?.removeClass('is-drop-target');
-				const hit = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
-				target = hit && hit !== row && hit.parentElement === row.parentElement && !hit.classList.contains('is-completed') ? hit : null;
-				after = Boolean(target && clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
-				target?.addClass('is-drop-target');
-				if (target) target.dataset.dropAfter = String(after);
+				const container = row.parentElement!;
+				const first = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed)');
 				const scroller = row.closest<HTMLElement>('.gvkit-arrange-detail-scroll') ?? this.list;
 				const bounds = scroller.getBoundingClientRect();
-				if (clientY < bounds.top + 32) scroller.scrollTop -= 14;
-				if (clientY > bounds.bottom - 32) scroller.scrollTop += 14;
+				// Above the list remains a real global-top destination, even outside the pane.
+				topDrop = Boolean(first && clientY <= Math.max(bounds.top, first === row ? container.getBoundingClientRect().top : first.getBoundingClientRect().top));
+				if (topDrop) {
+					target = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed):not(.is-pinned):not(.is-dragging)');
+					after = false;
+				} else {
+					const hit = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
+					target = hit && hit !== row && hit.parentElement === container && !hit.classList.contains('is-completed') ? hit : null;
+					after = Boolean(target && clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
+				}
+				target?.addClass('is-drop-target');
+				if (target) target.dataset.dropAfter = String(after);
+				if (topDrop && target) {
+					// Show the actual first free slot, not an off-screen preview in a long list.
+					const targetTop = target.getBoundingClientRect().top;
+					if (targetTop < bounds.top || targetTop >= bounds.bottom - 2) scroller.scrollTop += targetTop - bounds.top;
+				} else {
+					if (clientY < bounds.top + 32) scroller.scrollTop -= 14;
+					if (clientY > bounds.bottom - 32) scroller.scrollTop += 14;
+				}
 			};
 			const end = (event: Event) => {
 				const targetId = target?.dataset.id;
 				if (dragging) event.preventDefault();
 				cleanup();
-				if (dragging && targetId) void this.run(() => this.store.move(item.id, targetId, after));
+				if (dragging && (topDrop || targetId)) void this.run(() => this.store.move(item.id, topDrop ? undefined : targetId, after));
 				else if (!dragging && x - lastX > 45 && Math.abs(y - lastY) < 28) {
 					this.expanded.add(item.id); this.paintLists();
 				}
@@ -441,7 +477,14 @@ export class ArrangeView extends ItemView {
 			if (event.pointerType !== 'touch' && event.button === 0 && onBody(event.target)) start(event.clientX, event.clientY, false);
 		});
 	}
+	private actionAvailable(key: RowAction, item: ArrangeItem): boolean {
+		if (key === 'parent') return Boolean(item.parent && this.store.items.some(parent => parent.id === item.parent));
+		if (key === 'top') return !item.completedAt && !item.pinned;
+		if (key === 'pin') return !item.completedAt;
+		return true;
+	}
 	private action(key: RowAction, item: ArrangeItem, event: MouseEvent): void {
+		if (!this.actionAvailable(key, item)) return;
 		if (key === 'parent' && item.parent) {
 			void this.select(item.parent).then(() => {
 				const row = this.children?.querySelector<HTMLElement>(`[data-id="${item.id}"]`);
@@ -450,6 +493,13 @@ export class ArrangeView extends ItemView {
 		} else if (key === 'date') this.dateMenu(item, event);
 		else if (key === 'top') void this.run(() => this.store.move(item.id)).then(() => this.reveal(item.id));
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
+		else if (key === 'changeParent') void this.changeParent(item.id);
+		else if (key === 'markdown') void (async () => {
+			if (!(await this.saveEdit())) return;
+			const current = this.store.items.find(value => value.id === item.id);
+			const file = current && this.app.vault.getAbstractFileByPath(current.path);
+			if (file instanceof TFile) void this.app.workspace.getLeaf('tab').openFile(file);
+		})();
 	}
 	private reveal(id: string): void {
 		const parent = this.selected ? this.children : this.list;
@@ -459,6 +509,8 @@ export class ArrangeView extends ItemView {
 		const modal = new Modal(this.app);
 		modal.setTitle('事项操作');
 		modal.contentEl.addClass('gvkit-arrange-item-menu');
+		const headings = modal.contentEl.createDiv('gvkit-arrange-menu-headings');
+		headings.createSpan({ text: '列表' }); headings.createSpan({ text: '详情' });
 		const entry = (title: string, icon: string, action: () => void) => {
 			const row = modal.contentEl.createDiv('gvkit-arrange-menu-row');
 			const button = row.createEl('button', { cls: 'gvkit-arrange-menu-action' });
@@ -467,32 +519,28 @@ export class ArrangeView extends ItemView {
 			button.onclick = () => { modal.close(); action(); };
 			return row;
 		};
-		for (const key of ['parent', 'date', 'top', 'pin'] as RowAction[]) {
-			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
+		for (const key of ARRANGE_ACTIONS) {
 			const row = entry(key === 'pin' && item.pinned ? '取消钉住' : actions[key].title, actions[key].icon, () => this.action(key, item, event));
-			const toggle = row.createEl('button', { cls: 'gvkit-arrange-menu-toggle', attr: { role: 'checkbox', 'aria-label': `列表显示${actions[key].title}` } });
-			const paint = () => {
-				const checked = this.store.state.rowActions.includes(key);
-				toggle.setAttribute('aria-checked', String(checked)); setIcon(toggle, checked ? 'square-check' : 'square');
-			};
-			paint();
-			toggle.onclick = async () => {
-				if (toggle.disabled) return;
-				toggle.disabled = true;
-				await this.run(() => {
-					const rowActions = this.store.state.rowActions.includes(key)
-						? this.store.state.rowActions.filter(value => value !== key) : [...this.store.state.rowActions, key];
-					return this.store.configure({ rowActions });
-				});
-				paint(); toggle.disabled = false;
-			};
+			row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!.disabled = !this.actionAvailable(key, item);
+			for (const [setting, name] of [['rowActions', '列表'], ['detailActions', '详情']] as const) {
+				const toggle = row.createEl('button', { cls: 'gvkit-arrange-menu-toggle', attr: { role: 'checkbox', 'aria-label': `${name}显示${actions[key].title}` } });
+				const paint = () => {
+					const checked = this.store.state[setting].includes(key);
+					toggle.setAttribute('aria-checked', String(checked)); setIcon(toggle, checked ? 'square-check' : 'square');
+				};
+				paint();
+				toggle.onclick = async () => {
+					if (toggle.disabled) return;
+					toggle.disabled = true;
+					await this.run(() => {
+						const values = this.store.state[setting];
+						return this.store.configure({ [setting]: values.includes(key) ? values.filter(value => value !== key) : [...values, key] });
+					});
+					this.paintDetailActions();
+					paint(); toggle.disabled = false;
+				};
+			}
 		}
-		entry('修改上级', 'corner-left-up', () => { void this.changeParent(item.id); });
-		entry('打开 Markdown', 'file-text', () => { void (async () => {
-			if (!(await this.saveEdit())) return;
-			const file = this.app.vault.getAbstractFileByPath(item.path);
-			if (file instanceof TFile) void this.app.workspace.getLeaf('tab').openFile(file);
-		})(); });
 		modal.open();
 	}
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
@@ -536,14 +584,8 @@ export class ArrangeView extends ItemView {
 		this.panelGesture(grip);
 		const tools = this.detail.createDiv('gvkit-arrange-detail-tools');
 		iconButton(tools, '返回主列表', 'arrow-left', () => { void this.select(null); });
-		const strip = tools.createDiv('gvkit-arrange-detail-actions');
-		const shortcuts = [...new Set<RowAction>([...(item.parent ? ['parent' as const] : []), ...this.store.state.rowActions])];
-		for (const key of shortcuts) {
-			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
-			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
-			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
-			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned);
-		}
+		tools.createDiv('gvkit-arrange-detail-actions');
+		this.paintDetailActions();
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
 		this.detailScroll = this.detail.createDiv('gvkit-arrange-detail-scroll');
 		if (item.parent) {
@@ -590,7 +632,7 @@ export class ArrangeView extends ItemView {
 			}); };
 		}
 		this.children = this.detailScroll.createDiv('gvkit-arrange-children');
-		for (const child of this.ordered().filter(child => child.parent === item.id)) this.row(this.children, child);
+		for (const child of this.directChildren(item.id)) this.row(this.children, child);
 		this.detailScroll.scrollTop = scroll;
 		this.fullscreenPull(this.detailScroll);
 	}
@@ -628,6 +670,20 @@ export class ArrangeView extends ItemView {
 			start = null;
 		}, { passive: true });
 	}
+	private paintDetailActions(): void {
+		const item = this.store.items.find(item => item.id === this.selected);
+		const strip = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-actions');
+		if (!item || !strip) return;
+		const scroll = strip.scrollLeft;
+		strip.empty();
+		for (const key of this.store.state.detailActions) {
+			if (!this.actionAvailable(key, item)) continue;
+			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
+			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
+			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned);
+		}
+		strip.scrollLeft = scroll;
+	}
 	private async changeParent(id: string): Promise<void> {
 		if (this.busy || this.choosingParent) return;
 		if (!(await this.saveEdit())) return;
@@ -643,6 +699,10 @@ export class ArrangeView extends ItemView {
 	private async chooseParent(parent: string | null): Promise<void> {
 		const choice = this.choosingParent;
 		if (!choice || this.busy) return;
+		if (parent && !validParent(this.store.items, choice.id, parent)) {
+			new Notice(parent === choice.id ? '不能选择自己作为上级' : '不能选择自己的下级事项作为上级', 2500);
+			return;
+		}
 		this.busy = true;
 		this.parentError.textContent = '';
 		this.parentError.hidden = true;
@@ -745,6 +805,8 @@ export class ArrangeView extends ItemView {
 		new Setting(modal.contentEl).setName('已完成事项外观')
 			.addDropdown(dropdown => dropdown.addOptions({ background: '淡蓝底板、正常文字', text: '原底板、蓝色文字' })
 				.setValue(this.store.state.completedStyle).onChange(value => configure({ completedStyle: value as ArrangeState['completedStyle'] })));
+		new Setting(modal.contentEl).setName('事项详情显示已完成下级')
+			.addToggle(toggle => toggle.setValue(this.store.state.showCompletedChildren).onChange(value => configure({ showCompletedChildren: value })));
 		new Setting(modal.contentEl).setName('详情面板顶部阴影范围').setDesc('0～40 像素，默认 24；0 为关闭阴影，可先试 12～16。')
 			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.detailShadow).setDynamicTooltip()
 				.onChange(value => configure({ detailShadow: value })));
@@ -762,7 +824,7 @@ export class ArrangeView extends ItemView {
 		new Setting(modal.contentEl).setName('松手后全屏阈值').setDesc('占底部输入区以上可用高度的百分比；默认 80%。')
 			.addSlider(slider => slider.setLimits(55, 95, 5).setValue(this.store.state.fullscreenThreshold).setDynamicTooltip()
 				.onChange(value => configure({ fullscreenThreshold: value })));
-		for (const key of ['parent', 'date', 'top', 'pin'] as RowAction[]) {
+		for (const key of ARRANGE_ACTIONS) {
 			new Setting(modal.contentEl).setName(`常驻${actions[key].title}`).addToggle(toggle => toggle.setValue(this.store.state.rowActions.includes(key)).onChange(value => {
 				rowActions = rowActions.filter(action => action !== key);
 				if (value) rowActions.push(key);

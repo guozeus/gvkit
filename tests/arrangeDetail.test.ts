@@ -21,7 +21,7 @@ export class Modal {
  setTitle() {} open() { document.body.append(this.contentEl); } close() { this.contentEl.remove(); }
 }
 export class Menu {} export class Setting {}
-export class Notice { constructor(message) { throw Error(message); } }
+export class Notice { constructor(message) { (window.notices ??= []).push(message); } }
 export class TFile { constructor(path) { this.path=path;this.name=path.split('/').pop();this.basename=this.name.slice(0,-3); } }
 export class TFolder {} export class Plugin {} export class WorkspaceLeaf {}
 export const setIcon=(el,icon)=>{el.dataset.icon=icon};
@@ -271,7 +271,17 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.changeParent(first);
 		assert.equal(view.detail.hidden, true); assert.equal(input.disabled, true);
 		assert.equal(view.searchOpen, false); assert.ok(rowIds().includes(D));
-		assert.ok(!rowIds().includes(first)); assert.ok(!rowIds().includes(grandchild));
+		assert.ok(rowIds().includes(first)); assert.ok(rowIds().includes(grandchild));
+		for (const [id, message] of [[first, '不能选择自己作为上级'], [grandchild, '不能选择自己的下级事项作为上级']]) {
+			const candidate = view.list.querySelector('[data-id="' + id + '"]');
+			assert.ok(candidate.classList.contains('is-invalid-parent'));
+			const previous = store.items.find((x: any) => x.id === first).parent;
+			const notices = (window as any).notices?.length ?? 0;
+			candidate.querySelector('button').click(); await settle();
+			assert.equal((window as any).notices.length, notices + 1);
+			assert.equal((window as any).notices.at(-1), message);
+			assert.ok(view.choosingParent); assert.equal(store.items.find((x: any) => x.id === first).parent, previous);
+		}
 		assert.equal(view.list.querySelector('input'), null); assert.equal(view.list.querySelector('.gvkit-arrange-actions'), null);
 		const originalOrder = [...store.state.order], count = store.items.length;
 		label = view.list.querySelector('.gvkit-arrange-title');
@@ -306,7 +316,87 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		(pinToggle.parentElement!.querySelector('.gvkit-arrange-menu-action') as any).click(); await settle();
 		assert.equal(store.items.find((x: any) => x.id === first).pinned, !beforePin);
 		assert.equal(window.document.querySelector('.gvkit-arrange-item-menu'), null);
-		view.toggleSearch(); view.setFilter('today');
+		// Independent list/detail preferences: all four combinations persist without executing.
+		view.itemMenu(store.items.find((x: any) => x.id === first), new window.MouseEvent('click'));
+		const dualMenu = window.document.querySelector('.gvkit-arrange-item-menu')!;
+		assert.deepEqual([...dualMenu.querySelectorAll('.gvkit-arrange-menu-headings span')].map(el => el.textContent), ['列表', '详情']);
+		const rowToggle = dualMenu.querySelector<HTMLElement>('[aria-label="列表显示修改上级"]')!;
+		const detailToggle = dualMenu.querySelector<HTMLElement>('[aria-label="详情显示修改上级"]')!;
+		for (const [listOn, detailOn] of [[true, true], [true, false], [false, false], [false, true]]) {
+			for (const [toggle, on] of [[rowToggle, listOn], [detailToggle, detailOn]] as const) {
+				if (toggle.getAttribute('aria-checked') !== String(on)) { toggle.click(); await settle(); }
+			}
+			await fresh.load();
+			assert.equal(fresh.state.rowActions.includes('changeParent'), listOn);
+			assert.equal(fresh.state.detailActions.includes('changeParent'), detailOn);
+			assert.equal(Boolean(view.detail.querySelector('.gvkit-arrange-detail-actions [aria-label="修改上级"]')), detailOn);
+			assert.equal(view.choosingParent, null);
+		}
+		(detailToggle.parentElement!.querySelector('.gvkit-arrange-menu-action') as any).click(); await settle();
+		assert.equal(view.choosingParent.id, first); view.finishParentChoice();
+		await store.configure({ rowActions: ['changeParent'] }); view.paintLists();
+		if (view.searchOpen) view.toggleSearch(); view.setFilter('all');
+		view.list.querySelector('[data-id="' + first + '"] [aria-label="修改上级"]').click(); await settle();
+		assert.equal(view.choosingParent.id, first); view.finishParentChoice();
+		// Match spans preserve text, match case-insensitively, and disappear on close.
+		const repeated = await store.create('家园 Alpha 家园 ALPHA', null);
+		view.toggleSearch(); search('家园');
+		let hitTitle = view.list.querySelector('[data-id="' + repeated + '"] .gvkit-arrange-title');
+		assert.equal(hitTitle.textContent, '家园 Alpha 家园 ALPHA');
+		assert.deepEqual([...hitTitle.querySelectorAll('.gvkit-arrange-match')].map((el: any) => el.textContent), ['家园', '家园']);
+		search('alpha'); hitTitle = view.list.querySelector('[data-id="' + repeated + '"] .gvkit-arrange-title');
+		assert.deepEqual([...hitTitle.querySelectorAll('.gvkit-arrange-match')].map((el: any) => el.textContent), ['Alpha', 'ALPHA']);
+		view.toggleSearch(); assert.equal(view.list.querySelectorAll('.gvkit-arrange-match').length, 0);
+		// Only direct children; completed children follow pending global order, then completion time.
+		const family = await store.create('详情分组', null);
+		const children = [];
+		for (const name of ['未完成1', '未完成2', '完成晚', '完成早']) children.push(await store.create(name, family));
+		const descendant = await store.create('更深层', children[0]);
+		for (const [id, time] of [[children[2], '12:00'], [children[3], '09:00']]) {
+			await store.complete(id, true); const child = store.items.find((x: any) => x.id === id);
+			await vault.process(files.get(child.path), source => source.replace(child.completedAt, today + 'T' + time + ':00+08:00'));
+		}
+		await view.reload(); await view.select(family);
+		const childIds = () => [...view.children.querySelectorAll('.gvkit-arrange-row')].map((el: any) => el.dataset.id);
+		assert.deepEqual(childIds(), [children[1], children[0], children[3], children[2]]);
+		assert.ok(!childIds().includes(descendant));
+		title = view.editing.title; title.value = '未保存详情草稿';
+		await store.configure({ showCompletedChildren: false }); view.paintLists();
+		assert.deepEqual(childIds(), [children[1], children[0]]); assert.equal(view.editing.title, title); assert.equal(title.value, '未保存详情草稿');
+		await fresh.load(); assert.equal(fresh.state.showCompletedChildren, false);
+		await store.configure({ showCompletedChildren: true }); view.paintLists();
+		view.children.querySelector('[data-id="' + children[3] + '"] input').click(); await settle();
+		assert.deepEqual(childIds(), [children[3], children[1], children[0], children[2]]);
+		assert.ok(store.items.find((x: any) => x.id === children[2]).completedAt);
+		await view.select(null);
+		// Above-list release remains global top, with the first two pinned slots protected.
+		const pinnedIds = store.state.order.slice(0, 2);
+		for (const id of pinnedIds) await store.togglePin(id);
+		view.paintLists();
+		const moving = store.state.order.findLast((id: string) => !store.items.find((x: any) => x.id === id).pinned);
+		const original = [...store.state.order];
+		const pinned = new Set(store.items.filter((x: any) => x.pinned && !x.completedAt).map((x: any) => x.id));
+		view.list.getBoundingClientRect = () => ({ top: 90, bottom: 600 } as any);
+		for (const [index, row] of [...view.list.querySelectorAll('.gvkit-arrange-row')].entries()) (row as any).getBoundingClientRect = () => ({ top: 90 + index * 44, height: 44 } as any);
+		label = view.list.querySelector('[data-id="' + moving + '"] .gvkit-arrange-title');
+		window.document.elementFromPoint = () => null;
+		pointer(label, 'pointerdown', 100, 400); await waitHold();
+		pointer(window.document, 'pointermove', 100, 60);
+		assert.ok(view.list.querySelector('.is-drop-target')); assert.equal(view.list.querySelector('.is-drop-target').classList.contains('is-pinned'), false);
+		pointer(window.document, 'pointermove', 100, -30);
+		assert.ok(view.list.querySelector('.is-drop-target'));
+		pointer(window.document, 'pointerup', 100, -30); await settle();
+		assert.deepEqual(store.state.order.slice(0, 3), [pinnedIds[0], pinnedIds[1], moving]);
+		for (const id of pinned) assert.equal(store.state.order.indexOf(id), original.indexOf(id));
+		assert.deepEqual(store.state.order.filter((id: string) => id !== moving && !pinned.has(id)), original.filter(id => id !== moving && !pinned.has(id)));
+		for (const id of pinnedIds) await store.togglePin(id);
+		// Completed actions are disabled while preference toggles remain enabled.
+		view.itemMenu(store.items.find((x: any) => x.id === children[2]), new window.MouseEvent('click'));
+		const disabledTop = window.document.querySelector<HTMLElement>('[aria-label="详情显示置顶"]')!;
+		assert.equal((disabledTop.parentElement!.querySelector('.gvkit-arrange-menu-action') as HTMLButtonElement).disabled, true);
+		assert.equal((disabledTop as HTMLButtonElement).disabled, false);
+		window.document.querySelector('.gvkit-arrange-item-menu')!.remove();
+		view.setFilter('today');
 		for (const id of [A, B, E]) await store.complete(id, true);
 		view.paintLists(); assert.equal(view.headline.dataset.color, 'blue');
 		await store.setAchieved(today, true); view.paintLists(); assert.equal(view.headline.dataset.color, 'gold');

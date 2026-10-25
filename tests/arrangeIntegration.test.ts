@@ -81,6 +81,18 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await vault.process(stateFile, source => source.replace('  "keyboardGap": 7,\n', '').replace('  "submitArrowSize": 24,\n', '').replace('  "submitColor": "classic",\n', ''));
 		await fresh.load(); assert.equal(fresh.state.fullscreenThreshold, 70);
 		assert.deepEqual(fresh.state.rowActions, ['pin']);
+		await vault.process(stateFile, source => {
+			const fields = JSON.parse(source.slice(4, source.indexOf('\n---', 4)));
+			delete fields.detailActions; delete fields.showCompletedChildren;
+			return '---\n' + JSON.stringify(fields, null, 2) + source.slice(source.indexOf('\n---', 4));
+		});
+		await fresh.load();
+		assert.deepEqual(fresh.state.rowActions, ['pin'], 'legacy list preferences are preserved');
+		assert.deepEqual(fresh.state.detailActions, ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown']);
+		assert.equal(fresh.state.showCompletedChildren, true);
+		await store.configure({ detailActions: [], showCompletedChildren: false });
+		await fresh.load(); assert.deepEqual(fresh.state.detailActions, []); assert.equal(fresh.state.showCompletedChildren, false);
+		assert.deepEqual(fresh.state.rowActions, ['pin']);
 		assert.equal(fresh.state.keyboardGap, 7);
 		assert.equal(fresh.state.submitArrowSize, 24, 'existing settings retain the accepted arrow size');
 		assert.equal(fresh.state.submitColor, 'classic', 'existing settings retain the accepted blue');

@@ -9,7 +9,8 @@ export interface ArrangeItem {
 	pinned: boolean;
 }
 
-export type RowAction = 'parent' | 'date' | 'top' | 'pin';
+export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'] as const;
+export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export interface ArrangeState {
 	order: string[];
@@ -23,13 +24,15 @@ export interface ArrangeState {
 	bodyPlaceholder: string;
 	completedStyle: 'background' | 'text';
 	rowActions: RowAction[];
+	detailActions: RowAction[];
+	showCompletedChildren: boolean;
 }
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
-		rowActions: ['parent', 'date', 'top'] };
+		rowActions: ['parent', 'date', 'top'], detailActions: [...ARRANGE_ACTIONS], showCompletedChildren: true };
 }
 
 /** Missing IDs are new externally created items; stale/completed IDs are not slots. */

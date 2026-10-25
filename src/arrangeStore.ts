@@ -1,6 +1,6 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -60,7 +60,11 @@ export class ArrangeStore {
 				state.detailShadow = Math.max(0, Math.min(40, Math.round(fields.detailShadow)));
 			if (typeof fields.bodyPlaceholder === 'string') state.bodyPlaceholder = fields.bodyPlaceholder;
 			if (fields.completedStyle === 'background' || fields.completedStyle === 'text') state.completedStyle = fields.completedStyle;
-			if (strings(fields.rowActions)) state.rowActions = fields.rowActions.filter((a): a is ArrangeState['rowActions'][number] => ['parent', 'date', 'top', 'pin'].includes(a));
+			for (const key of ['rowActions', 'detailActions'] as const) {
+				const value = fields[key];
+				if (strings(value)) state[key] = value.filter((a): a is ArrangeState['rowActions'][number] => (ARRANGE_ACTIONS as readonly string[]).includes(a));
+			}
+			if (typeof fields.showCompletedChildren === 'boolean') state.showCompletedChildren = fields.showCompletedChildren;
 		}
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
@@ -161,7 +165,7 @@ export class ArrangeStore {
 			await this.saveState();
 		});
 	}
-	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'detailShadow' | 'bodyPlaceholder' | 'completedStyle' | 'rowActions'>>): Promise<void> {
+	configure(changes: Partial<Pick<ArrangeState, 'timezone' | 'fullscreenThreshold' | 'keyboardGap' | 'submitArrowSize' | 'submitColor' | 'detailShadow' | 'bodyPlaceholder' | 'completedStyle' | 'rowActions' | 'detailActions' | 'showCompletedChildren'>>): Promise<void> {
 		return this.serial(async () => { Object.assign(this.state, changes); await this.saveState(); });
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {

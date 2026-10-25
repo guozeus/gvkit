@@ -145,7 +145,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-icon svg { width: 19px; height: 19px; }
 .gvkit-arrange .gvkit-arrange-icon.is-active { color: var(--interactive-accent); }
 .gvkit-arrange-row.is-dragging { opacity: .9; background: var(--background-primary); box-shadow: 0 4px 14px #0003; border-radius: 8px; z-index: 4; pointer-events: none; }
-.gvkit-arrange-row.is-drop-target::after { content: ''; position: absolute; left: 6px; right: 2px; top: -1px; height: 2px; background: var(--interactive-accent); pointer-events: none; }
+.gvkit-arrange-row.is-drop-target::after { content: ''; position: absolute; left: 6px; right: 2px; top: 0; height: 2px; background: var(--color-blue, #448aff); pointer-events: none; }
 .gvkit-arrange-row.is-drop-target[data-drop-after="true"]::after { top: auto; bottom: -1px; }
 .gvkit-arrange-composer { flex: 0 0 auto; position: relative; padding: 0 0 max(7px, env(safe-area-inset-bottom)); border: 0; z-index: 3; }
 .gvkit-arrange-composer, .gvkit-arrange-keyboard-backdrop { background: color-mix(in srgb, var(--background-primary) 92%, #4098ef); }
@@ -163,7 +163,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 46%; min-width: 0; overflow: hidden; border-left: 1px solid var(--background-modifier-border); background: var(--background-primary); }
 .gvkit-arrange-detail[hidden] { display: none; }
 .gvkit-arrange-detail-tools { flex: 0 0 auto; display: flex; justify-content: flex-end; padding: 0 8px; }
-.gvkit-arrange-detail-actions { display: flex; flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.gvkit-arrange-detail-actions { display: flex; flex: 1 1 132px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.gvkit-arrange-detail-actions > :first-child { margin-left: auto; }
 .gvkit-arrange-detail-actions::-webkit-scrollbar { display: none; }
 .gvkit-arrange-detail-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 16px 16px; }
 .gvkit-arrange .gvkit-arrange-detail-title, .gvkit-arrange .gvkit-arrange-inline-body { display: block; box-sizing: border-box; width: 100%; resize: none; overflow: hidden; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-normal); box-shadow: none; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -185,6 +186,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange[data-completed-style="background"] .gvkit-arrange-row.is-completed { background: color-mix(in srgb, var(--color-blue) 7%, var(--background-primary)); }
 .gvkit-arrange .gvkit-arrange-row.is-completed .gvkit-arrange-title { text-decoration: none; color: var(--text-normal); }
 .gvkit-arrange[data-completed-style="text"] .gvkit-arrange-row.is-completed .gvkit-arrange-title { color: var(--color-blue); }
+.gvkit-arrange[data-completed-style] .gvkit-arrange-row.is-invalid-parent { background: color-mix(in srgb, #888 25%, var(--background-primary)); }
+.gvkit-arrange .is-invalid-parent .gvkit-arrange-title { cursor: not-allowed; color: var(--text-muted); }
+.gvkit-arrange-match { background: #b99af04d; color: inherit; border-radius: 2px; }
 .gvkit-arrange-search { display: flex; align-items: center; flex: 0 0 auto; padding: 4px 8px; }
 .gvkit-arrange-search input { flex: 1; min-width: 0; font-size: 16px; }
 .gvkit-arrange-parent-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 0 0 auto; padding: 6px 10px; background: color-mix(in srgb, var(--color-purple) 12%, var(--background-primary)); }
@@ -192,6 +196,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-parent-picker .gvkit-arrange-edit-error { flex-basis: 100%; margin: 0; }
 .gvkit-arrange-search[hidden], .gvkit-arrange-parent-picker[hidden] { display: none; }
 .gvkit-arrange-menu-row { display: flex; align-items: center; }
+.gvkit-arrange-menu-headings { display: flex; justify-content: flex-end; font-size: 12px; color: var(--text-muted); }
+.gvkit-arrange-menu-headings > span { flex: 0 0 48px; text-align: center; }
+.gvkit-arrange-menu-action:disabled { opacity: .45; }
 .gvkit-arrange-item-menu button { min-height: 44px; box-shadow: none; border: 0; background: transparent; touch-action: manipulation; }
 .gvkit-arrange-menu-action { display: flex; align-items: center; justify-content: flex-start; gap: 10px; flex: 1; min-width: 0; text-align: left; }
 .gvkit-arrange-menu-action > :first-child { display: flex; }
