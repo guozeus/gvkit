@@ -57,7 +57,9 @@ export class ArrangeView extends ItemView {
 	private busy = false;
 	private closed = false;
 	private expanded = new Set<string>();
-	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; parent: HTMLSelectElement } | null = null;
+	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; preview: HTMLElement; error: HTMLElement; savedTitle: string; savedBody: string; composing: boolean } | null = null;
+	private editTimer: number | null = null;
+	private savingEdit: Promise<boolean> | null = null;
 	private timer: number | null = null;
 	private today = '';
 
@@ -107,7 +109,7 @@ export class ArrangeView extends ItemView {
 			}));
 		}
 		this.registerInterval(window.setInterval(() => this.paintLists(), 60_000));
-		this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.reload(); });
+		this.registerDomEvent(document, 'visibilitychange', () => { if (document.hidden) void this.saveEdit(); else void this.reload(); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
 		const fit = () => {
@@ -164,10 +166,11 @@ export class ArrangeView extends ItemView {
 		this.closed = true;
 		this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null;
 		if (this.timer !== null) window.clearTimeout(this.timer);
+		if (this.editTimer !== null) window.clearTimeout(this.editTimer);
 		await this.saveEdit();
 	}
 	private async reload(): Promise<void> {
-		try { await this.store.load(); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.editing) this.paintDetail(); } }
+		try { await this.store.load(); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
 		catch (error) { this.error(error); }
 	}
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
@@ -183,7 +186,7 @@ export class ArrangeView extends ItemView {
 		if (this.busy) return false;
 		this.busy = true;
 		this.updateComposer();
-		try { await action(); this.paintLists(); if (!this.editing) this.paintDetail(); return true; }
+		try { await action(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); return true; }
 		catch (error) { this.error(error); await this.reload(); return false; }
 		finally { this.busy = false; this.updateComposer(); }
 	}
@@ -315,7 +318,7 @@ export class ArrangeView extends ItemView {
 			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
 			menu.addItem(entry => entry.setTitle(key === 'pin' && item.pinned ? '取消钉住' : actions[key].title).setIcon(actions[key].icon).onClick(() => this.action(key, item, event)));
 		}
-		menu.addItem(entry => entry.setTitle('编辑标题、正文与归属').setIcon('pencil').onClick(() => { void this.select(item.id).then(() => this.edit(item)); }));
+		menu.addItem(entry => entry.setTitle('修改上级').setIcon('corner-left-up').onClick(() => { void this.changeParent(item.id); }));
 		menu.addItem(entry => entry.setTitle('打开 Markdown').setIcon('file-text').onClick(() => {
 			const file = this.app.vault.getAbstractFileByPath(item.path);
 			if (file instanceof TFile) void this.app.workspace.getLeaf('tab').openFile(file);
@@ -325,6 +328,7 @@ export class ArrangeView extends ItemView {
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
 		const day = todayFacts(this.store.items, this.store.state).day;
 		const menu = new Menu();
+		if (item.date) menu.addItem(entry => entry.setTitle(`当前日期：${item.date}`).setDisabled(true));
 		for (const [label, date] of [['清除日期', null], ['今天', day], ['明天', offsetDay(day, 1)]] as const)
 			menu.addItem(entry => entry.setTitle(label).onClick(() => { void this.run(() => this.store.setDate(item.id, date)); }));
 		menu.addItem(entry => entry.setTitle('选择日期…').setIcon('calendar').onClick(() => {
@@ -341,6 +345,7 @@ export class ArrangeView extends ItemView {
 	}
 	private async select(id: string | null): Promise<void> {
 		if (!(await this.saveEdit())) return;
+		this.editing = null;
 		this.selected = id;
 		this.full = false;
 		this.detail.style.height = '';
@@ -349,8 +354,8 @@ export class ArrangeView extends ItemView {
 	}
 	private paintDetail(): void {
 		const item = this.store.items.find(item => item.id === this.selected);
-		if (!item) { this.selected = null; this.detail.hidden = true; return; }
-		const scroll = this.detailScroll?.scrollTop ?? 0;
+		if (!item) { this.selected = null; this.editing = null; this.detail.hidden = true; return; }
+		const scroll = this.editing?.id === item.id ? this.detailScroll?.scrollTop ?? 0 : 0;
 		this.detail.hidden = false;
 		this.detail.toggleClass('is-full', this.full);
 		this.detail.empty();
@@ -359,14 +364,53 @@ export class ArrangeView extends ItemView {
 		this.panelGesture(grip);
 		const tools = this.detail.createDiv('gvkit-arrange-detail-tools');
 		iconButton(tools, '返回主列表', 'arrow-left', () => { void this.select(null); });
-		if (item.parent) iconButton(tools, '查看上级', 'corner-left-up', event => this.action('parent', item, event));
-		iconButton(tools, '编辑事项', 'pencil', () => this.edit(item));
+		const shortcuts = [...new Set<RowAction>([...(item.parent ? ['parent' as const] : []), ...this.store.state.rowActions])];
+		for (const key of shortcuts) {
+			if (key === 'parent' && !item.parent || (key === 'top' || key === 'pin') && item.completedAt) continue;
+			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
+			const button = iconButton(tools, label, actions[key].icon, event => this.action(key, item, event));
+			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned);
+		}
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
 		this.detailScroll = this.detail.createDiv('gvkit-arrange-detail-scroll');
-		this.detailScroll.createEl('h2', { text: item.title, cls: 'gvkit-arrange-detail-title' });
-		if (item.date) this.detailScroll.createEl('button', { text: item.date, cls: 'gvkit-arrange-date' }).onclick = event => this.dateMenu(item, event);
-		const body = this.detailScroll.createDiv('gvkit-arrange-body');
-		void MarkdownRenderer.render(this.app, item.body, body, item.path, this);
+		if (item.parent) {
+			const parent = this.store.items.find(candidate => candidate.id === item.parent);
+			if (parent) this.detailScroll.createDiv({ cls: 'gvkit-arrange-parent-name', text: parent.title, attr: { title: parent.title } });
+		}
+		const title = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
+		title.value = item.title;
+		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
+		error.hidden = true;
+		const preview = this.detailScroll.createDiv({ cls: 'gvkit-arrange-body', attr: { tabindex: '0', 'aria-label': '编辑事项正文' } });
+		const body = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-inline-body', attr: { 'aria-label': '事项正文', rows: '1', placeholder: '记录正文、链接、思路…' } });
+		body.value = item.body; body.hidden = true;
+		const edit = this.editing = { id: item.id, title, body, preview, error, savedTitle: item.title, savedBody: item.body, composing: false as boolean };
+		this.renderBody();
+		const resize = (input: HTMLTextAreaElement) => { input.style.height = '0'; input.style.height = `${input.scrollHeight}px`; };
+		resize(title);
+		// Only the first focus places the caret at the end; later taps can position it normally.
+		let titleFocused = false;
+		title.onpointerdown = () => { titleFocused = document.activeElement === title; };
+		title.onclick = () => { if (!titleFocused) title.setSelectionRange(title.value.length, title.value.length); };
+		const openBody = () => {
+			preview.hidden = true; body.hidden = false; resize(body); body.focus({ preventScroll: true });
+			body.setSelectionRange(body.value.length, body.value.length);
+		};
+		preview.onclick = event => {
+			if ((event.target as HTMLElement).closest('a') || window.getSelection()?.toString()) return;
+			openBody();
+		};
+		preview.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); openBody(); } };
+		this.detailScroll.onclick = event => { if (event.target === this.detailScroll && !window.getSelection()?.toString()) openBody(); };
+		for (const input of [title, body]) {
+			input.addEventListener('compositionstart', () => { edit.composing = true; });
+			input.addEventListener('compositionend', () => { edit.composing = false; this.scheduleEdit(); });
+			input.oninput = () => { resize(input); error.hidden = true; title.removeAttribute('aria-invalid'); this.scheduleEdit(); };
+			input.onblur = () => { void this.saveEdit().then(ok => {
+				// Replacing preview text on title blur can swallow the click landing on it.
+				if (ok && input === body && this.editing === edit && document.activeElement !== body) this.renderBody();
+			}); };
+		}
 		this.children = this.detailScroll.createDiv('gvkit-arrange-children');
 		for (const child of this.ordered().filter(child => child.parent === item.id)) this.row(this.children, child);
 		this.detailScroll.scrollTop = scroll;
@@ -406,27 +450,68 @@ export class ArrangeView extends ItemView {
 			start = null;
 		}, { passive: true });
 	}
-	private edit(item: ArrangeItem): void {
-		if (this.editing) return;
-		this.detailScroll.empty();
-		const title = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-edit-title', value: item.title, attr: { 'aria-label': '事项完整标题', rows: '2' } });
-		const body = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-edit-body', value: item.body, attr: { 'aria-label': '事项正文', placeholder: '自由记录正文、链接、思路…', rows: '5' } });
-		const parent = this.detailScroll.createEl('select', { attr: { 'aria-label': '上级事项' } });
+	private async changeParent(id: string): Promise<void> {
+		if (!(await this.saveEdit())) return;
+		const item = this.store.items.find(item => item.id === id);
+		if (!item) return;
+		const modal = new Modal(this.app); modal.setTitle('修改上级');
+		const parent = modal.contentEl.createEl('select', { attr: { 'aria-label': '上级事项' } });
+		Object.assign(parent.style, { width: '100%', fontSize: '16px' });
 		parent.createEl('option', { value: '', text: '无上级' });
 		for (const candidate of this.store.items.filter(candidate => validParent(this.store.items, item.id, candidate.id)))
 			parent.createEl('option', { value: candidate.id, text: candidate.title });
 		parent.value = item.parent ?? '';
-		this.editing = { id: item.id, title, body, parent };
-		const buttons = this.detailScroll.createDiv('gvkit-arrange-edit-buttons');
-		buttons.createEl('button', { text: '保存' }).onclick = () => { void this.saveEdit(); };
-		buttons.createEl('button', { text: '取消' }).onclick = () => { this.editing = null; this.paintDetail(); };
+		new Setting(modal.contentEl).addButton(button => button.setButtonText('完成').setCta().onClick(async () => {
+			const current = this.store.items.find(item => item.id === id);
+			if (current && await this.run(() => this.store.edit(id, current.title, current.body, parent.value || null))) modal.close();
+		}));
+		modal.open();
 	}
-	private async saveEdit(): Promise<boolean> {
+	private keepEditor(): boolean {
+		const edit = this.editing;
+		return Boolean(edit && (edit.title.value !== edit.savedTitle || edit.body.value !== edit.savedBody
+			|| edit.composing || document.activeElement === edit.title || document.activeElement === edit.body));
+	}
+	private renderBody(): void {
+		const edit = this.editing;
+		if (!edit) return;
+		edit.body.hidden = true; edit.preview.hidden = false; edit.preview.empty();
+		if (edit.body.value) {
+			const item = this.store.items.find(item => item.id === edit.id);
+			void MarkdownRenderer.render(this.app, edit.body.value, edit.preview, item?.path ?? '', this);
+		} else edit.preview.createSpan({ cls: 'gvkit-arrange-body-placeholder', text: '记录正文、链接、思路…' });
+	}
+	private scheduleEdit(): void {
+		if (this.editTimer !== null) window.clearTimeout(this.editTimer);
+		this.editTimer = window.setTimeout(() => { this.editTimer = null; void this.saveEdit(); }, 600);
+	}
+	private saveEdit(): Promise<boolean> {
+		if (this.editTimer !== null) { window.clearTimeout(this.editTimer); this.editTimer = null; }
+		if (this.savingEdit) return this.savingEdit;
+		this.savingEdit = this.flushEdit().finally(() => { this.savingEdit = null; });
+		return this.savingEdit;
+	}
+	private async flushEdit(): Promise<boolean> {
 		const edit = this.editing;
 		if (!edit) return true;
-		const ok = await this.run(() => this.store.edit(edit.id, edit.title.value, edit.body.value, edit.parent.value || null));
-		if (ok) { this.editing = null; if (!this.closed) this.paintDetail(); }
-		return ok;
+		while (true) {
+			if (edit.composing) return false;
+			const title = edit.title.value, body = edit.body.value;
+			if (!title.trim()) {
+				edit.error.textContent = '标题不能为空，请在原处补充标题'; edit.error.hidden = false;
+				edit.title.setAttribute('aria-invalid', 'true'); return false;
+			}
+			if (title === edit.savedTitle && body === edit.savedBody) return true;
+			try {
+				const item = this.store.items.find(item => item.id === edit.id);
+				await this.store.edit(edit.id, title, body, item?.parent ?? null);
+				edit.savedTitle = title; edit.savedBody = body; edit.error.hidden = true;
+			} catch (error) {
+				edit.error.textContent = `${error instanceof Error ? error.message : '保存失败'}；输入已保留，离开编辑区可重试`;
+				edit.error.hidden = false; return false;
+			}
+			// A slow write must not swallow characters typed while it was pending.
+		}
 	}
 	private async create(): Promise<void> {
 		const draft = this.input.value;
