@@ -107,6 +107,7 @@ export class ArrangeView extends ItemView {
 			const bottom = root.getBoundingClientRect().bottom;
 			const keyboard = Platform.isIosApp
 				? Math.max(0, parseFloat(window.getComputedStyle(root).getPropertyValue('--keyboard-height')) || 0) : 0;
+			root.classList.toggle('gvkit-arrange-keyboard-open', keyboard > 0);
 			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : window.innerHeight,
 				keyboard > 0 ? window.innerHeight - keyboard : Infinity);
 			const overlap = Math.max(0, bottom - visibleBottom);
@@ -135,6 +136,7 @@ export class ArrangeView extends ItemView {
 				viewport.removeEventListener('resize', resize);
 				viewport.removeEventListener('scroll', scroll);
 				root.style.paddingBottom = '';
+				root.classList.remove('gvkit-arrange-keyboard-open');
 			});
 			fit();
 		}

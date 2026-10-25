@@ -122,6 +122,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		root.style.setProperty('--keyboard-height', '378px');
 		viewport.dispatchEvent(new window.Event('scroll'));
 		assert.equal(root.style.paddingBottom, '378px', 'before host shrink the keyboard still needs avoidance');
+		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
 		hostBottom = 578; notifyResize();
 		assert.equal(root.style.paddingBottom, '0px', 'explicit zero prevents the host CSS inset returning');
 		assert.equal(window.getComputedStyle(root).paddingBottom, '0px');
@@ -143,10 +144,14 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(root.style.paddingBottom, '');
 		assert.equal(root.style.getPropertyPriority('padding-bottom'), '');
 		assert.equal(window.getComputedStyle(root).paddingBottom, '34px', 'keyboard close restores the original idle CSS');
+		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);
 		assert.equal(input.value, '尚未提交的中文草稿');
 		assert.equal(root.querySelector('textarea'), input);
+		root.style.setProperty('--keyboard-height', '378px'); notifyResize();
+		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
 		await view.onClose(); view.disposers.forEach((fn: () => void) => fn());
 		assert.equal(disconnected, true);
+		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);
 		assert.equal(root.style.paddingBottom, '');
 		viewport.height = 400; viewport.dispatchEvent(new window.Event('resize'));
 		assert.equal(root.style.paddingBottom, '', 'closed view has no viewport listeners');

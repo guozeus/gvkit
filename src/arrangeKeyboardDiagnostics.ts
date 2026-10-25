@@ -106,7 +106,7 @@ export class ArrangeKeyboardDiagnostics {
 	}
 	serialize(): string {
 		return JSON.stringify({
-			build: '0.6.4-keyboard-fix-1', mode: this.mode,
+			build: '0.6.5-keyboard-spacing-1', mode: this.mode,
 			legend: {
 				box: 'top,bottom,height,width', layout: 'clientHeight,offsetHeight,scrollHeight,scrollTop,offsetTop,paddingTop,paddingBottom,marginTop,marginBottom',
 				sizing: 'height,minHeight,maxHeight,flexBasis,flexGrow,flexShrink,hasTransform',

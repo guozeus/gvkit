@@ -39,7 +39,7 @@ test('device diagnosis preserves timed A/B geometry, excludes content, and leave
 		diagnostic.recordFit('viewport-resize', '300px');
 		advance(1500);
 		let data = JSON.parse(diagnostic.serialize());
-		assert.equal(data.build, '0.6.4-keyboard-fix-1');
+		assert.equal(data.build, '0.6.5-keyboard-spacing-1');
 		const focus = data.samples.current.checkpoints.filter((x: any) => x.reason.startsWith('focusin'));
 		assert.deepEqual(focus.map((x: any) => x.ms), [0, 100, 300, 600, 1000, 1500]);
 		assert.equal(focus[2].inlinePadding, 300);

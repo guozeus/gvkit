@@ -144,6 +144,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-row.is-drop-target { border-top: 2px solid var(--interactive-accent); }
 .gvkit-arrange-row.is-drop-target[data-drop-after="true"] { border-top: 0; border-bottom: 2px solid var(--interactive-accent); }
 .gvkit-arrange-composer { flex: 0 0 auto; display: flex; align-items: center; padding: 7px 10px max(7px, env(safe-area-inset-bottom)); gap: 8px; border-top: 1px solid var(--background-modifier-border); background: var(--background-primary); z-index: 3; }
+/* The keyboard covers the home-indicator area; keep only the normal row inset. */
+.gvkit-arrange-keyboard-open .gvkit-arrange-composer { padding-bottom: 7px; }
 .gvkit-arrange-composer textarea { flex: 1; min-width: 0; min-height: 40px; max-height: 100px; resize: none; font-size: 16px; padding: 9px 12px; border-radius: 14px; }
 .gvkit-arrange-composer .gvkit-arrange-icon { background: var(--interactive-accent); color: var(--text-on-accent); border-radius: 50%; }
 .gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 46%; min-width: 0; overflow: hidden; border-left: 1px solid var(--background-modifier-border); background: var(--background-primary); }
