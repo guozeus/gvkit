@@ -85,7 +85,7 @@ export class ArrangeView extends ItemView {
 		this.detail.hidden = true;
 		const composer = root.createDiv('gvkit-arrange-composer');
 		this.input = composer.createEl('textarea', { attr: { rows: '1', placeholder: '想到就记…', 'aria-label': '新增事项' } });
-		this.createButton = iconButton(composer, '创建事项', 'corner-down-left', () => { void this.create(); });
+		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
 		this.createButton.addClass('gvkit-arrange-submit');
 		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
 		this.updateComposer();
