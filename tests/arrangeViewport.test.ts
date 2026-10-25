@@ -13,7 +13,7 @@ export class ItemView {
  registerInterval(id) { this.register(() => window.clearInterval(id)); }
  registerDomEvent(el, type, fn) { el.addEventListener(type, fn); this.register(() => el.removeEventListener(type, fn)); }
 }
-export const Platform = { isMobileApp: true };
+export const Platform = { isMobileApp: true, isIosApp: true };
 export class Modal {}
 export class Menu {}
 export class Notice { constructor(message) { throw Error(message); } }
@@ -112,6 +112,39 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		view.keyboardDiagnostics.stop();
 		assert.equal(root.style.paddingBottom, '384px', 'ending diagnosis restores default behavior');
 		assert.equal(view.keyboardDiagnostics.active, false);
+		// iPhone trace: viewport stays 956; CSS inset arrives before the host shrinks.
+		Object.defineProperty(window, 'innerHeight', { value: 956 });
+		const hostStyle = window.document.createElement('style');
+		hostStyle.textContent = '.gvkit-arrange { padding-bottom: var(--safe-area-inset-bottom) !important; }';
+		window.document.head.append(hostStyle);
+		viewport.height = 956; hostBottom = 956;
+		root.style.setProperty('--safe-area-inset-bottom', '378px');
+		root.style.setProperty('--keyboard-height', '378px');
+		viewport.dispatchEvent(new window.Event('scroll'));
+		assert.equal(root.style.paddingBottom, '378px', 'before host shrink the keyboard still needs avoidance');
+		hostBottom = 578; notifyResize();
+		assert.equal(root.style.paddingBottom, '0px', 'explicit zero prevents the host CSS inset returning');
+		assert.equal(window.getComputedStyle(root).paddingBottom, '0px');
+		assert.equal(root.style.getPropertyPriority('padding-bottom'), 'important');
+		view.keyboardDiagnostics.select('off');
+		assert.equal(window.getComputedStyle(root).paddingBottom, '378px', 'raw host CSS reproduces the diagnosed double reservation');
+		view.keyboardDiagnostics.stop();
+		assert.equal(window.getComputedStyle(root).paddingBottom, '0px');
+		// A keyboard height change is also phased: only its uncovered difference is reserved.
+		root.style.setProperty('--keyboard-height', '400px');
+		root.style.setProperty('--safe-area-inset-bottom', '400px');
+		viewport.dispatchEvent(new window.Event('scroll'));
+		assert.equal(root.style.paddingBottom, '22px');
+		hostBottom = 556; notifyResize();
+		assert.equal(root.style.paddingBottom, '0px');
+		root.style.setProperty('--keyboard-height', '0px');
+		root.style.setProperty('--safe-area-inset-bottom', '34px');
+		hostBottom = 956; notifyResize();
+		assert.equal(root.style.paddingBottom, '');
+		assert.equal(root.style.getPropertyPriority('padding-bottom'), '');
+		assert.equal(window.getComputedStyle(root).paddingBottom, '34px', 'keyboard close restores the original idle CSS');
+		assert.equal(input.value, '尚未提交的中文草稿');
+		assert.equal(root.querySelector('textarea'), input);
 		await view.onClose(); view.disposers.forEach((fn: () => void) => fn());
 		assert.equal(disconnected, true);
 		assert.equal(root.style.paddingBottom, '');

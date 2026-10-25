@@ -100,14 +100,21 @@ export class ArrangeView extends ItemView {
 		}
 		this.registerInterval(window.setInterval(() => this.paintLists(), 60_000));
 		this.registerDomEvent(document, 'visibilitychange', () => { if (!document.hidden) void this.reload(); });
-		// Only compensate for overlap the host has not already removed. Obsidian
-		// can resize this view AFTER the visualViewport event during keyboard changes.
+		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
+		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
 		const fit = (reason = 'open') => {
 			const viewport = window.visualViewport;
 			const bottom = root.getBoundingClientRect().bottom;
-			const overlap = viewport ? Math.max(0, bottom - viewport.height - viewport.offsetTop) : 0;
+			const keyboard = Platform.isIosApp
+				? Math.max(0, parseFloat(window.getComputedStyle(root).getPropertyValue('--keyboard-height')) || 0) : 0;
+			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : window.innerHeight,
+				keyboard > 0 ? window.innerHeight - keyboard : Infinity);
+			const overlap = Math.max(0, bottom - visibleBottom);
 			const previous = root.style.paddingBottom;
-			root.style.paddingBottom = !this.keyboardDiagnostics?.compensationOff && overlap > 0 ? `${overlap}px` : '';
+			if (!this.keyboardDiagnostics?.compensationOff && (keyboard > 0 || overlap > 0)) {
+				// Explicit zero must override the host CSS inset after it has resized.
+				root.style.setProperty('padding-bottom', `${overlap}px`, keyboard > 0 ? 'important' : '');
+			} else root.style.removeProperty('padding-bottom');
 			this.keyboardDiagnostics?.recordFit(reason, previous);
 		};
 		if (Platform.isMobileApp) {
