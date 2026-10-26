@@ -52,8 +52,8 @@ export class CollabBoardPublisher {
     try { data = response.json; } catch { /* An HTTP error can have an empty body. */ }
     return { status: response.status, data };
   }
-  private async readReceipt(space: string, gvid: string, op?: string) {
-    const params = new URLSearchParams({ source_space_id: space, source_gvid: gvid });
+  private async readReceipt(gvid: string, op?: string) {
+    const params = new URLSearchParams({ source_gvid: gvid });
     if (op) params.set('operation_id', op);
     return this.call('GET', '/receipt-by-source?' + params.toString());
   }
@@ -90,7 +90,6 @@ export class CollabBoardPublisher {
     this.busy.add(file.path);
     try {
       const src = await this.source(file, context);
-      const space = await this.settings.ensureCollabSpaceId();
       const linked = this.settings.getCollabBinding(src.gvid);
       if (linked) {
         if (linked.revoked || linked.pendingRevoke) throw Error('该来源已撤回或等待撤回，不会自动重发');
@@ -102,7 +101,7 @@ export class CollabBoardPublisher {
       if (pending && (pending.gvid !== src.gvid || pending.path !== src.path || pending.hash !== src.hash))
         throw Error('之前有未确认的首发操作，请先处理该原文档，避免重复提交');
       let op = pending?.op;
-      const remote = await this.readReceipt(space, src.gvid, op);
+      const remote = await this.readReceipt(src.gvid, op);
       if (remote.status === 200) {
         const current = safeCurrent(remote.data?.current);
         if (!current || !current.active) throw Error('该来源已撤回；不能未经明确授权自动重新发布');
@@ -113,7 +112,7 @@ export class CollabBoardPublisher {
       }
       if (remote.status !== 404) throw Error('无法核实协作板是否已有此文档（HTTP ' + remote.status + '）');
       if (!op) { op = crypto.randomUUID(); await this.settings.saveCollabPendingFirst({ gvid: src.gvid, path: src.path, hash: src.hash, op }); }
-      const result = await this.call('POST', '', { action: 'first', source_space_id: space, source_gvid: src.gvid,
+      const result = await this.call('POST', '', { action: 'first', source_gvid: src.gvid,
         source_locator: src.path, markdown: src.text, body_sha256: src.hash, operation_id: op });
       const verified = this.verified(result);
       if (verified.content_sha256 !== src.hash) throw Error('协作板首发正文哈希核对失败');
@@ -144,14 +143,13 @@ export class CollabBoardPublisher {
   }
   private async revokeIneligible(binding: CollabBinding): Promise<void> {
     if (!binding.pendingRevoke) return;
-    const space = await this.settings.ensureCollabSpaceId();
-    const result = await this.readReceipt(space, binding.gvid, binding.pendingRevoke);
+    const result = await this.readReceipt(binding.gvid, binding.pendingRevoke);
     if (result.status !== 200) throw Error('禁发位置的协作撤回状态暂无法核对');
     const current = safeCurrent(result.data?.current);
     if (!current || current.server_doc_uuid !== binding.docId) throw Error('待撤回来源身份不匹配');
     if (current.active) {
       const revoked = await this.call('POST', '/' + encodeURIComponent(binding.docId) + '/revoke', {
-        source_space_id: space, source_gvid: binding.gvid, operation_id: binding.pendingRevoke,
+        source_gvid: binding.gvid, operation_id: binding.pendingRevoke,
         expected_epoch: binding.epoch,
       });
       if (revoked.status !== 200 || revoked.data?.receipt?.committed !== true || safeCurrent(revoked.data?.current)?.active !== false)
@@ -176,8 +174,7 @@ export class CollabBoardPublisher {
     if (!binding || binding.revoked || binding.pendingRevoke || binding.path !== src.path || this.busy.has('sync:'+src.gvid)) return;
     this.busy.add('sync:'+src.gvid);
     try {
-      const space = await this.settings.ensureCollabSpaceId();
-      const remote = await this.readReceipt(space, src.gvid, binding.pending?.op);
+      const remote = await this.readReceipt(src.gvid, binding.pending?.op);
       if (remote.status !== 200) throw Error('协作板同步状态无法读取');
       const c = safeCurrent(remote.data?.current);
       if (!c || !c.active || c.server_doc_uuid !== binding.docId || c.epoch !== binding.epoch || c.source_locator_revision !== binding.locatorRevision)
@@ -194,7 +191,7 @@ export class CollabBoardPublisher {
       const op = latest.pending?.op ?? crypto.randomUUID();
       if (!latest.pending) await this.settings.saveCollabBinding({ ...latest, pending: { op, hash: src.hash } });
       const result = await this.call('PUT', '/' + encodeURIComponent(latest.docId) + '/content', {
-        source_space_id: space, source_gvid: src.gvid, operation_id: op, source_locator: src.path,
+        source_gvid: src.gvid, operation_id: op, source_locator: src.path,
         markdown: src.text, body_sha256: src.hash, expected_epoch: latest.epoch,
         expected_revision: latest.revision, expected_locator_revision: latest.locatorRevision,
       });

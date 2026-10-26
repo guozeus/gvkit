@@ -219,33 +219,6 @@ export class GvkitSettingTab extends PluginSettingTab {
                 }
             }));
         root.createEl('p', { text: '之后打开一篇 Markdown，点「发布 → 发布到协作板」。发布后在协作板「全局文档管理」中勾选策划所在项目，即可分享。' });
-
-        // Normal single-device setup does not require configuring this stable internal identity.
-        const advanced = root.createEl('details');
-        advanced.createEl('summary', { text: '高级设置（仅多设备需要）' });
-        advanced.createEl('p', { text: 'Vault 标识会在首次发布时自动生成。若多台设备的 GVKit 设置没有同步，可在另一设备填写同一个 Vault 标识，避免重复建立协作关系。' });
-        new Setting(advanced).setName('Vault 标识')
-            .addText(input => {
-                input.setValue(prefs.getCollabSpaceId()).setPlaceholder('首次发布时自动生成');
-                input.inputEl.addEventListener('change', () => {
-                    const value = input.getValue().trim();
-                    if (value) void prefs.setCollabSpaceId(value).catch(e => new Notice(e instanceof Error ? e.message : 'Vault 标识保存失败'));
-                });
-            }).addButton(button => button.setButtonText('查看 / 生成').onClick(() => {
-                void prefs.ensureCollabSpaceId().then(value => {
-                    new Notice('Vault 标识：' + value, 10000);
-                    this.display();
-                }).catch(() => new Notice('Vault 标识读取失败'));
-            }));
-        if (typeof SecretComponent === 'function') {
-            new Setting(advanced).setName('使用已有的安全机密')
-                .addComponent(el => new SecretComponent(this.app, el)
-                    .setValue(prefs.getCollabSecretRef())
-                    .onChange(ref => {
-                        if (ref) void prefs.setCollabSecretRef(ref).then(refreshStatus)
-                            .catch(() => new Notice('机密引用保存失败'));
-                    }));
-        }
     }
 
 	private renderZhouyou(prefs: PublishSettings): void {

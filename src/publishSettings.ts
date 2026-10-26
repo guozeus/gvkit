@@ -107,14 +107,6 @@ export class PublishSettings {
 		});
 	}
 
-	async ensureCollabSpaceId(): Promise<string> {
-        this.requireLoaded();
-        const existing = this.data.collabSpaceId;
-        if (typeof existing === 'string' && /^[a-zA-Z0-9-]{8,128}$/.test(existing)) return existing;
-        const newId = crypto.randomUUID();
-        await this.updateNonSecret(d => { if (!d.collabSpaceId) d.collabSpaceId = newId; });
-        return String(this.data.collabSpaceId);
-    }
     getCollabSecretRef(): string {
         return typeof this.data.collabSecretRef === 'string' && /^[a-z0-9-]{1,120}$/.test(this.data.collabSecretRef) ?
             this.data.collabSecretRef : DEFAULT_COLLAB_SECRET_REF;
@@ -122,12 +114,6 @@ export class PublishSettings {
     async setCollabSecretRef(ref: string): Promise<void> {
         if (!/^[a-z0-9-]{1,120}$/.test(ref)) throw Error('无效机密引用名称');
         await this.updateNonSecret(d => { d.collabSecretRef = ref; });
-    }
-    getCollabSpaceId(): string { return typeof this.data.collabSpaceId === 'string' ? this.data.collabSpaceId : ''; }
-    async setCollabSpaceId(value: string): Promise<void> {
-        if (!/^[a-zA-Z0-9-]{8,128}$/.test(value)) throw Error('命名空间只能使用8-128位英文、数字、连字符');
-        if (this.getCollabBindings().length || this.getCollabPendingFirst()) throw Error('已有协作关系，不能修改命名空间');
-        await this.updateNonSecret(d => { d.collabSpaceId = value; });
     }
     getCollabBindings(): CollabSavedBinding[] {
         const rows = this.data.collabBindings;
