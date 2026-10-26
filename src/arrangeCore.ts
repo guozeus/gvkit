@@ -43,10 +43,13 @@ export interface ArrangeState {
 }
 
 export const ARRANGE_NUMBER_SETTINGS = {
-	listFontSize: [14, 22, 17], rowHeight: [24, 64, 44], gripHeight: [24, 56, 32],
-	gripWidth: [24, 96, 36], toolbarHeight: [40, 56, 44], parentFontSize: [12, 18, 13], closeThreshold: [10, 40, 25],
-	detailFontSize: [16, 28, 18], bodyFontSize: [16, 24, 16], dateFontSize: [10, 16, 12],
+	gripHeight: [24, 56, 32], gripWidth: [24, 96, 36], toolbarHeight: [40, 56, 44], closeThreshold: [10, 40, 25],
 	rowIconGap: [0, 24, 4], detailIconGap: [0, 32, 8],
+} as const;
+
+/** CSS sizes accept nonnegative numbers; do not impose product typography limits. */
+export const ARRANGE_FREE_SIZES = {
+	listFontSize: 17, rowHeight: 44, detailFontSize: 18, bodyFontSize: 16, parentFontSize: 13, dateFontSize: 12,
 } as const;
 
 export function defaultArrangeState(): ArrangeState {

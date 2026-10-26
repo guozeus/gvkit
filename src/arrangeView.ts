@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_NUMBER_SETTINGS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -116,6 +116,7 @@ export class ArrangeView extends ItemView {
 		root.empty();
 		root.addClass('gvkit-arrange');
 		root.toggleClass('gvkit-arrange-mobile', Platform.isMobileApp);
+		if (Platform.isIosApp) this.guardSmallEditorZoom(root);
 		const header = root.createDiv('gvkit-arrange-header');
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = () => this.setFilter(this.filter === 'today' ? 'all' : 'today');
@@ -268,10 +269,48 @@ export class ArrangeView extends ItemView {
 		catch (error) { this.error(error); }
 	}
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
+	private guardSmallEditorZoom(root: HTMLElement): void {
+		const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+		if (!meta) return;
+		let locked = false, original: string | null = null;
+		let timer: number | null = null;
+		const smallEditor = (target: EventTarget | null): boolean => {
+			const el = target as HTMLElement | null;
+			return Boolean(el && root.contains(el) && el.matches?.('textarea,input:not([type="checkbox"])')
+				&& parseFloat(window.getComputedStyle(el).fontSize) < 16);
+		};
+		const restore = () => {
+			if (!locked) return;
+			if (original === null) meta.removeAttribute('content'); else meta.setAttribute('content', original);
+			locked = false;
+		};
+		const enable = (target: EventTarget | null) => {
+			if (!smallEditor(target) || locked) return;
+			original = meta.getAttribute('content'); locked = true;
+			const parts = (original ?? 'width=device-width, initial-scale=1').split(',')
+				.map(part => part.trim()).filter(part => part && !/^maximum-scale\s*=/i.test(part));
+			meta.setAttribute('content', [...parts, 'maximum-scale=1'].join(', '));
+		};
+		this.registerDomEvent(root, 'pointerdown', event => enable(event.target));
+		this.registerDomEvent(root, 'touchstart', event => enable(event.target), { passive: true });
+		this.registerDomEvent(root, 'focusin', event => { if (smallEditor(event.target)) enable(event.target); else restore(); });
+		const restoreAfterGesture = () => {
+			if (timer !== null) window.clearTimeout(timer);
+			timer = window.setTimeout(() => { timer = null; if (!smallEditor(document.activeElement)) restore(); }, 0);
+		};
+		this.registerDomEvent(root, 'focusout', restoreAfterGesture);
+		// A touch can turn into a scroll without ever focusing the editor.
+		for (const type of ['pointerup', 'pointercancel', 'touchend', 'touchcancel'] as const)
+			this.registerDomEvent(document, type, restoreAfterGesture, { passive: true });
+		this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+			if (this.app.workspace.getActiveViewOfType(ArrangeView) !== this) restore();
+		}));
+		this.register(() => { if (timer !== null) window.clearTimeout(timer); restore(); });
+	}
 	private applyComposerSettings(): void {
 		const state = this.store.state;
 		for (const [name, value] of Object.entries({
-			'list-font': state.listFontSize, 'row-height': Math.max(state.rowHeight, Math.ceil(state.listFontSize * 1.4) + 2, state.listFontSize + 7),
+			'list-font': state.listFontSize, 'row-height': state.rowHeight,
 			'row-icon': state.listFontSize + 2, 'row-slot': state.listFontSize + 2 + state.rowIconGap,
 			'checkbox': state.listFontSize + 5, 'check-gap': Math.round(state.listFontSize * 0.5),
 			'detail-font': state.detailFontSize, 'body-font': state.bodyFontSize, 'date-font': state.dateFontSize,
@@ -916,19 +955,37 @@ export class ArrangeView extends ItemView {
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
 		};
-		const names: Record<keyof typeof ARRANGE_NUMBER_SETTINGS, string> = {
+		const names: Record<keyof typeof ARRANGE_NUMBER_SETTINGS | keyof typeof ARRANGE_FREE_SIZES, string> = {
 			listFontSize: '列表标题字号', rowHeight: '事项行高', gripHeight: '顶部抓取触摸带高度',
 			gripWidth: '可见拖动横条宽度', toolbarHeight: '详情操作栏高度', parentFontSize: '上级导航文字字号',
 			closeThreshold: '向下拖动关闭阈值',
 			detailFontSize: '详情标题字号', bodyFontSize: '详情正文字号', dateFontSize: '日期提示字号（列表与详情共用）',
 			rowIconGap: '列表操作图标间距', detailIconGap: '详情操作图标间距',
 		};
-		for (const key of Object.keys(names) as (keyof typeof names)[]) {
+		for (const key of Object.keys(ARRANGE_FREE_SIZES) as (keyof typeof ARRANGE_FREE_SIZES)[]) {
+			const initial = ARRANGE_FREE_SIZES[key];
+			let input: HTMLInputElement;
+			new Setting(modal.contentEl).setName(names[key]).setDesc(`像素，支持小数和0；不设人为上限。默认 ${initial}。`)
+				.addText(text => {
+					input = text.inputEl;
+					input.type = 'number'; input.min = '0'; input.step = 'any';
+					input.setAttribute('aria-label', names[key]);
+					text.setValue(String(this.store.state[key])).onChange(raw => {
+						const value = Number(raw);
+						const valid = raw.trim() !== '' && Number.isFinite(value) && value >= 0;
+						input.setAttribute('aria-invalid', String(!valid));
+						if (valid) configure({ [key]: value });
+					});
+				})
+				.addButton(button => button.setButtonText('恢复默认').onClick(() => {
+					input.value = String(initial); input.removeAttribute('aria-invalid'); configure({ [key]: initial });
+				}));
+		}
+		for (const key of Object.keys(ARRANGE_NUMBER_SETTINGS) as (keyof typeof ARRANGE_NUMBER_SETTINGS)[]) {
 			const [min, max, initial] = ARRANGE_NUMBER_SETTINGS[key];
 			new Setting(modal.contentEl).setName(names[key])
 				.setDesc(key === 'closeThreshold' ? `松手时剩余高度不大于此比例则关闭；默认 ${initial}%。`
-					: key === 'rowHeight' ? '24～64 像素，默认44。大字号时保留容纳文字与勾选框的最小高度。'
-						: `${min}～${max} 像素，默认 ${initial}。`)
+					: `${min}～${max} 像素，默认 ${initial}。`)
 				.addSlider(slider => slider.setLimits(min, max, 1).setValue(this.store.state[key]).setDynamicTooltip()
 					.onChange(value => configure({ [key]: value })));
 		}

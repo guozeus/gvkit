@@ -99,6 +99,18 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await vault.process(stateFile, source => source.replace('  "detailShadow": 24,\n', '').replace('  "bodyPlaceholder": "记录正文、链接、思路…",\n', ''));
 		await fresh.load(); assert.equal(fresh.state.detailShadow, 24); assert.equal(fresh.state.bodyPlaceholder, '记录正文、链接、思路…');
 		const itemBytes = await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path));
+		const freeSizes = { listFontSize: 17, rowHeight: 44, detailFontSize: 18, bodyFontSize: 16, parentFontSize: 13, dateFontSize: 12 };
+		for (const value of [0, 0.5, 8, 72, 512]) {
+			await store.configure(Object.fromEntries(Object.keys(freeSizes).map(key => [key, value])));
+			await fresh.load();
+			for (const key of Object.keys(freeSizes)) assert.equal(fresh.state[key], value, key + ' must not clamp or round');
+			assert.equal(await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path)), itemBytes);
+			assert.deepEqual(fresh.state.rowActions, ['pin']);
+		}
+		await store.configure(Object.fromEntries(Object.keys(freeSizes).map(key => [key, -1])));
+		await fresh.load();
+		for (const [key, initial] of Object.entries(freeSizes)) assert.equal(fresh.state[key], initial, 'invalid negative size falls back to default');
+		await store.configure(freeSizes);
 		for (const radius of [0, 12, 16, 24, 40]) {
 			await store.configure({ detailShadow: radius }); await fresh.load(); assert.equal(fresh.state.detailShadow, radius);
 		}

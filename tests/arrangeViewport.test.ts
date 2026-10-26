@@ -38,6 +38,10 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	const module: any = { exports: {} };
 	new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(module, module.exports, createRequire(import.meta.url));
 	const window = new Window();
+	const meta = window.document.createElement('meta');
+	meta.name = 'viewport'; meta.content = 'width=device-width, initial-scale=1, maximum-scale=5';
+	window.document.head.append(meta);
+	const originalViewport = meta.content;
 	const saved = new Map(['window', 'document', 'ResizeObserver'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let notifyResize = () => {};
 	let disconnected = false;
@@ -70,18 +74,39 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	} });
 	let view: any;
 	let active = true;
-	let changeLeaf = () => {};
+	const leafCallbacks: (() => void)[] = [];
+	const changeLeaf = () => leafCallbacks.forEach(fn => fn());
 	try {
 		const store = { load: async () => {}, items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [], keyboardGap: 7, submitArrowSize: 24, submitColor: 'classic' } };
 		view = new module.exports.ArrangeView({ contentEl: root, app: {
 			vault: { on: () => ({}) },
-			workspace: { getActiveViewOfType: () => active ? view : null, on: (_name: string, fn: () => void) => { changeLeaf = fn; return {}; } },
+			workspace: { getActiveViewOfType: () => active ? view : null, on: (_name: string, fn: () => void) => { leafCallbacks.push(fn); return {}; } },
 		} }, store);
 		await view.onOpen();
 		assert.equal(root.style.paddingBottom, '344px', 'opening with an already visible keyboard fits immediately');
 		assert.equal(observedTarget, root);
 		assert.equal(observedBox, 'border-box');
 		const input = root.querySelector('textarea')!;
+		input.style.fontSize = '8px';
+		input.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+		assert.match(meta.content, /maximum-scale=1/);
+		assert.ok(!meta.content.includes('maximum-scale=5'));
+		input.dispatchEvent(new window.Event('pointercancel', { bubbles: true }));
+		await new Promise(resolve => window.setTimeout(resolve, 5));
+		assert.equal(meta.content, originalViewport, 'scroll gesture without focus cannot leave a viewport lock');
+		input.dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+		input.focus();
+		const second = root.createEl('textarea');
+		second.style.fontSize = '9px'; second.focus();
+		await new Promise(resolve => window.setTimeout(resolve, 5));
+		assert.match(meta.content, /maximum-scale=1/, 'moving between small editors retains protection');
+		second.blur();
+		await new Promise(resolve => window.setTimeout(resolve, 5));
+		assert.equal(meta.content, originalViewport, 'blur restores exact host viewport');
+		input.focus(); active = false; changeLeaf();
+		assert.equal(meta.content, originalViewport, 'leaving the view restores viewport');
+		active = true; input.blur(); second.remove(); input.style.fontSize = '16px'; input.focus();
+		assert.equal(meta.content, originalViewport, 'normal-size editors do not change host viewport');
 		const submit = root.querySelector<HTMLButtonElement>('.gvkit-arrange-submit')!;
 		assert.equal(submit.hidden, true, 'empty input does not show a submit button');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-keyboard-gap'), '7px');
@@ -154,7 +179,10 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(root.querySelector('textarea'), input);
 		root.style.setProperty('--keyboard-height', '378px'); notifyResize();
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
+		input.style.fontSize = '8px'; input.dispatchEvent(new window.Event('touchstart', { bubbles: true }));
+		assert.match(meta.content, /maximum-scale=1/);
 		await view.onClose(); view.disposers.forEach((fn: () => void) => fn());
+		assert.equal(meta.content, originalViewport, 'unloading restores the original viewport');
 		assert.equal(window.document.querySelector('.gvkit-arrange-keyboard-backdrop'), null);
 		assert.equal(disconnected, true);
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);

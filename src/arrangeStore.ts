@@ -1,6 +1,6 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { ARRANGE_ACTIONS, ARRANGE_NUMBER_SETTINGS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -68,6 +68,10 @@ export class ArrangeStore {
 			for (const key of Object.keys(ARRANGE_NUMBER_SETTINGS) as (keyof typeof ARRANGE_NUMBER_SETTINGS)[]) {
 				const value = fields[key], [min, max] = ARRANGE_NUMBER_SETTINGS[key];
 				if (typeof value === 'number' && Number.isFinite(value)) state[key] = Math.max(min, Math.min(max, Math.round(value)));
+			}
+			for (const key of Object.keys(ARRANGE_FREE_SIZES) as (keyof typeof ARRANGE_FREE_SIZES)[]) {
+				const value = fields[key];
+				if (typeof value === 'number' && Number.isFinite(value) && value >= 0) state[key] = value;
 			}
 			if (typeof fields.rowDividers === 'boolean') state.rowDividers = fields.rowDividers;
 			if (fields.selectionColor === 'blue' || fields.selectionColor === 'purple' || fields.selectionColor === 'gold') state.selectionColor = fields.selectionColor;
