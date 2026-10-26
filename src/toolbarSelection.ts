@@ -33,24 +33,24 @@ export function resolveEditorSelectionRect(
     const to = editor.posToOffset(editor.getCursor('to'));
     if (to <= from) return null;
 
-    if (cm) {
-        // Obsidian's source editor uses CodeMirror 6. Its selection is the
-        // authority; a DOM selection can disappear around checkbox widgets.
-        if (!cm.hasFocus || !container.contains(cm.dom)) return null;
-        const active = cm.state.selection.main;
-        if (active.from !== from || active.to !== to) return null;
-
+    if (cm?.hasFocus && cm.dom && container.contains(cm.dom) && typeof cm.coordsAtPos === 'function') {
+        // Obsidian's editor range is already the selected text. A transient
+        // difference from CM6's internal selection (e.g. task-list widgets)
+        // must not suppress the toolbar.
         const start = cm.coordsAtPos(from, 1);
         const end = cm.coordsAtPos(to, -1);
         if (start && end && Math.abs(start.top - end.top) < 3 && end.right >= start.left) {
             return rangeRect(start, end);
         }
-        // For multiline selections, position near the end/caret rather than
-        // spanning the entire block and obstructing unrelated text.
-        return end ?? start;
+        // Keep the toolbar near the caret for a multiline selection.
+        if (end || start) return end ?? start;
     }
 
-    // The legacy editor has no CM6 view. Preserve the previous DOM fallback.
+    // CM6 may temporarily lack coordinates when Live Preview replaces nodes.
+    // Fall back only to a selection genuinely inside the active editor.
+    if (cm && !cm.hasFocus &&
+        !(typeof document !== 'undefined' && document.activeElement &&
+            container.contains(document.activeElement))) return null;
     const anchor = nativeSelection?.anchorNode;
     if (!nativeSelection || nativeSelection.isCollapsed || !nativeSelection.rangeCount ||
         !anchor || !container.contains(anchor)) return null;

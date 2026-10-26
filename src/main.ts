@@ -573,11 +573,12 @@ export default class GvkitPlugin extends Plugin {
 			this.scheduleToolbarRefresh();
 		});
 
-		this.registerDomEvent(window, 'resize', () => this.hideToolbar());
+		this.registerDomEvent(window, 'resize', () => this.scheduleToolbarRefresh());
 		this.registerDomEvent(window, 'scroll', (event: Event) => {
-			// Narrow panes scroll the toolbar horizontally; that must not dismiss it.
+			// Reposition an existing selection after the editor scrolls.
+			// Scrolling the toolbar's own buttons must not dismiss it.
 			if (event.target instanceof Node && this.toolbarEl?.contains(event.target)) return;
-			this.hideToolbar();
+			this.scheduleToolbarRefresh();
 		}, true);
 	}
 

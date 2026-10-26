@@ -60,11 +60,23 @@ test('do not use a stale browser text selection when CM6 selection is active', (
     assert.equal(resolveEditorSelectionRect(editor, container, cm, staleDOMSelection)?.left, 100);
 });
 
-test('do not show toolbar when another input has focus or the selection has changed', () => {
+test('do not show toolbar when another input has focus', () => {
     const noFocus = fixture({ focused: false });
     assert.equal(resolveEditorSelectionRect(noFocus.editor, noFocus.container, noFocus.cm, null), null);
+});
+
+test('task-list widget selection stays visible despite a transient CM6 range mismatch', () => {
     const changed = fixture({ cmFrom: 3 });
-    assert.equal(resolveEditorSelectionRect(changed.editor, changed.container, changed.cm, null), null);
+    assert.equal(resolveEditorSelectionRect(changed.editor, changed.container, changed.cm, null)?.left, 100);
+});
+
+test('use selected DOM text inside the same editor if CM6 has no geometry', () => {
+    const { editor, cm, container } = fixture({ firstRect: null, lastRect: null });
+    const nativeSelection = {
+        anchorNode: cm.dom, isCollapsed: false, rangeCount: 1,
+        getRangeAt: () => ({ getClientRects: () => [rect(40, 60, 82)] }),
+    } as unknown as Selection;
+    assert.equal(resolveEditorSelectionRect(editor, container, cm, nativeSelection)?.left, 40);
 });
 
 test('multi-line selection anchors near visible caret instead of a giant rectangle', () => {
