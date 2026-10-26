@@ -6,13 +6,13 @@ export const DEFAULT_ZHOUYOU_SECRET_REF = 'gvkit-zhouyou-document-center';
 export function checkZhouyouUrl(input: string): { ok: true; value: string } | { ok: false; message: string } {
 	const value = input.trim();
 	if (!value) return { ok: true, value: '' };
-	if (!/^https:\/\/[^/?#]+\/api\/producer-documents\/obsidian-sync$/.test(value)
+	if (!/^https?:\/\/[^/?#]+\/api\/producer-documents\/obsidian-sync$/.test(value)
 		|| value.includes('\\') || value.includes('@')) {
-		return { ok: false, message: '请填写完整 HTTPS 同步接口地址，不含凭据、参数或片段' };
+		return { ok: false, message: '请填写完整 HTTP 或 HTTPS 同步接口地址，不含凭据、参数或片段' };
 	}
 	try {
 		const url = new URL(value);
-		if (!url.hostname || url.protocol !== 'https:' || url.username || url.password
+		if (!url.hostname || !['http:', 'https:'].includes(url.protocol) || url.username || url.password
 			|| url.pathname !== ZHOUYOU_SYNC_PATH || url.hash || url.search || url.href !== value) {
 			return { ok: false, message: '同步地址结构不正确' };
 		}

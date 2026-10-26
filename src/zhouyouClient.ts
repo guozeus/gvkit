@@ -103,12 +103,12 @@ export function newZhouyouOperationId(): string {
 	if (!operationUuid(value)) throw new ZhouyouInputError('crypto-unavailable');
 	return value;
 }
-/** Require an exact, canonical HTTPS URL at the sole supported route. */
+/** Accept HTTP and HTTPS at the supported route, including device-configured LAN endpoints. */
 export function validateZhouyouEndpoint(input: string): string {
 	if (typeof input !== 'string' || !input || input !== input.trim()) throw new ZhouyouInputError('invalid-endpoint');
 	let url: URL;
 	try { url = new URL(input); } catch { throw new ZhouyouInputError('invalid-endpoint'); }
-	if (url.protocol !== 'https:' || !url.hostname || url.username || url.password
+	if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password
 		|| url.search || url.hash || url.pathname !== ZHOUYOU_API_PATH || url.href !== input)
 		throw new ZhouyouInputError('invalid-endpoint');
 	return url.href;

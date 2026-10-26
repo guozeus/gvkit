@@ -1,9 +1,9 @@
-import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, SecretComponent, Setting } from 'obsidian';
+import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import { requiresLargeBackfillConfirmation } from './fileIdCore';
 import { FileIdManager } from './fileIds';
 import { SafeMoveManager } from './safeMove';
 import { SAFE_MOVE_PLAN_PATH } from './safeMoveCore';
-import { PublishSettings, checkZhouyouUrl } from './publishSettings';
+import { PublishSettings, checkZhouyouUrl, DEFAULT_ZHOUYOU_SECRET_REF } from './publishSettings';
 import { DeviceZhouyouSecret, guardIosSettingsInputs } from './publishSecretSettings';
 
 class LargeBackfillConfirmModal extends Modal {
@@ -224,91 +224,71 @@ export class GvkitSettingTab extends PluginSettingTab {
 	private renderZhouyou(prefs: PublishSettings): void {
 		const root = this.containerEl.createDiv({ cls: 'gvkit-zhouyou-settings' });
 		root.createEl('h2', { text: '宙游文档中心' });
-		root.createEl('p', { text: '设置完成不代表已连接公司服务器；每台设备须本人分别填写 Key。' });
 		let live = true;
-		let latestUrlChoice = 0;
 		const local = new DeviceZhouyouSecret({
 			secretStorage: this.app.secretStorage,
 			loadLocalStorage: key => this.app.loadLocalStorage(key),
 			saveLocalStorage: (key, value) => this.app.saveLocalStorage(key, value),
 		}, () => prefs.getZhouyouSecretReference());
 		const releaseViewport = guardIosSettingsInputs(root, Platform.isIosApp);
-		this.cleanPublish = () => { live = false; releaseViewport(); };
+		let urlInput: TextComponent;
+		let keyInput: TextComponent;
+		this.cleanPublish = () => { live = false; keyInput?.setValue(''); releaseViewport(); };
 
-		new Setting(root).setName('完整同步地址')
-			.setDesc('必须是公司提供的 HTTPS 地址，以 /api/producer-documents/obsidian-sync 结尾，不含查询或片段。')
+		new Setting(root).setName('地址').setDesc('支持 HTTP 和 HTTPS。')
 			.addText(text => {
-				text.setValue(prefs.getZhouyouUrl()).setPlaceholder('https://公司接口域名/api/producer-documents/obsidian-sync');
+				urlInput = text;
+				text.setValue(prefs.getZhouyouUrl()).setPlaceholder('填写完整同步接口地址');
 				text.inputEl.setAttribute('autocomplete', 'off');
-				text.inputEl.addEventListener('change', () => {
-					if (!live) return;
-					const check = checkZhouyouUrl(text.getValue());
+				text.inputEl.setAttribute('autocapitalize', 'off');
+				text.inputEl.spellcheck = false;
+			})
+			.addButton(button => {
+				button.setButtonText('保存').onClick(async () => {
+					if (!live || button.buttonEl.disabled) return;
+					const check = checkZhouyouUrl(urlInput.getValue());
 					if (!check.ok) { new Notice(check.message); return; }
-					const myRevision = ++latestUrlChoice;
-					void prefs.setZhouyouUrl(check.value).then(() => {
-						if (live && latestUrlChoice === myRevision) text.setValue(prefs.getZhouyouUrl());
-					}).catch(() => {
-						if (!live || latestUrlChoice !== myRevision) return;
-						text.setValue(prefs.getZhouyouUrl());
-						new Notice('同步地址未能保存，请重新尝试');
-					});
+					button.setDisabled(true);
+					urlInput.setDisabled(true);
+					try {
+						await prefs.setZhouyouUrl(check.value);
+						if (live) { urlInput.setValue(check.value); new Notice('地址已保存'); }
+					} catch {
+						if (live) new Notice('地址未能保存，请重试');
+					} finally {
+						if (live) { button.setDisabled(false); urlInput.setDisabled(false); }
+					}
 				});
+				button.buttonEl.style.touchAction = 'manipulation';
 			});
 
-		const stateEl = root.createEl('p', { text: '' });
-		stateEl.setAttribute('role', 'status');
-		const update = () => {
-			if (!live) return;
-			const messages = {
-				unsupported: '当前设备不支持官方本机机密存储，已禁用 Key 配置。',
-				unconfigured: '未配置：请在原生机密控件新建并选择本设备的 Key。',
-				reconfigure: '需重新配置：此设备所选引用没有有效 Key。',
-				configured: '已配置（仅本设备），尚未验证公司连接与权限。',
-				stopped: '本设备已停止使用 Key；底层机密未删除，其他设备不受影响。',
-			};
-			stateEl.setText(messages[local.status()]);
-		};
-		update();
-		if (!local.supported() || typeof SecretComponent !== 'function') {
-			new Setting(root).setName('Key 配置').setDesc('官方安全机密控件不可用，禁止改用普通同步文本设置。');
-			return;
-		}
-		new Setting(root).setName('新建、选择或更换本机 Key')
-			.setDesc('官方机密控件负责填写和遮蔽。这里只处理引用名称，绝不显示 Key 原值。')
-			.addComponent(el => new SecretComponent(this.app, el)
-				.setValue(local.reference())
-				.onChange(ref => {
-					if (!live) return;
+		const supported = local.supported();
+		new Setting(root).setName('Key')
+			.setDesc(supported ? '仅保存在本设备。' : '当前 Obsidian 不支持机密存储，请更新后保存 Key。')
+			.addText(text => {
+				keyInput = text;
+				text.inputEl.type = 'password';
+				text.inputEl.setAttribute('autocomplete', 'new-password');
+				text.inputEl.setAttribute('autocapitalize', 'off');
+				text.inputEl.spellcheck = false;
+				text.setPlaceholder(local.status() === 'configured' ? '已保存；输入新 Key 可替换' : '填写 Key');
+				text.setDisabled(!supported);
+			})
+			.addButton(button => {
+				button.setButtonText('保存').setDisabled(!supported).onClick(() => {
+					if (!live || !supported) return;
+					const key = keyInput.getValue().trim();
+					if (!key) { new Notice('请先填写 Key'); return; }
 					try {
-						if (ref) local.select(ref);
-						else local.stop();
-						update();
-					} catch {
-						new Notice('本机机密引用未能保存，请重新选择');
-					}
-				}));
-		new Setting(root).setName('本设备 Key 状态')
-			.setDesc('清除仅停止 GVKit 在本机使用，不会改动共享引用、图标偏好、业务绑定或记录历史。')
-			.addButton(b => {
-				b.setButtonText('刷新状态').onClick(update);
-				b.buttonEl.style.touchAction = 'manipulation';
-			})
-			.addButton(b => {
-				b.setButtonText('重新启用').setCta().onClick(() => {
-					if (!live) return;
-					try { local.enable(); update(); }
-					catch { new Notice('本机 Key 无法启用，请检查安全机密设置'); }
+						// Save to the dedicated slot, preserving any previously selected shared secret.
+						this.app.secretStorage.setSecret(DEFAULT_ZHOUYOU_SECRET_REF, key);
+						local.select(DEFAULT_ZHOUYOU_SECRET_REF);
+						if (local.runtimeCredential() !== key) throw new Error('Key readback failed');
+						keyInput.setValue('').setPlaceholder('已保存；输入新 Key 可替换');
+						new Notice('Key 已保存');
+					} catch { new Notice('Key 未能保存，请重试'); }
 				});
-				b.buttonEl.style.touchAction = 'manipulation';
-			})
-			.addButton(b => {
-				b.setButtonText('停止本机使用').onClick(() => {
-					if (!live) return;
-					try { local.stop(); update(); }
-					catch { new Notice('本机 Key 未能停止使用，请检查设备设置'); }
-				});
-				b.buttonEl.style.touchAction = 'manipulation';
+				button.buttonEl.style.touchAction = 'manipulation';
 			});
-		root.createEl('p', { text: '停止使用不会物理删除 Key。若需要真正删除，请到本机 Obsidian 原生机密管理中操作；此插件不调用不存在的删除 API。' });
 	}
 }

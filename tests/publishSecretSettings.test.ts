@@ -20,13 +20,16 @@ function mock(values = new Map<string, string>(), local: Record<string, unknown>
 	return { port, values, local };
 }
 
-test('endpoint accepts only a complete credential-free HTTPS target', () => {
+test('endpoint accepts complete credential-free HTTP and HTTPS targets', () => {
+	assert.deepEqual(checkZhouyouUrl(' http://192.0.2.5:18769/api/producer-documents/obsidian-sync '), {
+		ok: true, value: 'http://192.0.2.5:18769/api/producer-documents/obsidian-sync',
+	});
 	assert.deepEqual(checkZhouyouUrl(' https://example.test/api/producer-documents/obsidian-sync '), {
 		ok: true, value: 'https://example.test/api/producer-documents/obsidian-sync',
 	});
 	assert.deepEqual(checkZhouyouUrl(''), { ok: true, value: '' });
 	const bad = [
-		'http://example.test/api/producer-documents/obsidian-sync',
+		'ftp://example.test/api/producer-documents/obsidian-sync',
 		'https://user:pwd@example.test/api/producer-documents/obsidian-sync',
 		'https://example.test/api/producer-documents/obsidian-sync?key=secret',
 		'https://example.test/api/producer-documents/obsidian-sync?',

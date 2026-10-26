@@ -1,6 +1,6 @@
 {
   "name": "gvkit",
-  "version": "0.6.26",
+  "version": "0.6.27",
   "description": "Lightweight Obsidian toolkit for fast formatting and stable Markdown file identity.",
   "main": "main.js",
   "type": "module",

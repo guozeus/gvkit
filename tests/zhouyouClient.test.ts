@@ -75,10 +75,11 @@ test('operation UUID is crypto v4 and never silently used to change source ID', 
 	const uuid = newZhouyouOperationId();
 	assert.match(uuid, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
 });
-test('only exact canonical HTTPS API endpoint accepted; no redirect policy claimed', () => {
+test('HTTP and HTTPS API endpoints accepted; no redirect policy claimed', () => {
 	assert.equal(validateZhouyouEndpoint(URL_OK), URL_OK);
+	assert.equal(validateZhouyouEndpoint('http://192.0.2.5:18769' + ZHOUYOU_API_PATH), 'http://192.0.2.5:18769' + ZHOUYOU_API_PATH);
 	for (const invalid of [
-		'', 'http://doc.example.test' + ZHOUYOU_API_PATH,
+		'', 'ftp://doc.example.test' + ZHOUYOU_API_PATH,
 		'https://u:p@doc.example.test' + ZHOUYOU_API_PATH,
 		URL_OK + '?key=x', URL_OK + '#fragment', URL_OK + '/', URL_OK.replace('sync', 'other'),
 		URL_OK.replace('https:', 'https: '), URL_OK.replace('doc.', 'DOC.'),
