@@ -46,6 +46,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(store.state.submitColor, 'classic');
 		assert.equal(store.state.detailShadow, 24);
 		assert.equal(store.state.bodyPlaceholder, '记录正文、链接、思路…');
+		assert.equal(store.state.dateHintColor, 'vivid', 'existing settings without a color use the new vivid default');
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);
 		const child2 = await store.create('第二项', parent);
@@ -111,6 +112,15 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await fresh.load();
 		for (const [key, initial] of Object.entries(freeSizes)) assert.equal(fresh.state[key], initial, 'invalid negative size falls back to default');
 		await store.configure(freeSizes);
+		for (const color of ['vivid', 'electric', 'cyan']) {
+			await store.configure({ dateHintColor: color }); await fresh.load();
+			assert.equal(fresh.state.dateHintColor, color);
+			assert.equal(fresh.state.submitColor, store.state.submitColor);
+			assert.equal(fresh.state.selectionColor, store.state.selectionColor);
+			assert.equal(await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path)), itemBytes);
+		}
+		await vault.process(stateFile, source => source.replace('"dateHintColor": "cyan"', '"dateHintColor": "unknown"'));
+		await fresh.load(); assert.equal(fresh.state.dateHintColor, 'vivid');
 		for (const radius of [0, 12, 16, 24, 40]) {
 			await store.configure({ detailShadow: radius }); await fresh.load(); assert.equal(fresh.state.detailShadow, radius);
 		}

@@ -142,7 +142,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-row.is-pinned { box-shadow: inset 3px 0 var(--text-muted); }
 .gvkit-arrange .gvkit-arrange-title { display: block; flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: clip; text-align: left; padding: 0; height: 100%; line-height: 1.4; border: 0; box-shadow: none; background: transparent; font-size: var(--gvkit-arrange-list-font, 17px); font-weight: 400; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: grab; }
 .gvkit-arrange-title.is-overdue { color: var(--color-red); }
-.gvkit-arrange-row-date { flex: 0 0 auto; max-width: 27%; margin: 0 4px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--color-blue); font-size: var(--gvkit-arrange-date-font, 12px); }
+.gvkit-arrange-row-date { flex: 0 0 auto; max-width: 27%; margin: 0 4px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); }
 .gvkit-arrange-row-date.is-overdue { color: var(--color-red); }
 .gvkit-arrange-actions { display: flex; flex: 0 1 auto; min-width: 0; max-width: 48%; overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-actions::-webkit-scrollbar { display: none; }
@@ -170,7 +170,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 46%; min-width: 0; overflow: hidden; border-left: 1px solid var(--background-modifier-border); background: var(--background-primary); }
 .gvkit-arrange-detail[hidden] { display: none; }
 .gvkit-arrange-detail-tools { flex: 0 0 var(--gvkit-arrange-toolbar-height, 44px); display: flex; align-items: center; justify-content: flex-end; min-width: 0; padding: 0 8px; }
-.gvkit-arrange-detail-date { flex: 0 1 150px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-blue); font-size: var(--gvkit-arrange-date-font, 12px); }
+.gvkit-arrange-detail-date { flex: 0 1 150px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); }
 .gvkit-arrange-detail-date[hidden] { display: none; }
 .gvkit-arrange-detail-actions { display: flex; flex: 1 1 calc(var(--gvkit-arrange-detail-slot, 27px) * 3); min-width: min(calc(var(--gvkit-arrange-detail-slot, 27px) * 3), max(0px, calc(100% - var(--gvkit-arrange-detail-slot, 27px) * 2 - 54px))); overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-detail-actions > :first-child { margin-left: auto; }
@@ -211,6 +211,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-date-period > input, .gvkit-arrange-date-period > span { flex: 1; min-width: 0; text-align: center; }
 .gvkit-arrange-date-period > input { font-size: 16px; }
 .gvkit-arrange-date-period > span { font-size: 13px; }
+.gvkit-arrange-size-setting .setting-item-control { flex-wrap: wrap; gap: 8px; }
+.gvkit-arrange-size-setting input[type="range"] { flex: 1 0 120px; min-width: 120px; }
+.gvkit-arrange-size-setting input[type="number"] { width: 76px; font-size: 16px; }
 .gvkit-arrange-date-filter[hidden], .gvkit-arrange-search button[hidden] { display: none; }
 .gvkit-arrange-parent-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 0 0 auto; padding: 6px 10px; background: color-mix(in srgb, var(--color-purple) 12%, var(--background-primary)); }
 .gvkit-arrange-parent-picker > span { flex: 1; color: var(--color-purple); font-weight: 600; }

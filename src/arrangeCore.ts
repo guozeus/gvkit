@@ -12,6 +12,7 @@ export interface ArrangeItem {
 export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'] as const;
 export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
+export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
 export interface ArrangeState {
 	order: string[];
 	achievedDays: string[];
@@ -38,6 +39,7 @@ export interface ArrangeState {
 	detailFontSize: number;
 	bodyFontSize: number;
 	dateFontSize: number;
+	dateHintColor: keyof typeof DATE_HINT_COLORS;
 	rowIconGap: number;
 	detailIconGap: number;
 }
@@ -59,7 +61,7 @@ export function defaultArrangeState(): ArrangeState {
 		rowActions: ['parent', 'date', 'top'], detailActions: [...ARRANGE_ACTIONS], showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
 		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue',
-		detailFontSize: 18, bodyFontSize: 16, dateFontSize: 12, rowIconGap: 4, detailIconGap: 8 };
+		detailFontSize: 18, bodyFontSize: 16, dateFontSize: 12, dateHintColor: 'vivid', rowIconGap: 4, detailIconGap: 8 };
 }
 
 /** Missing IDs are new externally created items; stale/completed IDs are not slots. */

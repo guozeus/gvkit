@@ -1,5 +1,5 @@
-import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -320,6 +320,7 @@ export class ArrangeView extends ItemView {
 			'toolbar-height': state.toolbarHeight, 'parent-font': state.parentFontSize,
 		})) this.contentEl.style.setProperty(`--gvkit-arrange-${name}`, `${value}px`);
 		this.contentEl.dataset.rowDividers = String(state.rowDividers);
+		this.contentEl.style.setProperty('--gvkit-arrange-date-color', DATE_HINT_COLORS[state.dateHintColor] ?? DATE_HINT_COLORS.vivid);
 		this.headline.dataset.selectionColor = state.selectionColor;
 		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-size', `${this.store.state.submitArrowSize}px`);
@@ -962,10 +963,41 @@ export class ArrangeView extends ItemView {
 			detailFontSize: '详情标题字号', bodyFontSize: '详情正文字号', dateFontSize: '日期提示字号（列表与详情共用）',
 			rowIconGap: '列表操作图标间距', detailIconGap: '详情操作图标间距',
 		};
-		for (const key of Object.keys(ARRANGE_FREE_SIZES) as (keyof typeof ARRANGE_FREE_SIZES)[]) {
+		// Keep the established settings order; input implementation must not reorder it.
+		for (const settingKey of Object.keys(names) as (keyof typeof names)[]) {
+			if (settingKey in ARRANGE_NUMBER_SETTINGS) {
+				const key = settingKey as keyof typeof ARRANGE_NUMBER_SETTINGS;
+				const [min, max, initial] = ARRANGE_NUMBER_SETTINGS[key];
+				new Setting(modal.contentEl).setName(names[key])
+					.setDesc(key === 'closeThreshold' ? `松手时剩余高度不大于此比例则关闭；默认 ${initial}%。`
+						: `${min}～${max} 像素，默认 ${initial}。`)
+					.addSlider(slider => slider.setLimits(min, max, 1).setValue(this.store.state[key]).setDynamicTooltip()
+						.onChange(value => configure({ [key]: value })));
+				continue;
+			}
+			const key = settingKey as keyof typeof ARRANGE_FREE_SIZES;
 			const initial = ARRANGE_FREE_SIZES[key];
 			let input: HTMLInputElement;
-			new Setting(modal.contentEl).setName(names[key]).setDesc(`像素，支持小数和0；不设人为上限。默认 ${initial}。`)
+			let sizeSlider: SliderComponent;
+			const sliderMax = (value: number) => Math.max(key === 'rowHeight' ? 128 : 64, value);
+			const updateSlider = (value: number) => {
+				sizeSlider.setLimits(0, sliderMax(value), 1);
+				// Opening settings must preserve arbitrary saved fractions.
+				sizeSlider.sliderEl.step = 'any';
+				sizeSlider.setValue(value);
+			};
+			const setting = new Setting(modal.contentEl).setName(names[key])
+				.setDesc(`滑动调节；也可精确输入，范围随数值扩展。支持小数和0，默认 ${initial}。`);
+			setting.settingEl.addClass('gvkit-arrange-size-setting');
+			setting.addSlider(slider => {
+					sizeSlider = slider; updateSlider(this.store.state[key]);
+					slider.sliderEl.setAttribute('aria-label', names[key]);
+					slider.setDynamicTooltip().onChange(value => {
+						// Use familiar whole-pixel drag steps without rounding stored/custom input values.
+						value = Math.min(Number(slider.sliderEl.max), Math.round(value)); slider.setValue(value);
+						input.value = String(value); input.removeAttribute('aria-invalid'); configure({ [key]: value });
+					});
+				})
 				.addText(text => {
 					input = text.inputEl;
 					input.type = 'number'; input.min = '0'; input.step = 'any';
@@ -974,21 +1006,16 @@ export class ArrangeView extends ItemView {
 						const value = Number(raw);
 						const valid = raw.trim() !== '' && Number.isFinite(value) && value >= 0;
 						input.setAttribute('aria-invalid', String(!valid));
-						if (valid) configure({ [key]: value });
+						if (valid) { updateSlider(value); configure({ [key]: value }); }
 					});
 				})
 				.addButton(button => button.setButtonText('恢复默认').onClick(() => {
-					input.value = String(initial); input.removeAttribute('aria-invalid'); configure({ [key]: initial });
+					input.value = String(initial); input.removeAttribute('aria-invalid'); updateSlider(initial); configure({ [key]: initial });
 				}));
 		}
-		for (const key of Object.keys(ARRANGE_NUMBER_SETTINGS) as (keyof typeof ARRANGE_NUMBER_SETTINGS)[]) {
-			const [min, max, initial] = ARRANGE_NUMBER_SETTINGS[key];
-			new Setting(modal.contentEl).setName(names[key])
-				.setDesc(key === 'closeThreshold' ? `松手时剩余高度不大于此比例则关闭；默认 ${initial}%。`
-					: `${min}～${max} 像素，默认 ${initial}。`)
-				.addSlider(slider => slider.setLimits(min, max, 1).setValue(this.store.state[key]).setDynamicTooltip()
-					.onChange(value => configure({ [key]: value })));
-		}
+		new Setting(modal.contentEl).setName('今天与日期提示颜色').setDesc('列表“今天”与详情日期共用；逾期仍为红色。')
+			.addDropdown(dropdown => dropdown.addOptions({ vivid: '鲜亮蓝（默认）', electric: '电光蓝', cyan: '亮青蓝' })
+				.setValue(this.store.state.dateHintColor).onChange(value => configure({ dateHintColor: value as ArrangeState['dateHintColor'] })));
 		new Setting(modal.contentEl).setName('事项行分隔线')
 			.addToggle(toggle => toggle.setValue(this.store.state.rowDividers).onChange(value => configure({ rowDividers: value })));
 		new Setting(modal.contentEl).setName('今天达成筛选选中强调色').setDesc('仅改变选中底板与边框，不改变成就状态和统计。')

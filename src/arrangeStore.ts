@@ -1,6 +1,6 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -75,6 +75,8 @@ export class ArrangeStore {
 			}
 			if (typeof fields.rowDividers === 'boolean') state.rowDividers = fields.rowDividers;
 			if (fields.selectionColor === 'blue' || fields.selectionColor === 'purple' || fields.selectionColor === 'gold') state.selectionColor = fields.selectionColor;
+			if (typeof fields.dateHintColor === 'string' && Object.keys(DATE_HINT_COLORS).includes(fields.dateHintColor))
+				state.dateHintColor = fields.dateHintColor as ArrangeState['dateHintColor'];
 		}
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
