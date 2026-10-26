@@ -2,11 +2,11 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
-## 0.6.17 自御安排（A 阶段试用）
+## 0.6.18 自御安排（A 阶段试用）
 
 在 Obsidian 内随手记录、按父子关系组织，并按唯一扁平顺序从上往下执行。事项和顺序均保存在 Markdown，沿用当前 Vault 的同步。
 
-1. 在 BRAT 更新 `guozeus/gvkit` 到 0.6.17，重新加载插件。新设备可用 BRAT 添加同一公开仓库，无需 GitHub Token。
+1. 在 BRAT 更新 `guozeus/gvkit` 到 0.6.18，重新加载插件。新设备可用 BRAT 添加同一公开仓库，无需 GitHub Token。
 2. 从侧边栏「自御安排」或命令面板「gvkit: 打开自御安排」进入。打开时不自动弹出键盘。
 3. 使用已有的 `安排/待执行`、`安排/已完成`、`settings/gvkit` 目录。插件不会自动创建或改变一级、二级目录；新测试库须自行准备这三个目录。
 4. 未选中时底部输入创建独立事项；点标题查看详情后，同一输入框连续创建其直接下级。收起详情恢复独立事项。完成框只完成本项，子项继续保留。
