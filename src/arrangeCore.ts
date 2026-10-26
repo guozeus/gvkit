@@ -24,6 +24,8 @@ export interface ArrangeState {
 	submitColor: keyof typeof SUBMIT_BLUE_COLORS;
 	detailShadow: number;
 	bodyPlaceholder: string;
+	composerMaxRows: number;
+	bodyMinRows: number;
 	completedStyle: 'background' | 'text';
 	rowActions: RowAction[];
 	detailActions: RowAction[];
@@ -61,6 +63,7 @@ export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
+		composerMaxRows: 6, bodyMinRows: 3,
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'],
 		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,

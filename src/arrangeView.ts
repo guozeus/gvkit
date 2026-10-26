@@ -106,6 +106,7 @@ export class ArrangeView extends ItemView {
 	private today = '';
 	private restoreHeader: (() => void) | null = null;
 	private cancelReorder: (() => void) | null = null;
+	private titleFocusScroll: { input: HTMLTextAreaElement; top: number } | null = null;
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -117,9 +118,13 @@ export class ArrangeView extends ItemView {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass('gvkit-arrange');
+		// Obsidian's mobile swipe recognizer explicitly honors this ancestor flag.
+		root.dataset.ignoreSwipe = 'true';
+		this.register(() => { delete root.dataset.ignoreSwipe; });
 		root.toggleClass('gvkit-arrange-mobile', Platform.isMobileApp);
 		if (Platform.isIosApp) this.guardSmallEditorZoom(root);
 		const header = root.createDiv('gvkit-arrange-header');
+		header.dataset.ignoreSwipe = 'true';
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = () => this.setFilter(this.filter === 'today' ? 'all' : 'today');
 		this.searchButton = iconButton(header, '搜索事项', 'search', () => this.toggleSearch());
@@ -216,6 +221,7 @@ export class ArrangeView extends ItemView {
 			// Span host insets for the input and panel, retaining the list's original inset.
 			composer.style.marginLeft = `-${css.paddingLeft}`;
 			composer.style.marginRight = `-${css.paddingRight}`;
+			this.updateComposer();
 			if (Platform.isMobileApp) {
 				this.area.style.marginLeft = `-${css.paddingLeft}`; this.area.style.marginRight = `-${css.paddingRight}`;
 				this.list.style.paddingLeft = css.paddingLeft; this.list.style.paddingRight = css.paddingRight;
@@ -228,6 +234,11 @@ export class ArrangeView extends ItemView {
 				// Explicit zero must override the host CSS inset after it has resized.
 				root.style.setProperty('padding-bottom', `${overlap}px`, keyboard > 0 ? 'important' : '');
 			} else root.style.removeProperty('padding-bottom');
+			// First keyboard opening can scroll the title using the old panel geometry.
+			// Restore the pre-focus position after fitting, without changing the caret.
+			const anchor = this.titleFocusScroll;
+			if (anchor && document.activeElement === anchor.input && this.editing?.title === anchor.input)
+				this.detailScroll.scrollTop = anchor.top;
 			// Paint behind native keyboard corners, outside the host's clipped pane.
 			// This is decoration only: it never changes keyboard/composer geometry.
 			if (this.keyboardBackdrop) {
@@ -262,6 +273,8 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.titleFocusScroll = null;
+		delete this.contentEl.dataset.ignoreSwipe;
 		this.cancelReorder?.();
 		this.restoreHeader?.();
 		this.contentEl.style.removeProperty('--gvkit-arrange-detail-shadow');
@@ -334,6 +347,8 @@ export class ArrangeView extends ItemView {
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-size', `${this.store.state.submitArrowSize}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-color', SUBMIT_BLUE_COLORS[this.store.state.submitColor]);
 		this.contentEl.style.setProperty('--gvkit-arrange-detail-shadow', this.store.state.detailShadow === 0 ? 'none' : `0 -7px ${this.store.state.detailShadow ?? 24}px #0003`);
+		this.contentEl.style.setProperty('--gvkit-arrange-body-rows', String(state.bodyMinRows));
+		this.updateComposer();
 		const edit = this.editing;
 		if (edit) {
 			for (const input of [edit.title, edit.body]) {
@@ -346,6 +361,17 @@ export class ArrangeView extends ItemView {
 		}
 	}
 	private updateComposer(): void {
+		const css = window.getComputedStyle(this.input);
+		const line = parseFloat(css.lineHeight) || 24;
+		const padding = (parseFloat(css.paddingTop) || 0) + (parseFloat(css.paddingBottom) || 0);
+		const minimum = line + padding;
+		const maximum = line * (this.store.state.composerMaxRows ?? 6) + padding;
+		this.input.style.height = '0';
+		const height = Math.min(maximum, Math.max(minimum, this.input.scrollHeight));
+		this.input.style.height = `${height}px`;
+		this.input.style.overflowY = this.input.scrollHeight > height ? 'auto' : 'hidden';
+		// Keep the mobile panel's visible height while its bottom follows the composer.
+		this.contentEl.style.setProperty('--gvkit-arrange-composer-growth', `${Math.max(0, height - minimum)}px`);
 		const empty = !this.input.value.trim();
 		this.createButton.hidden = empty;
 		this.input.disabled = Boolean(this.choosingParent);
@@ -801,6 +827,18 @@ export class ArrangeView extends ItemView {
 		complete.onclick = () => { complete.checked = Boolean(this.store.items.find(value => value.id === item.id)?.completedAt); void this.toggleComplete(item.id); };
 		const title = titleRow.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
 		title.value = item.title;
+		title.addEventListener('focus', () => {
+			if (Platform.isIosApp && this.titleFocusScroll?.input !== title)
+				this.titleFocusScroll = { input: title, top: this.detailScroll.scrollTop };
+		});
+		// A new selection/scroll or actual editing takes ownership after keyboard fitting.
+		for (const type of ['touchstart', 'pointerdown'] as const)
+			this.detailScroll.addEventListener(type, event => {
+				this.titleFocusScroll = Platform.isIosApp && event.target === title && document.activeElement !== title
+					? { input: title, top: this.detailScroll.scrollTop } : null;
+			}, { passive: true });
+		for (const type of ['touchmove', 'input', 'focusout'] as const)
+			this.detailScroll.addEventListener(type, () => { this.titleFocusScroll = null; }, { passive: true });
 		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
 		error.hidden = true;
 		const preview = this.detailScroll.createDiv({ cls: 'gvkit-arrange-body', attr: { tabindex: '0', 'aria-label': '编辑事项正文' } });
@@ -1039,6 +1077,7 @@ export class ArrangeView extends ItemView {
 	}
 	private settings(): void {
 		const modal = new Modal(this.app); modal.setTitle('安排界面设置');
+		modal.contentEl.dataset.ignoreSwipe = 'true';
 		let rowActions = [...this.store.state.rowActions];
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
@@ -1123,6 +1162,17 @@ export class ArrangeView extends ItemView {
 				.onChange(value => configure({ detailShadow: value })));
 		new Setting(modal.contentEl).setName('空正文提示文字').setDesc('留空则不显示提示；只改变界面，不修改事项正文。')
 			.addText(text => text.setValue(this.store.state.bodyPlaceholder).onChange(value => configure({ bodyPlaceholder: value })));
+		for (const [key, name, initial] of [['composerMaxRows', '事项输入框最多行数', 6], ['bodyMinRows', '附注默认可见行数', 3]] as const) {
+			new Setting(modal.contentEl).setName(name).setDesc(`正整数，默认 ${initial} 行。`)
+				.addText(text => {
+					text.inputEl.type = 'number'; text.inputEl.min = '1'; text.inputEl.step = '1';
+					text.setValue(String(this.store.state[key])).onChange(raw => {
+						const value = Number(raw), valid = Number.isSafeInteger(value) && value > 0;
+						text.inputEl.setAttribute('aria-invalid', String(!valid));
+						if (valid) configure({ [key]: value });
+					});
+				});
+		}
 		new Setting(modal.contentEl).setName('键盘上方留白').setDesc('输入区与键盘之间的留白（像素）；0 为贴紧，默认 7。键盘收起后保留系统安全区。')
 			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.keyboardGap).setDynamicTooltip()
 				.onChange(value => configure({ keyboardGap: value })));

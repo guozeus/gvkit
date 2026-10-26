@@ -88,6 +88,13 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		} }, workspace: { getActiveViewOfType: () => active ? view : null,
 			on: (name: string, callback: () => void) => { events.set(name, callback); return {}; } } };
 		const store = new ArrangeStore(app);
+		assert.equal(store.state.composerMaxRows, 6);
+		assert.equal(store.state.bodyMinRows, 3);
+		await store.configure({ composerMaxRows: 4, bodyMinRows: 2 });
+		const settingsReload = new ArrangeStore(app); await settingsReload.load();
+		assert.equal(settingsReload.state.composerMaxRows, 4);
+		assert.equal(settingsReload.state.bodyMinRows, 2);
+		await store.configure({ composerMaxRows: 6, bodyMinRows: 3 });
 		const parent = await store.create('父事项', null);
 		const first = await store.create('第一项完整标题', parent);
 		const second = await store.create('第二项', null);

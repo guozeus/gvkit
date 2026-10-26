@@ -140,3 +140,7 @@ Build output required by Obsidian:
 - `styles.css`
 
 Do not develop or test unverified builds directly in a production vault. Use an isolated test vault first.
+
+## 0.6.25 自御安排移动布局
+
+自御界面使用宿主的 `data-ignore-swipe` 标记隔离页面横滑，保留事项左滑和文字选择。底部输入随内容增高，默认最多六行，之后内部滚动；移动详情随输入区上移。附注默认留出三行，两项行数均可在现有「安排界面设置」调整。首次标题聚焦的键盘布局调整保留原滚动位置与光标；iPhone 原生手势和键盘效果待真机体验。

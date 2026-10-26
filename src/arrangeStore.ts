@@ -45,6 +45,10 @@ export class ArrangeStore {
 			if (typeof fields.detailShadow === 'number' && Number.isFinite(fields.detailShadow))
 				state.detailShadow = Math.max(0, Math.min(40, Math.round(fields.detailShadow)));
 			if (typeof fields.bodyPlaceholder === 'string') state.bodyPlaceholder = fields.bodyPlaceholder;
+			for (const key of ['composerMaxRows', 'bodyMinRows'] as const) {
+				const value = fields[key];
+				if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) state[key] = value;
+			}
 			if (fields.completedStyle === 'background' || fields.completedStyle === 'text') state.completedStyle = fields.completedStyle;
 			for (const key of ['rowActions', 'detailActions'] as const) {
 				const value = fields[key];

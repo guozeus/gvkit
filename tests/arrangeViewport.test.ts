@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { Window } from 'happy-dom';
+import { defaultArrangeState } from '../src/arrangeCore.ts';
 
 // Tests the production view's event ordering, not physical iOS keyboard layout.
 const shim = `
@@ -77,12 +78,14 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	const leafCallbacks: (() => void)[] = [];
 	const changeLeaf = () => leafCallbacks.forEach(fn => fn());
 	try {
-		const store = { load: async () => {}, facts: () => ({ day: '2026-10-26', x: 0, y: 0, remaining: 0, achieved: false, color: 'blue' }), items: [], state: { timezone: 'Asia/Shanghai', order: [], achievedDays: [], keyboardGap: 7, submitArrowSize: 24, submitColor: 'classic' } };
+		const store = { load: async () => {}, facts: () => ({ day: '2026-10-26', x: 0, y: 0, remaining: 0, achieved: false, color: 'blue' }), items: [] as any[], state: defaultArrangeState() };
 		view = new module.exports.ArrangeView({ contentEl: root, app: {
 			vault: { on: () => ({}) },
 			workspace: { getActiveViewOfType: () => active ? view : null, on: (_name: string, fn: () => void) => { leafCallbacks.push(fn); return {}; } },
 		} }, store);
 		await view.onOpen();
+		assert.equal(root.dataset.ignoreSwipe, 'true');
+		assert.equal(window.document.body.dataset.ignoreSwipe, undefined, 'normal notes must retain host swipes');
 		assert.equal(root.style.paddingBottom, '344px', 'opening with an already visible keyboard fits immediately');
 		assert.equal(observedTarget, root);
 		assert.equal(observedBox, 'border-box');
@@ -181,7 +184,24 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
 		input.style.fontSize = '8px'; input.dispatchEvent(new window.Event('touchstart', { bubbles: true }));
 		assert.match(meta.content, /maximum-scale=1/);
+		// Model the native focus scroll racing the first keyboard/host reflow.
+		store.items.push({ id: 'focus-item', title: '首次标题', body: '正文', parent: null, date: null, completedAt: null, pinned: false });
+		await view.select('focus-item');
+		const title = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-detail-title')!;
+		const scroller = root.querySelector<HTMLElement>('.gvkit-arrange-detail-scroll')!;
+		scroller.scrollTop = 0;
+		title.dispatchEvent(new window.Event('pointerdown', { bubbles: true }));
+		scroller.scrollTop = 120; // Native first-focus scroll used the pre-keyboard panel.
+		title.focus(); title.setSelectionRange(2, 2);
+		notifyResize();
+		assert.equal(scroller.scrollTop, 0, 'first fit restores the position captured before focus');
+		assert.equal(title.selectionStart, 2, 'native caret placement survives');
+		title.dispatchEvent(new window.Event('touchmove', { bubbles: true })); scroller.scrollTop = 60;
+		notifyResize();
+		assert.equal(scroller.scrollTop, 60, 'user selection/scroll owns position after first focus');
+		title.blur(); input.focus();
 		await view.onClose(); view.disposers.forEach((fn: () => void) => fn());
+		assert.equal(root.dataset.ignoreSwipe, undefined, 'closing restores host behavior');
 		assert.equal(meta.content, originalViewport, 'unloading restores the original viewport');
 		assert.equal(window.document.querySelector('.gvkit-arrange-keyboard-backdrop'), null);
 		assert.equal(disconnected, true);
