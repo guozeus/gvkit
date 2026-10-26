@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 // Production Store bundled against a small disk-backed Vault adapter. Every
 // assertion below reads real temporary Markdown bytes; no production Vault is used.
 const shim = `
-export class TFile { constructor(path) { this.path=path; this.name=path.split('/').pop(); this.basename=this.name.slice(0,-3); this.extension='md'; } }
+export class TFile { constructor(path) { this.path=path; this.name=path.split('/').pop(); this.basename=this.name.slice(0,-3); this.extension='md'; this.stat={mtime:Date.now()}; } }
 export class TFolder {}
 export function getFrontMatterInfo(s) { const end=s.indexOf('\\n---',4); return s.startsWith('---\\n') && end>=0 ? {exists:true,frontmatter:s.slice(4,end),contentStart:end+5} : {exists:false,frontmatter:'',contentStart:0}; }
 export const parseYaml = JSON.parse;
@@ -26,10 +26,11 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		} }] });
 		const { ArrangeStore, TFile, TFolder } = await import(pathToFileURL(join(root, 'store.mjs')).href);
 		const entries = new Map<string, any>();
-		for (const path of ['安排/待执行', '安排/已完成', 'settings/gvkit']) { entries.set(path, new TFolder()); await mkdir(join(root, path), { recursive: true }); }
+		for (const path of ['安排/待执行', '安排/已完成', '安排/历史', 'settings/gvkit']) { entries.set(path, new TFolder()); await mkdir(join(root, path), { recursive: true }); }
 		const vault = {
 			getMarkdownFiles: () => [...entries.values()].filter(value => value instanceof TFile),
 			getAbstractFileByPath: (path: string) => entries.get(path) ?? null,
+			createFolder: async (path: string) => { await mkdir(join(root, path)); entries.set(path, new TFolder()); },
 			read: (file: any) => readFile(join(root, file.path), 'utf8'),
 			create: async (path: string, text: string) => { await writeFile(join(root, path), text, { flag: 'wx' }); const file = new TFile(path); entries.set(path, file); return file; },
 			process: async (file: any, change: (source: string) => string) => { const text = change(await vault.read(file)); await writeFile(join(root, file.path), text); return text; },
@@ -162,5 +163,77 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(store.state.order.indexOf(protectedId), protectedPosition, 'immediate undo preserves the new protected slot');
 		await fresh.load();
 		assert.deepEqual(fresh.state.order, store.state.order, 'completion and undo order survive reopening');
+		// New settings retain existing independently configured quick actions across reopening.
+		for (const swipeAction of ['archive', 'none', 'date']) {
+			await store.configure({ swipeAction, pullDownClose: false, rowActions: ['pin', 'archive'], detailActions: ['date'] });
+			await fresh.load(); assert.equal(fresh.state.swipeAction, swipeAction); assert.equal(fresh.state.pullDownClose, false);
+			assert.deepEqual(fresh.state.rowActions, ['pin', 'archive']); assert.deepEqual(fresh.state.detailActions, ['date']);
+		}
+		await store.configure({ timezone: 'Pacific/Kiritimati' });
+		const day = store.facts().day, month = `安排/历史/${day.slice(0, 4)}/${day.slice(5, 7)}`;
+		const archivedParent = await store.create('待归档父事项', null);
+		const activeChild = await store.create('保留子事项', archivedParent);
+		await store.edit(archivedParent, '父原标题', '## 原正文\n[[原链接]]\n', null);
+		await store.setDate(archivedParent, day);
+		const before = store.facts();
+		const parentFile = entries.get(store.items.find((x: any) => x.id === archivedParent).path);
+		const original = await vault.read(parentFile);
+		await store.archive(archivedParent);
+		assert.equal(parentFile.path, `${month}/${parentFile.name}`);
+		assert.equal(await vault.read(parentFile), original, 'archive moves the original bytes without new completion facts');
+		assert.ok(!store.items.some((x: any) => x.id === archivedParent)); assert.ok(!store.state.order.includes(archivedParent));
+		assert.equal(store.facts().x, before.x); assert.equal(store.facts().y, before.y - 1); assert.equal(store.facts().remaining, before.remaining - 1);
+		await store.edit(activeChild, '归档父项后仍可编辑', '子正文', archivedParent);
+		await store.setParent(activeChild, archivedParent); // unchanged original reference
+		await store.move(activeChild); await store.togglePin(activeChild); await store.togglePin(activeChild);
+		const grandchild = await store.create('新增下级', activeChild);
+		await store.complete(activeChild, true); await store.complete(activeChild, false);
+		assert.equal(store.items.find((x: any) => x.id === grandchild).parent, activeChild);
+		await store.setParent(activeChild, null); await store.setParent(activeChild, child1);
+		const completed = await store.create('今天完成后归档', null);
+		await store.setDate(completed, day); await store.complete(completed, true);
+		const completedFile = entries.get(store.items.find((x: any) => x.id === completed).path);
+		const completedBytes = await vault.read(completedFile), count = store.facts().x;
+		// Real metadata indexing is asynchronous; an existing but stale cache is not completion truth.
+		(app as any).metadataCache = { getFileCache: (file: any) => file === completedFile ? { frontmatter: { gvkit_arrange: true, completed_at: null } } : undefined };
+		await store.archive(completed); await fresh.load();
+		assert.equal(await vault.read(completedFile), completedBytes);
+		assert.equal(fresh.facts().x, count, 'today completion survives archive and new Store');
+		assert.ok(!fresh.items.some((x: any) => x.id === completed));
+		const collision = await store.create('同名冲突', null);
+		const collisionFile = entries.get(store.items.find((x: any) => x.id === collision).path);
+		const conflictPath = `${month}/${collisionFile.name}`;
+		await vault.create(conflictPath, '# 已有同名文件，不覆盖');
+		await assert.rejects(store.archive(collision), /同名文件/);
+		assert.ok(collisionFile.path.startsWith('安排/待执行/'));
+		assert.equal(await vault.read(entries.get(conflictPath)), '# 已有同名文件，不覆盖');
+		// Undo then archive must not let an old completed cache invent a completion either.
+		const undone = await store.create('撤销后归档', null);
+		await store.complete(undone, true);
+		const undoneAt = store.items.find((x: any) => x.id === undone).completedAt;
+		await store.complete(undone, false);
+		const undoneFile = entries.get(store.items.find((x: any) => x.id === undone).path);
+		(app as any).metadataCache = { getFileCache: (file: any) => file === undoneFile ? { frontmatter: { gvkit_arrange: true, completed_at: undoneAt } } : undefined };
+		await store.archive(undone); await fresh.load(); assert.equal(fresh.facts().x, count);
+		// Old history has no cache: not a single body read, including old files in this month.
+		await mkdir(join(root, '安排/历史/1999/01'), { recursive: true });
+		for (let i = 0; i < 80; i++) {
+			const old = await vault.create(`安排/历史/1999/01/old-${i}.md`, 'not parsed'); old.stat.mtime = 915148800000;
+		}
+		const cache = new Map();
+		for (const file of vault.getMarkdownFiles().filter((f: any) => f.path.startsWith(month))) {
+			const source = await vault.read(file);
+			cache.set(file.path, { frontmatter: source.startsWith('---') ? JSON.parse(source.slice(4, source.indexOf('\n---', 4))) : {} });
+		}
+		(app as any).metadataCache = { getFileCache: (file: any) => cache.get(file.path) };
+		const stable = await vault.create(`${month}/stable.md`, '# old cached note');
+		stable.stat.mtime = Date.now() - 86400000; cache.set(stable.path, { frontmatter: {} });
+		const read = vault.read, reads: string[] = [];
+		vault.read = file => { reads.push(file.path); return read(file); };
+		await fresh.load();
+		assert.equal(fresh.facts().x, count);
+		assert.ok(reads.every(path => !path.startsWith('安排/历史/1999/') && path !== stable.path), 'old history bodies are not part of daily active load');
+		assert.ok(reads.includes(completedFile.path), 'today-modified history reads real completion facts while its metadata can lag');
+		assert.ok(fresh.items.every((x: any) => !x.path.startsWith('安排/历史/')));
 	} finally { await rm(root, { recursive: true, force: true }); }
 });

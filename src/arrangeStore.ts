@@ -1,10 +1,11 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
 const DONE = '安排/已完成';
+const HISTORY = '安排/历史';
 
 function documentParts(source: string): { fields: Record<string, unknown>; body: string } {
 	const info = getFrontMatterInfo(source);
@@ -19,26 +20,11 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 export class ArrangeStore {
 	items: ArrangeItem[] = [];
 	state = defaultArrangeState();
+	private archivedCompletions: string[] = [];
 	private queue: Promise<unknown> = Promise.resolve();
 	constructor(private app: App) {}
 
 	async load(): Promise<void> {
-		const items: ArrangeItem[] = [];
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			if (!file.path.startsWith('安排/')) continue;
-			const source = await this.app.vault.read(file);
-			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
-			const { fields, body } = documentParts(source);
-			if (fields.gvkit_arrange !== true) continue;
-			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
-			if (items.some(item => item.id === fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
-			items.push({ id: fields.gvid, path: file.path,
-				title: typeof fields.title === 'string' ? fields.title : file.basename, body,
-				parent: typeof fields.parent === 'string' ? fields.parent : null,
-				date: typeof fields.date === 'string' ? fields.date : null,
-				completedAt: typeof fields.completed_at === 'string' ? fields.completed_at : null,
-				pinned: fields.pinned === true });
-		}
 		let state = defaultArrangeState();
 		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
 		if (file instanceof TFile) {
@@ -65,6 +51,9 @@ export class ArrangeStore {
 				if (strings(value)) state[key] = value.filter((a): a is ArrangeState['rowActions'][number] => (ARRANGE_ACTIONS as readonly string[]).includes(a));
 			}
 			if (typeof fields.showCompletedChildren === 'boolean') state.showCompletedChildren = fields.showCompletedChildren;
+			if (fields.swipeAction === 'none' || (ARRANGE_ACTIONS as readonly unknown[]).includes(fields.swipeAction))
+				state.swipeAction = fields.swipeAction as ArrangeState['swipeAction'];
+			if (typeof fields.pullDownClose === 'boolean') state.pullDownClose = fields.pullDownClose;
 			for (const key of Object.keys(ARRANGE_NUMBER_SETTINGS) as (keyof typeof ARRANGE_NUMBER_SETTINGS)[]) {
 				const value = fields[key], [min, max] = ARRANGE_NUMBER_SETTINGS[key];
 				if (typeof value === 'number' && Number.isFinite(value)) state[key] = Math.max(min, Math.min(max, Math.round(value)));
@@ -78,10 +67,44 @@ export class ArrangeStore {
 			if (typeof fields.dateHintColor === 'string' && Object.keys(DATE_HINT_COLORS).includes(fields.dateHintColor))
 				state.dateHintColor = fields.dateHintColor as ArrangeState['dateHintColor'];
 		}
+		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
+		const today = dayKey(new Date(), state.timezone);
+		const currentMonth = `${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`;
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (file.path.startsWith(`${HISTORY}/`)) {
+				// The index may lag a just-completed/undone note. Today's modified
+				// files need their real fields; mtime selects reads, never counts completions.
+				let fields = this.app.metadataCache?.getFileCache(file)?.frontmatter;
+				const changedToday = file.stat && dayKey(new Date(file.stat.mtime), state.timezone) === today;
+				if (changedToday || (!fields && file.path.startsWith(currentMonth))) {
+					const source = await this.app.vault.read(file);
+					fields = getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange') ? documentParts(source).fields : undefined;
+				}
+				const completed = fields?.completed_at;
+				if (fields?.gvkit_arrange === true && typeof completed === 'string' && Number.isFinite(Date.parse(completed))
+					&& dayKey(new Date(completed), state.timezone) === today) archivedCompletions.push(completed);
+				continue;
+			}
+			if (!file.path.startsWith(`${TODO}/`) && !file.path.startsWith(`${DONE}/`)) continue;
+			const source = await this.app.vault.read(file);
+			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
+			const { fields, body } = documentParts(source);
+			if (fields.gvkit_arrange !== true) continue;
+			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
+			if (items.some(item => item.id === fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
+			items.push({ id: fields.gvid, path: file.path,
+				title: typeof fields.title === 'string' ? fields.title : file.basename, body,
+				parent: typeof fields.parent === 'string' ? fields.parent : null,
+				date: typeof fields.date === 'string' ? fields.date : null,
+				completedAt: typeof fields.completed_at === 'string' ? fields.completed_at : null,
+				pinned: fields.pinned === true });
+		}
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
 		this.state = state;
+		this.archivedCompletions = archivedCompletions;
 	}
+	facts() { return todayFacts(this.items, this.state, new Date(), this.archivedCompletions); }
 
 	private serial<T>(action: () => Promise<T>): Promise<T> {
 		const next = this.queue.then(async () => { await this.load(); return action(); });
@@ -162,6 +185,24 @@ export class ArrangeStore {
 	}
 	setDate(id: string, date: string | null): Promise<void> {
 		return this.serial(async () => { await this.patch(id, { date }); await this.load(); });
+	}
+	archive(id: string): Promise<void> {
+		return this.serial(async () => {
+			const file = this.file(id);
+			const day = dayKey(new Date(), this.state.timezone);
+			const year = `${HISTORY}/${day.slice(0, 4)}`, month = `${year}/${day.slice(5, 7)}`;
+			const destination = `${month}/${file.name}`;
+			if (this.app.vault.getAbstractFileByPath(destination)) throw Error('历史目录已有同名文件，事项未归档');
+			await this.requireFolder(HISTORY);
+			for (const path of [year, month]) {
+				if (!this.app.vault.getAbstractFileByPath(path)) await this.app.vault.createFolder(path);
+				await this.requireFolder(path);
+			}
+			// A move preserves the original Markdown and every completion fact.
+			await this.app.fileManager.renameFile(file, destination);
+			await this.load();
+			await this.saveState();
+		});
 	}
 	togglePin(id: string): Promise<void> {
 		return this.serial(async () => {

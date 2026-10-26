@@ -9,7 +9,7 @@ export interface ArrangeItem {
 	pinned: boolean;
 }
 
-export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'] as const;
+export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown', 'archive'] as const;
 export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
@@ -26,6 +26,8 @@ export interface ArrangeState {
 	completedStyle: 'background' | 'text';
 	rowActions: RowAction[];
 	detailActions: RowAction[];
+	swipeAction: RowAction | 'none';
+	pullDownClose: boolean;
 	showCompletedChildren: boolean;
 	listFontSize: number;
 	rowHeight: number;
@@ -58,7 +60,8 @@ export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
-		rowActions: ['parent', 'date', 'top'], detailActions: [...ARRANGE_ACTIONS], showCompletedChildren: true,
+		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'],
+		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
 		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue',
 		detailFontSize: 18, bodyFontSize: 16, dateFontSize: 12, dateHintColor: 'vivid', rowIconGap: 4, detailIconGap: 8 };
@@ -101,7 +104,9 @@ export function validParent(items: ArrangeItem[], id: string, parent: string | n
 		if (seen.has(next)) return false;
 		seen.add(next);
 		const item = items.find(value => value.id === next);
-		if (!item) return false;
+		// Keep an existing reference to an archived parent; new choices must be active.
+		// An active parent's own archived ancestor does not invalidate that choice.
+		if (!item) return next !== parent || items.find(value => value.id === id)?.parent === parent;
 		next = item.parent;
 	}
 	return true;
@@ -169,10 +174,11 @@ export function rowDateLabel(item: ArrangeItem, today: string): string {
 	return `${days}天前`;
 }
 
-export function todayFacts(items: ArrangeItem[], state: ArrangeState, now = new Date()) {
+export function todayFacts(items: ArrangeItem[], state: ArrangeState, now = new Date(), archivedCompletions: readonly string[] = []) {
 	const day = dayKey(now, state.timezone);
 	const due = items.filter(item => item.date === day);
-	const x = items.filter(item => item.completedAt && dayKey(new Date(item.completedAt), state.timezone) === day).length;
+	const x = items.filter(item => item.completedAt && dayKey(new Date(item.completedAt), state.timezone) === day).length
+		+ archivedCompletions.filter(value => dayKey(new Date(value), state.timezone) === day).length;
 	const remaining = due.filter(item => !item.completedAt).length;
 	const achieved = state.achievedDays.includes(day);
 	return { day, x, y: due.length, remaining, achieved,

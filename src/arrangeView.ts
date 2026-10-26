@@ -7,6 +7,7 @@ const actions: Record<RowAction, { title: string; icon: string }> = {
 	parent: { title: '查看上级', icon: 'corner-left-up' }, date: { title: '设置日期', icon: 'calendar' },
 	top: { title: '置顶', icon: 'arrow-up-to-line' }, pin: { title: '钉住位置', icon: 'pin' },
 	changeParent: { title: '修改上级', icon: 'list-tree' }, markdown: { title: '打开 Markdown', icon: 'file-text' },
+	archive: { title: '归档', icon: 'archive' },
 };
 function iconButton(parent: HTMLElement, label: string, icon: string, action: (event: MouseEvent) => void): HTMLButtonElement {
 	const button = parent.createEl('button', { cls: 'gvkit-arrange-icon', attr: { type: 'button', 'aria-label': label, title: label } });
@@ -194,6 +195,9 @@ export class ArrangeView extends ItemView {
 				if (file.path.startsWith('安排/') || file.path === ARRANGE_STATE_PATH) refresh();
 			}));
 		}
+		if (this.app.metadataCache) this.registerEvent(this.app.metadataCache.on('changed', file => {
+			if (file.path.startsWith('安排/历史/')) refresh();
+		}));
 		this.registerInterval(window.setInterval(() => this.paintLists(), 60_000));
 		this.registerDomEvent(document, 'visibilitychange', () => { if (document.hidden) void this.saveEdit(); else void this.reload(); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
@@ -358,7 +362,7 @@ export class ArrangeView extends ItemView {
 	private paintLists(): void {
 		if (!this.headline || this.closed) return;
 		this.cancelReorder?.();
-		const facts = todayFacts(this.store.items, this.store.state);
+		const facts = this.store.facts();
 		this.today = facts.day;
 		this.headline.empty();
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
@@ -524,6 +528,8 @@ export class ArrangeView extends ItemView {
 			let target: HTMLElement | null = null;
 			let after = false;
 			let topDrop = false;
+			let axis: 'left' | 'other' | null = null;
+			let lastX = x, lastY = y;
 			const timer = window.setTimeout(() => {
 				if (moved || this.busy || item.pinned || item.completedAt) return;
 				dragging = true; row.addClass('is-dragging');
@@ -541,8 +547,17 @@ export class ArrangeView extends ItemView {
 			};
 			const cancel = () => cleanup();
 			const move = (clientX: number, clientY: number, event: Event) => {
+				lastX = clientX; lastY = clientY;
 				if (!dragging) {
-					if (Math.hypot(clientX - x, clientY - y) > 8) { moved = true; window.clearTimeout(timer); }
+					const dx = clientX - x, dy = clientY - y;
+					if (Math.hypot(dx, dy) > 8) {
+						moved = true; window.clearTimeout(timer);
+						axis ??= dx < -Math.abs(dy) * 1.5 ? 'left' : 'other';
+					}
+					if (axis === 'left' && this.store.state.swipeAction !== 'none') {
+						event.preventDefault();
+						row.style.transform = `translateX(${Math.max(-80, Math.min(0, dx))}px)`;
+					}
 					return;
 				}
 				event.preventDefault();
@@ -575,15 +590,19 @@ export class ArrangeView extends ItemView {
 			};
 			const end = (event: Event) => {
 				const targetId = target?.dataset.id;
-				if (dragging) event.preventDefault();
+				const key = this.store.state.swipeAction;
+				const swipe = !dragging && axis === 'left' && x - lastX >= 56 && x - lastX > Math.abs(lastY - y) * 1.5;
+				if (dragging || swipe) event.preventDefault();
 				cleanup();
 				if (dragging && (topDrop || targetId)) void this.run(() => this.store.move(item.id, topDrop ? undefined : targetId, after));
+				else if (swipe && key !== 'none' && !this.busy) this.action(key, item,
+					new MouseEvent('click', { clientX: lastX, clientY: lastY, view: window }));
 			};
 			const extraTouch = (e: TouchEvent) => { if (e.touches.length !== 1) cancel(); };
 			const touchMove = (e: TouchEvent) => { const p = e.touches[0]; if (p && e.touches.length === 1) move(p.clientX, p.clientY, e); else cancel(); };
-			const touchEnd = (e: TouchEvent) => end(e);
+			const touchEnd = (e: TouchEvent) => { const p = e.changedTouches[0]; if (p) { lastX = p.clientX; lastY = p.clientY; } end(e); };
 			const mouseMove = (e: PointerEvent) => move(e.clientX, e.clientY, e);
-			const mouseEnd = (e: PointerEvent) => end(e);
+			const mouseEnd = (e: PointerEvent) => { lastX = e.clientX; lastY = e.clientY; end(e); };
 			if (touch) {
 				document.addEventListener('touchmove', touchMove, { passive: false });
 				document.addEventListener('touchend', touchEnd, { passive: false });
@@ -612,6 +631,7 @@ export class ArrangeView extends ItemView {
 		return true;
 	}
 	private action(key: RowAction, item: ArrangeItem, event: MouseEvent): void {
+		if (!this.store.items.some(value => value.id === item.id)) return;
 		if (!this.actionAvailable(key, item)) return;
 		if (key === 'parent' && item.parent) {
 			void this.select(item.parent).then(() => {
@@ -622,6 +642,14 @@ export class ArrangeView extends ItemView {
 		else if (key === 'top') void this.run(() => this.store.move(item.id)).then(() => this.reveal(item.id));
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
 		else if (key === 'changeParent') void this.changeParent(item.id);
+		else if (key === 'archive') void this.run(async () => {
+			if (!(await this.saveEdit())) return;
+			await this.store.archive(item.id);
+			if (this.selected === item.id) {
+				this.editing = null; this.selected = null; this.full = false;
+				this.detail.style.height = ''; this.detail.style.maxHeight = '';
+			}
+		});
 		else if (key === 'markdown') void (async () => {
 			if (!(await this.saveEdit())) return;
 			const current = this.store.items.find(value => value.id === item.id);
@@ -709,6 +737,8 @@ export class ArrangeView extends ItemView {
 	private paintDetailState(): void {
 		const item = this.store.items.find(item => item.id === this.selected);
 		if (!item) return;
+		if (!this.store.items.some(parent => parent.id === item.parent))
+			this.detail.querySelector('.gvkit-arrange-parent-name')?.remove();
 		const label = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-date');
 		if (label) {
 			label.hidden = !item.date;
@@ -788,7 +818,48 @@ export class ArrangeView extends ItemView {
 		this.children = this.detailScroll.createDiv('gvkit-arrange-children');
 		for (const child of this.directChildren(item.id)) this.row(this.children, child);
 		this.detailScroll.scrollTop = scroll;
+		this.contentPullGesture(this.detailScroll);
 		this.paintDetailState();
+	}
+	private contentPullGesture(scroller: HTMLElement): void {
+		let start: { x: number; y: number; time: number } | null = null;
+		let distance = 0, suppressClickUntil = 0;
+		const editing = () => this.editing?.composing || Boolean(window.getSelection()?.toString())
+			|| Boolean(document.activeElement?.matches('input, textarea, [contenteditable="true"]'));
+		const reset = () => { start = null; distance = 0; this.detail.style.removeProperty('transform'); };
+		scroller.addEventListener('click', event => {
+			if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+		}, true);
+		scroller.addEventListener('touchstart', event => {
+			reset(); suppressClickUntil = 0;
+			if (!Platform.isMobileApp || !this.store.state.pullDownClose || this.busy || editing()
+				|| event.touches.length !== 1 || scroller.scrollTop < 0 || scroller.scrollTop > 1
+				|| (event.target as HTMLElement).closest('input, textarea, button, a, [contenteditable], .gvkit-arrange-row')) return;
+			const p = event.touches[0]!;
+			start = { x: p.clientX, y: p.clientY, time: Date.now() };
+		}, { passive: true });
+		scroller.addEventListener('touchmove', event => {
+			if (!start) return;
+			if (!this.store.state.pullDownClose || event.touches.length !== 1 || editing() || scroller.scrollTop > 1
+				|| Date.now() - start.time > 900) { reset(); return; }
+			const p = event.touches[0]!, dx = p.clientX - start.x, dy = p.clientY - start.y;
+			if (dy < -8 || Math.abs(dx) > Math.max(8, dy / 1.5)) { reset(); return; }
+			distance = Math.max(0, dy);
+			if (distance > 8) {
+				event.preventDefault(); suppressClickUntil = Date.now() + 500;
+				this.detail.style.transform = `translateY(${Math.min(120, distance)}px)`;
+			}
+		}, { passive: false });
+		scroller.addEventListener('touchend', event => {
+			const p = event.changedTouches[0];
+			const close = start && p && distance >= 72 && p.clientY - start.y >= 72
+				&& Math.abs(p.clientX - start.x) < (p.clientY - start.y) / 1.5
+				&& this.store.state.pullDownClose && !editing() && !this.busy;
+			if (distance > 8) { event.preventDefault(); suppressClickUntil = Date.now() + 500; }
+			reset();
+			if (close) void this.select(null);
+		}, { passive: false });
+		scroller.addEventListener('touchcancel', reset);
 	}
 	private panelGesture(grip: HTMLElement): void {
 		grip.onpointerdown = event => {
@@ -1026,6 +1097,11 @@ export class ArrangeView extends ItemView {
 				.setValue(this.store.state.completedStyle).onChange(value => configure({ completedStyle: value as ArrangeState['completedStyle'] })));
 		new Setting(modal.contentEl).setName('事项详情显示已完成下级')
 			.addToggle(toggle => toggle.setValue(this.store.state.showCompletedChildren).onChange(value => configure({ showCompletedChildren: value })));
+		new Setting(modal.contentEl).setName('事项左滑操作')
+			.addDropdown(dropdown => dropdown.addOptions({ none: '无／关闭', ...Object.fromEntries(ARRANGE_ACTIONS.map(key => [key, actions[key].title])) })
+				.setValue(this.store.state.swipeAction).onChange(value => configure({ swipeAction: value as ArrangeState['swipeAction'] })));
+		new Setting(modal.contentEl).setName('详情到顶下拉关闭').setDesc('滚动到顶部并松手后，再向下拖动关闭；顶部抓取带不受此开关影响。')
+			.addToggle(toggle => toggle.setValue(this.store.state.pullDownClose).onChange(value => configure({ pullDownClose: value })));
 		new Setting(modal.contentEl).setName('详情面板顶部阴影范围').setDesc('0～40 像素，默认 24；0 为关闭阴影，可先试 12～16。')
 			.addSlider(slider => slider.setLimits(0, 40, 1).setValue(this.store.state.detailShadow).setDynamicTooltip()
 				.onChange(value => configure({ detailShadow: value })));

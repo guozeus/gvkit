@@ -20,7 +20,11 @@ export class Modal {
  constructor() { this.contentEl=document.createElement('div'); }
  setTitle() {} open() { document.body.append(this.contentEl); } close() { this.contentEl.remove(); }
 }
-export class Menu {} export class Setting {}
+export class Menu {
+ constructor(){this.entries=[];}
+ addItem(fn){const entry={setTitle(v){this.title=v;return this},setIcon(){return this},setDisabled(){return this},onClick(fn){this.click=fn;return this}};fn(entry);this.entries.push(entry);return this;}
+ showAtMouseEvent(event){(window.menus??=[]).push({entries:this.entries,x:event.clientX,y:event.clientY,type:event.constructor.name});}
+} export class Setting {}
 export class Notice { constructor(message) { (window.notices ??= []).push(message); } }
 export class TFile { constructor(path) { this.path=path;this.name=path.split('/').pop();this.basename=this.name.slice(0,-3); } }
 export class TFolder {} export class Plugin {} export class WorkspaceLeaf {}
@@ -34,10 +38,10 @@ export const stringifyYaml=value=>JSON.stringify(value,null,2)+'\\n';
 test('inline edits persist to Markdown, switch safely, and retain drafts on invalid or failed saves', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'gvkit-detail-test-'));
 	const window = new Window();
-	const globals = new Map(['window', 'document'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const globals = new Map(['window', 'document', 'MouseEvent'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let view: any;
 	try {
-		Object.assign(globalThis, { window, document: window.document });
+		Object.assign(globalThis, { window, document: window.document, MouseEvent: window.MouseEvent });
 		const proto: any = window.HTMLElement.prototype;
 		proto.empty = function () { this.replaceChildren(); };
 		proto.addClass = function (...names: string[]) { this.classList.add(...names); };
@@ -62,13 +66,14 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		} }] });
 		const { ArrangeView, ArrangeStore, TFile, TFolder } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
 		const files = new Map<string, any>();
-		for (const path of ['安排/待执行', '安排/已完成', 'settings/gvkit']) files.set(path, new TFolder());
+		for (const path of ['安排/待执行', '安排/已完成', '安排/历史', 'settings/gvkit']) files.set(path, new TFolder());
 		const disk = (path: string) => join(dir, encodeURIComponent(path));
 		let fail = false;
 		let pause: (() => Promise<void>) | null = null;
 		const vault = {
 			on: () => ({}), getMarkdownFiles: () => [...files.values()].filter(f => f instanceof TFile),
 			getAbstractFileByPath: (path: string) => files.get(path), read: (file: any) => readFile(disk(file.path), 'utf8'),
+			createFolder: async (path: string) => { files.set(path, new TFolder()); },
 			create: async (path: string, source: string) => { await writeFile(disk(path), source); const f = new TFile(path); files.set(path, f); return f; },
 			process: async (file: any, change: (source: string) => string) => {
 				if (fail) throw Error('模拟写入失败');
@@ -526,6 +531,84 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(hint.classList.contains('is-overdue'), true);
 		await view.toggleComplete(family);
 		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-date').textContent.includes('逾期'), false);
+		// One left swipe invokes only the selected action on release, with mouse-compatible coordinates.
+		await view.select(null); await store.configure({ swipeAction: 'date', pullDownClose: true }); view.paintLists();
+		const touch = (el: any, type: string, x: number, y: number, count = 1) => {
+			const points = Array.from({ length: count }, (_, identifier) => ({ identifier, clientX: x, clientY: y }));
+			return el.dispatchEvent(new window.TouchEvent(type, { bubbles: true, cancelable: true,
+				touches: type === 'touchend' || type === 'touchcancel' ? [] : points, changedTouches: points } as any));
+		};
+		const gesture = (el: any, dx: number, dy = 0, cancel = false) => {
+			touch(el, 'touchstart', 180, 60); touch(el, 'touchmove', 180 + dx, 60 + dy);
+			touch(el, cancel ? 'touchcancel' : 'touchend', 180 + dx, 60 + dy);
+		};
+		label = view.list.querySelector(`[data-id="${second}"] .gvkit-arrange-title`);
+		const dateBefore = store.items.find((x: any) => x.id === second).date;
+		let menuCount = (window as any).menus.length;
+		touch(label, 'touchstart', 180, 60); touch(label, 'touchmove', 100, 62);
+		assert.equal((window as any).menus.length, menuCount);
+		touch(label, 'touchend', 100, 62); label.click();
+		assert.equal((window as any).menus.length, ++menuCount); assert.equal(view.selected, null);
+		assert.equal(store.items.find((x: any) => x.id === second).date, dateBefore);
+		assert.deepEqual({ x: (window as any).menus.at(-1).x, y: (window as any).menus.at(-1).y, type: (window as any).menus.at(-1).type }, { x: 100, y: 62, type: 'MouseEvent' });
+		for (const [dx, dy, cancel] of [[-80, 0, true], [-10, 80, false], [80, 0, false], [-30, 0, false]] as const) gesture(label, dx, dy, cancel);
+		assert.equal((window as any).menus.length, menuCount);
+		await store.configure({ swipeAction: 'none' }); gesture(label, -80);
+		assert.equal((window as any).menus.length, menuCount);
+		await store.configure({ swipeAction: 'date' });
+		await store.setParent(first, parent);
+		await view.select(parent);
+		const childLabel = view.children.querySelector('.gvkit-arrange-title');
+		gesture(childLabel, -80); assert.equal((window as any).menus.length, ++menuCount);
+		// A scroll that merely reaches the top cannot close; only a fresh pull can.
+		(window.document.activeElement as any)?.blur();
+		let scroller = view.detailScroll;
+		scroller.scrollTop = 90; touch(scroller, 'touchstart', 100, 50); scroller.scrollTop = 0;
+		touch(scroller, 'touchmove', 100, 160); touch(scroller, 'touchend', 100, 160); await settle();
+		assert.equal(view.selected, parent);
+		for (const target of [view.editing.title, view.children.querySelector('.gvkit-arrange-title')]) {
+			gesture(target, 0, 100); await settle(); assert.equal(view.selected, parent);
+		}
+		gesture(scroller, 0, 100, true); await settle(); assert.equal(view.selected, parent);
+		gesture(scroller, 90, 0); await settle(); assert.equal(view.selected, parent);
+		gesture(scroller, 0, 30); await settle(); assert.equal(view.selected, parent);
+		view.editing.title.focus(); gesture(scroller, 0, 100); await settle(); assert.equal(view.selected, parent);
+		view.editing.title.blur(); view.editing.composing = true;
+		gesture(scroller, 0, 100); await settle(); assert.equal(view.selected, parent); view.editing.composing = false;
+		await store.configure({ pullDownClose: false }); gesture(scroller, 0, 100); await settle(); assert.equal(view.selected, parent);
+		await store.configure({ pullDownClose: true });
+		view.editing.body.value = '下拉关闭保存正文'; view.list.scrollTop = 77; input.value = '新增草稿不丢';
+		gesture(scroller, 0, 100); await settle();
+		assert.equal(view.selected, null); assert.equal(view.list.scrollTop, 77); assert.equal(input.value, '新增草稿不丢');
+		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === parent).body, '下拉关闭保存正文');
+		await view.select(parent); view.editing.title.value = ''; gesture(view.detailScroll, 0, 100); await settle();
+		assert.equal(view.selected, parent, 'invalid draft prevents pull-close'); view.editing.title.value = '父归档前标题';
+		// Dual quick toggles remain independent; archive defaults stay hidden.
+		await store.configure({ rowActions: ['date'], detailActions: ['date'] }); view.paintLists();
+		view.itemMenu(store.items.find((x: any) => x.id === parent), new window.MouseEvent('click'));
+		const archiveMenu = window.document.querySelector('.gvkit-arrange-item-menu:last-child')!;
+		const rowArchive = archiveMenu.querySelector<HTMLElement>('[aria-label="列表显示归档"]')!;
+		const detailArchive = archiveMenu.querySelector<HTMLElement>('[aria-label="详情显示归档"]')!;
+		assert.equal(rowArchive.getAttribute('aria-checked'), 'false'); assert.equal(detailArchive.getAttribute('aria-checked'), 'false');
+		rowArchive.click(); await settle(); assert.ok(store.state.rowActions.includes('archive')); assert.ok(!store.state.detailActions.includes('archive'));
+		detailArchive.click(); await settle(); assert.ok(store.state.detailActions.includes('archive'));
+		archiveMenu.remove();
+		fail = true; view.action('archive', store.items.find((x: any) => x.id === parent), new window.MouseEvent('click')); await settle();
+		assert.equal(view.selected, parent); assert.equal(view.editing.title.value, '父归档前标题'); assert.ok(store.items.some((x: any) => x.id === parent));
+		fail = false; view.action('archive', store.items.find((x: any) => x.id === parent), new window.MouseEvent('click')); await settle();
+		assert.equal(view.selected, null); assert.ok(!store.items.some((x: any) => x.id === parent)); assert.equal(input.value, '新增草稿不丢');
+		await view.select(first); assert.equal(view.detail.querySelector('.gvkit-arrange-parent-name'), null);
+		view.editing.title.value = '父项归档后仍能保存'; assert.equal(await view.saveEdit(), true);
+		await view.select(null); await store.configure({ swipeAction: 'archive' }); view.paintLists();
+		label = view.list.querySelector(`[data-id="${second}"] .gvkit-arrange-title`); gesture(label, -80); await settle();
+		assert.ok(!store.items.some((x: any) => x.id === second));
+		const navParent = await store.create('正在编辑的子项之父', null);
+		const navChild = await store.create('保留编辑节点的子项', navParent);
+		await view.select(navChild); const navEditor = view.editing.title; navEditor.focus();
+		view.action('archive', store.items.find((x: any) => x.id === navParent), new window.MouseEvent('click')); await settle();
+		assert.equal(view.selected, navChild); assert.equal(view.editing.title, navEditor);
+		assert.equal(view.detail.querySelector('.gvkit-arrange-parent-name'), null, 'archiving from the main list removes stale parent navigation without replacing the child editor');
+		navEditor.value = '编辑不中断'; assert.equal(await view.saveEdit(), true);
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

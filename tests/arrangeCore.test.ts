@@ -2,6 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
 
+test('archived parent references remain editable and today completions remain facts, not active due items', () => {
+	const state = defaultArrangeState();
+	assert.equal(state.swipeAction, 'date'); assert.equal(state.pullDownClose, true);
+	assert.ok(!state.rowActions.includes('archive')); assert.ok(!state.detailActions.includes('archive'));
+	const child: ArrangeItem = { id: 'child', parent: 'archived', title: 'child', body: '', path: '', completedAt: null, date: '2026-10-26', pinned: false };
+	assert.equal(validParent([child], child.id, 'archived'), true);
+	assert.equal(validParent([child], 'new', child.id), true);
+	assert.equal(validParent([child], 'new', 'archived'), false);
+	assert.equal(validParent([child], child.id, child.id), false);
+	const now = new Date('2026-10-26T01:00:00Z');
+	const facts = todayFacts([child], state, now, ['2026-10-25T17:00:00Z', '2026-10-25T01:00:00Z']);
+	assert.equal(facts.x, 1); assert.equal(facts.y, 1); assert.equal(facts.remaining, 1);
+	assert.equal(todayFacts([], state, now, ['2026-10-25T17:00:00Z']).color, 'blue');
+});
+
 function item(id: string, changes: Partial<ArrangeItem> = {}): ArrangeItem {
 	return { id, title: id, body: '', path: `${id}.md`, parent: null, date: null, completedAt: null, pinned: false, ...changes };
 }
