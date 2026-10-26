@@ -2,6 +2,12 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
+## 0.6.22 GVKit（PC 端选中文本浮动格式条修复）
+
+在 PC 版 Obsidian 中选中 Markdown 文本时，修复实时预览中编辑器选区状态暂时不同步导致格式条偶发不显示的问题；当底层选区暂时无法定位时允许回退至有效的编辑器内原生选区。编辑器滚动或窗口缩放后重新定位工具栏，不再直接隐藏。格式按钮、文档内容和移动端界面不变。
+
+在 BRAT 更新 `guozeus/gvkit` 到 **0.6.22** 并重新加载插件，在普通段落、列表和待办项中选择文字实机复验。PC 实际效果以制作人验收为准。
+
 ## 0.6.21 GVKit（自御安排：左滑动作、到顶下拉、单项归档）
 
 在 Obsidian 内随手记录、按父子关系组织，并按唯一扁平顺序从上往下执行。事项和顺序均保存在 Markdown，沿用当前 Vault 的同步。
