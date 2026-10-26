@@ -8,6 +8,7 @@ const actions: Record<RowAction, { title: string; icon: string }> = {
 	top: { title: '置顶', icon: 'arrow-up-to-line' }, pin: { title: '钉住位置', icon: 'pin' },
 	changeParent: { title: '修改上级', icon: 'list-tree' }, markdown: { title: '打开 Markdown', icon: 'file-text' },
 	archive: { title: '归档', icon: 'archive' },
+	developmentCompleted: { title: '已完成开发', icon: 'code-xml' },
 };
 function iconButton(parent: HTMLElement, label: string, icon: string, action: (event: MouseEvent) => void): HTMLButtonElement {
 	const button = parent.createEl('button', { cls: 'gvkit-arrange-icon', attr: { type: 'button', 'aria-label': label, title: label } });
@@ -178,7 +179,10 @@ export class ArrangeView extends ItemView {
 			this.register(() => { this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null; });
 		}
 		this.input.onkeydown = event => {
-			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void this.create(); }
+			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) {
+				event.preventDefault(); event.stopPropagation();
+				if (!event.repeat) this.createButton.click();
+			}
 		};
 		this.registerDomEvent(root, 'keydown', event => {
 			if (event.key !== 'Escape') return;
@@ -490,6 +494,7 @@ export class ArrangeView extends ItemView {
 		}
 		const complete = row.createEl('input', { type: 'checkbox', attr: { 'aria-label': `${item.completedAt ? '撤销完成' : '完成'}：${item.title}` } });
 		complete.checked = Boolean(item.completedAt);
+		complete.toggleClass('is-development-completed', Boolean(item.developmentCompleted && !item.completedAt));
 		complete.onclick = event => {
 			event.stopPropagation(); complete.checked = Boolean(item.completedAt);
 			void this.toggleComplete(item.id);
@@ -513,6 +518,7 @@ export class ArrangeView extends ItemView {
 			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'date' && item.date) button.addClass('is-active');
+			if (key === 'developmentCompleted') button.toggleClass('is-active', Boolean(item.developmentCompleted));
 		}
 		this.rowGesture(row, label, item);
 	}
@@ -627,7 +633,7 @@ export class ArrangeView extends ItemView {
 	private actionAvailable(key: RowAction, item: ArrangeItem): boolean {
 		if (key === 'parent') return Boolean(item.parent && this.store.items.some(parent => parent.id === item.parent));
 		if (key === 'top') return !item.completedAt && !item.pinned;
-		if (key === 'pin') return !item.completedAt;
+		if (key === 'pin' || key === 'developmentCompleted') return !item.completedAt;
 		return true;
 	}
 	private action(key: RowAction, item: ArrangeItem, event: MouseEvent): void {
@@ -641,6 +647,7 @@ export class ArrangeView extends ItemView {
 		} else if (key === 'date') this.dateMenu(item, event);
 		else if (key === 'top') void this.run(() => this.store.move(item.id)).then(() => this.reveal(item.id));
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
+		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
 		else if (key === 'changeParent') void this.changeParent(item.id);
 		else if (key === 'archive') void this.run(async () => {
 			if (!(await this.saveEdit())) return;
@@ -676,7 +683,14 @@ export class ArrangeView extends ItemView {
 			return row;
 		};
 		for (const key of ARRANGE_ACTIONS) {
-			const row = entry(key === 'pin' && item.pinned ? '取消钉住' : actions[key].title, actions[key].icon, () => this.action(key, item, event));
+			const title = key === 'pin' && item.pinned ? '取消钉住'
+				: key === 'developmentCompleted' && item.developmentCompleted ? '取消已完成开发' : actions[key].title;
+			const row = entry(title, actions[key].icon, () => this.action(key, item, event));
+			if (key === 'developmentCompleted') {
+				const button = row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!;
+				button.setAttribute('aria-pressed', String(Boolean(item.developmentCompleted)));
+				button.toggleClass('is-active', Boolean(item.developmentCompleted));
+			}
 			row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!.disabled = !this.actionAvailable(key, item);
 			for (const [setting, name] of [['rowActions', '列表'], ['detailActions', '详情']] as const) {
 				const toggle = row.createEl('button', { cls: 'gvkit-arrange-menu-toggle', attr: { role: 'checkbox', 'aria-label': `${name}显示${actions[key].title}` } });
@@ -750,6 +764,7 @@ export class ArrangeView extends ItemView {
 		const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
 		if (checkbox) {
 			checkbox.checked = Boolean(item.completedAt);
+			checkbox.toggleClass('is-development-completed', Boolean(item.developmentCompleted && !item.completedAt));
 			checkbox.setAttribute('aria-label', `${item.completedAt ? '撤销完成' : '完成'}：${item.title}`);
 		}
 		this.paintDetailActions();
@@ -905,7 +920,8 @@ export class ArrangeView extends ItemView {
 			if (!this.actionAvailable(key, item)) continue;
 			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
 			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
-			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned);
+			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned
+				|| key === 'developmentCompleted' && Boolean(item.developmentCompleted));
 		}
 		strip.scrollLeft = scroll;
 	}

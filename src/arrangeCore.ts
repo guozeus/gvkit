@@ -7,9 +7,10 @@ export interface ArrangeItem {
 	date: string | null;
 	completedAt: string | null;
 	pinned: boolean;
+	developmentCompleted?: boolean;
 }
 
-export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown', 'archive'] as const;
+export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown', 'archive', 'developmentCompleted'] as const;
 export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;

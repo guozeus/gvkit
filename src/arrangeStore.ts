@@ -97,7 +97,7 @@ export class ArrangeStore {
 				parent: typeof fields.parent === 'string' ? fields.parent : null,
 				date: typeof fields.date === 'string' ? fields.date : null,
 				completedAt: typeof fields.completed_at === 'string' ? fields.completed_at : null,
-				pinned: fields.pinned === true });
+				pinned: fields.pinned === true, developmentCompleted: fields.development_completed === true });
 		}
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
@@ -209,6 +209,14 @@ export class ArrangeStore {
 			const item = this.items.find(item => item.id === id);
 			if (!item || item.completedAt) return;
 			await this.patch(id, { pinned: !item.pinned }); await this.load();
+		});
+	}
+	toggleDevelopmentCompleted(id: string): Promise<void> {
+		return this.serial(async () => {
+			const item = this.items.find(item => item.id === id);
+			if (!item || item.completedAt) return;
+			await this.patch(id, { development_completed: !item.developmentCompleted });
+			await this.load();
 		});
 	}
 	move(id: string, before?: string, after = false): Promise<void> {

@@ -53,6 +53,29 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		const child2 = await store.create('第二项', parent);
 		assert.equal(store.items.find((x: any) => x.id === child1).parent, parent);
 		assert.equal(store.items.find((x: any) => x.id === child2).parent, parent);
+		// Development acceptance is an independent Markdown boolean, never completion.
+		const developmentFile = entries.get(`安排/待执行/${child1}.md`);
+		const originalFields = JSON.parse((await vault.read(developmentFile)).split('---\n')[1]);
+		const originalFacts = store.facts(), originalOrder = [...store.state.order];
+		const originalState = await vault.read(entries.get('settings/gvkit/arrange.md'));
+		assert.equal(store.items.find((x: any) => x.id === child1).developmentCompleted, false);
+		for (const expected of [true, false, true, false]) {
+			await store.toggleDevelopmentCompleted(child1);
+			const fields = JSON.parse((await vault.read(developmentFile)).split('---\n')[1]);
+			assert.equal(fields.development_completed, expected);
+			delete fields.development_completed;
+			assert.deepEqual(fields, originalFields, 'completion/date/parent/pin/title remain unchanged');
+			assert.equal(developmentFile.path, `安排/待执行/${child1}.md`);
+			assert.deepEqual(store.facts(), originalFacts);
+			assert.deepEqual(store.state.order, originalOrder);
+			assert.equal(await vault.read(entries.get('settings/gvkit/arrange.md')), originalState);
+		}
+		// External Vault writers use the very same field; reload must reflect it.
+		await vault.process(developmentFile, source => source.replace('"development_completed": false', '"development_completed": true'));
+		const external = new ArrangeStore(app); await external.load();
+		assert.equal(external.items.find((x: any) => x.id === child1).developmentCompleted, true);
+		await store.toggleDevelopmentCompleted(child1);
+		assert.equal(store.items.find((x: any) => x.id === child1).developmentCompleted, false);
 		await store.edit(child1, '完整长标题'.repeat(50), '## 正文\n[[保留链接]]\n', parent);
 		await assert.rejects(store.setParent(parent, child1), /自己或自己的下级/);
 		await assert.rejects(store.setParent(child1, child1), /自己或自己的下级/);

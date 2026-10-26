@@ -60,7 +60,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		proto.createDiv = function (options: unknown) { return this.createEl('div', options); };
 		proto.createSpan = function (options: unknown) { return this.createEl('span', options); };
 		proto.scrollIntoView = () => {};
-		await build({ stdin: { contents: `export {ArrangeView} from './src/arrangeView';export {ArrangeStore} from './src/arrangeStore';export {TFile,TFolder} from 'obsidian';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'view.mjs'), plugins: [{ name: 'test-vault', setup(b) {
+		await build({ stdin: { contents: `export {ArrangeView} from './src/arrangeView';export {ArrangeStore} from './src/arrangeStore';export {TFile,TFolder,Platform} from 'obsidian';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'view.mjs'), plugins: [{ name: 'test-vault', setup(b) {
 			b.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'shim' }));
 			b.onLoad({ filter: /.*/, namespace: 'shim' }, () => ({ contents: shim, loader: 'js' }));
 		} }] });
@@ -609,6 +609,73 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(view.selected, navChild); assert.equal(view.editing.title, navEditor);
 		assert.equal(view.detail.querySelector('.gvkit-arrange-parent-name'), null, 'archiving from the main list removes stale parent navigation without replacing the child editor');
 		navEditor.value = '编辑不中断'; assert.equal(await view.saveEdit(), true);
+		// Pending acceptance uses the existing menu and the same empty blue box in both views.
+		await view.select(null); view.searchOpen = false; view.filter = 'all'; view.searchInput.value = '';
+		const reviewId = await store.create('等待制作人验收', null);
+		await store.setDate(reviewId, '2026-10-26');
+		await store.configure({ rowActions: ['developmentCompleted'], detailActions: ['developmentCompleted'] });
+		await view.select(reviewId);
+		const reviewBefore = { ...store.items.find((x: any) => x.id === reviewId) };
+		const reviewFacts = store.facts(), reviewOrder = [...store.state.order];
+		const style = window.document.createElement('style'); style.textContent = await readFile('styles.css', 'utf8'); window.document.head.append(style);
+		for (const expected of [true, false, true, false]) {
+			view.itemMenu(store.items.find((x: any) => x.id === reviewId), new window.MouseEvent('click'));
+			const reviewMenu = window.document.querySelector('.gvkit-arrange-item-menu:last-child')!;
+			const action = [...reviewMenu.querySelectorAll<HTMLButtonElement>('.gvkit-arrange-menu-action')].find(el => el.textContent === (expected ? '已完成开发' : '取消已完成开发'))!;
+			assert.equal(action.getAttribute('aria-pressed'), String(!expected)); action.click(); await settle();
+			const current = { ...store.items.find((x: any) => x.id === reviewId) };
+			assert.equal(current.developmentCompleted, expected);
+			assert.deepEqual({ ...current, developmentCompleted: false }, reviewBefore);
+			assert.deepEqual(store.facts(), reviewFacts); assert.deepEqual(store.state.order, reviewOrder);
+			const boxes = [view.list.querySelector(`[data-id="${reviewId}"] input`), view.detail.querySelector('.gvkit-arrange-detail-title-row input')];
+			for (const box of boxes) {
+				assert.equal(box.checked, false);
+				assert.equal(box.classList.contains('is-development-completed'), expected);
+				if (expected) assert.equal(window.getComputedStyle(box).borderTopColor, '#2563eb');
+			}
+			for (const button of [view.list.querySelector(`[data-id="${reviewId}"] [aria-label="已完成开发"]`), view.detail.querySelector('[aria-label="已完成开发"]')])
+				assert.equal(button.classList.contains('is-active'), expected);
+		}
+		// External edits refresh the existing detail editor, and manual acceptance remains normal.
+		await store.toggleDevelopmentCompleted(reviewId); await view.reload();
+		assert.equal(view.detail.querySelector('.is-development-completed').checked, false);
+		view.detail.querySelector('.gvkit-arrange-detail-title-row input').click(); await settle();
+		assert.ok(store.items.find((x: any) => x.id === reviewId).completedAt);
+		assert.equal(view.detail.querySelector('.is-development-completed'), null);
+		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-title-row input').checked, true);
+		await view.toggleComplete(reviewId);
+		assert.equal(store.items.find((x: any) => x.id === reviewId).date, reviewBefore.date);
+		assert.equal(view.detail.querySelector('.is-development-completed').checked, false);
+		// Dispatch DOM key events: same button path, no duplicate while a disk write is pending.
+		await view.select(null);
+		const platform = (await import(pathToFileURL(join(dir, 'view.mjs')).href)).Platform;
+		platform.isMobileApp = false;
+		const key = (options: any = {}) => {
+			const event = new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...options });
+			input.dispatchEvent(event); return event;
+		};
+		input.value = 'CtrlEnter仅一次'; input.dispatchEvent(new window.Event('input'));
+		assert.equal(key().defaultPrevented, false);
+		assert.equal(key({ ctrlKey: true, isComposing: true }).defaultPrevented, false);
+		let releaseCreate!: () => void;
+		const createGate = new Promise<void>(resolve => { releaseCreate = resolve; });
+		const originalCreate = store.create.bind(store); let createCalls = 0;
+		store.create = async (...args: any[]) => { createCalls++; await createGate; return originalCreate(...args); };
+		let bubbled = 0; const bubble = () => { bubbled++; }; root.addEventListener('keydown', bubble);
+		assert.equal(key({ ctrlKey: true }).defaultPrevented, true);
+		key({ ctrlKey: true }); key({ ctrlKey: true, repeat: true }); view.createButton.click();
+		assert.equal(createCalls, 1); assert.equal(bubbled, 0);
+		releaseCreate(); await settle(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(store.items.filter((x: any) => x.title === 'CtrlEnter仅一次').length, 1);
+		assert.equal(input.value, '');
+		input.value = '按住键期间的新草稿'; input.dispatchEvent(new window.Event('input'));
+		key({ ctrlKey: true, repeat: true }); assert.equal(createCalls, 1);
+		key({ metaKey: true }); await settle(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(createCalls, 2, 'Cmd+Enter remains supported');
+		platform.isMobileApp = true; input.value = '手机点击'; input.dispatchEvent(new window.Event('input')); view.createButton.click();
+		await settle(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(createCalls, 3); assert.equal(store.items.filter((x: any) => x.title === '手机点击').length, 1);
+		root.removeEventListener('keydown', bubble); store.create = originalCreate;
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

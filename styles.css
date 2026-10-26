@@ -151,6 +151,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-icon svg { width: 19px; height: 19px; }
 .gvkit-arrange-row .gvkit-arrange-icon svg { width: var(--gvkit-arrange-row-icon, 19px); height: var(--gvkit-arrange-row-icon, 19px); }
 .gvkit-arrange .gvkit-arrange-icon.is-active { color: var(--interactive-accent); }
+.gvkit-arrange input[type="checkbox"].is-development-completed:not(:checked) { appearance: none; -webkit-appearance: none; border: 2px solid #2563eb; background: transparent; box-shadow: none; }
+.gvkit-arrange input[type="checkbox"].is-development-completed:not(:checked)::after { display: none; }
+.gvkit-arrange-item-menu .gvkit-arrange-menu-action.is-active { color: #2563eb; }
 .gvkit-arrange-row.is-dragging { opacity: .9; background: var(--background-primary); box-shadow: 0 4px 14px #0003; border-radius: 8px; z-index: 4; pointer-events: none; }
 .gvkit-arrange-row.is-drop-target::after { content: ''; position: absolute; left: 6px; right: 2px; top: 0; height: 2px; background: var(--color-blue, #448aff); pointer-events: none; }
 .gvkit-arrange-row.is-drop-target[data-drop-after="true"]::after { top: auto; bottom: -1px; }
