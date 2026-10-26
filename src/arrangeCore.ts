@@ -14,6 +14,7 @@ export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 
 export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
+export const PIN_COLORS = { gold: '#bb8c18', purple: '#9860d6', blue: '#3084df' } as const;
 export interface ArrangeState {
 	order: string[];
 	achievedDays: string[];
@@ -47,6 +48,9 @@ export interface ArrangeState {
 	dateHintColor: keyof typeof DATE_HINT_COLORS;
 	rowIconGap: number;
 	detailIconGap: number;
+	pinColor: keyof typeof PIN_COLORS;
+	checkboxScale: number;
+	rowRightGap: number;
 }
 
 export const ARRANGE_NUMBER_SETTINGS = {
@@ -57,13 +61,14 @@ export const ARRANGE_NUMBER_SETTINGS = {
 /** CSS sizes accept nonnegative numbers; do not impose product typography limits. */
 export const ARRANGE_FREE_SIZES = {
 	listFontSize: 17, rowHeight: 44, detailFontSize: 18, bodyFontSize: 16, parentFontSize: 13, dateFontSize: 12,
+	checkboxScale: 80, rowRightGap: 2,
 } as const;
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
-		composerMaxRows: 6, bodyMinRows: 3,
+		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2,
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'],
 		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
@@ -81,24 +86,25 @@ export function pendingOrder(items: ArrangeItem[], order: string[]): string[] {
 		// A new ID has no protected position until it enters the global sequence.
 		result = moveInOrder(result, items.filter(other => other.id !== item.id), item.id);
 	}
-	return result;
+	return pinFirst(result, items);
 }
 
-/** Rearrange only unprotected slots. Pinned rows keep their current absolute position. */
+/** Stable groups share the existing global order; pinned pending items always lead. */
+function pinFirst(order: string[], items: ArrangeItem[]): string[] {
+	const pinned = new Set(items.filter(item => item.pinned && !item.completedAt).map(item => item.id));
+	return [...order.filter(id => pinned.has(id)), ...order.filter(id => !pinned.has(id))];
+}
+
+/** Top operates within a group; ordinary drag/drop cannot cross the pinned group. */
 export function moveInOrder(order: string[], items: ArrangeItem[], id: string, before?: string, after = false): string[] {
 	const pinned = new Set(items.filter(item => item.pinned && !item.completedAt).map(item => item.id));
-	if (pinned.has(id)) return [...order];
-	const movable = order.filter(value => !pinned.has(value) && value !== id);
-	const target = before ? order.indexOf(before) + (after ? 1 : 0) : 0;
-	const index = before && target >= 0
-		? order.slice(0, target).filter(value => !pinned.has(value) && value !== id).length : 0;
-	movable.splice(index, 0, id);
-	let cursor = 0;
-	const length = order.includes(id) ? order.length : order.length + 1;
-	return Array.from({ length }, (_, position) => {
-		const old = order[position];
-		return old && pinned.has(old) ? old : movable[cursor++]!;
-	});
+	const ordered = pinFirst(order, items);
+	if (before === id || (pinned.has(id) && before)) return ordered;
+	const group = ordered.filter(value => pinned.has(value) === pinned.has(id) && value !== id);
+	const target = before ? group.indexOf(before) : -1;
+	group.splice(target < 0 ? 0 : target + (after ? 1 : 0), 0, id);
+	const other = ordered.filter(value => pinned.has(value) !== pinned.has(id));
+	return pinned.has(id) ? [...group, ...other] : [...other, ...group];
 }
 
 export function validParent(items: ArrangeItem[], id: string, parent: string | null): boolean {

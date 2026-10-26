@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -333,14 +333,16 @@ export class ArrangeView extends ItemView {
 		for (const [name, value] of Object.entries({
 			'list-font': state.listFontSize, 'row-height': state.rowHeight,
 			'row-icon': state.listFontSize + 2, 'row-slot': state.listFontSize + 2 + state.rowIconGap,
-			'checkbox': state.listFontSize + 5, 'check-gap': Math.round(state.listFontSize * 0.5),
+			'checkbox': (state.listFontSize + 5) * state.checkboxScale / 100, 'check-gap': Math.round(state.listFontSize * 0.5),
+			'right-gap': state.listFontSize * state.rowRightGap,
 			'detail-font': state.detailFontSize, 'body-font': state.bodyFontSize, 'date-font': state.dateFontSize,
-			'detail-checkbox': state.detailFontSize + 3, 'detail-icon': state.detailFontSize + 1,
+			'detail-checkbox': (state.detailFontSize + 3) * state.checkboxScale / 100, 'detail-icon': state.detailFontSize + 1,
 			'detail-slot': state.detailFontSize + 1 + state.detailIconGap,
 			'grip-height': state.gripHeight, 'grip-width': state.gripWidth,
 			'toolbar-height': state.toolbarHeight, 'parent-font': state.parentFontSize,
 		})) this.contentEl.style.setProperty(`--gvkit-arrange-${name}`, `${value}px`);
 		this.contentEl.dataset.rowDividers = String(state.rowDividers);
+		this.contentEl.style.setProperty('--gvkit-arrange-pin-color', PIN_COLORS[state.pinColor]);
 		this.contentEl.style.setProperty('--gvkit-arrange-date-color', DATE_HINT_COLORS[state.dateHintColor] ?? DATE_HINT_COLORS.vivid);
 		this.headline.dataset.selectionColor = state.selectionColor;
 		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
@@ -528,6 +530,10 @@ export class ArrangeView extends ItemView {
 		const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { title: item.title } });
 		this.paintTitle(label, item.title, parent === this.list);
 		label.onclick = () => { void this.select(this.selected === item.id ? null : item.id); };
+		if (this.store.items.some(child => child.parent === item.id)) {
+			const indicator = row.createSpan({ cls: 'gvkit-arrange-has-children', attr: { title: '有直接下级事项', 'aria-label': '有直接下级事项' } });
+			setIcon(indicator, 'list-tree');
+		}
 		if (item.date) {
 			label.dataset.date = item.date;
 			label.title = `${item.title} · ${item.date}${item.date < this.today && !item.completedAt ? ' · 逾期' : ''}`;
@@ -658,7 +664,7 @@ export class ArrangeView extends ItemView {
 	}
 	private actionAvailable(key: RowAction, item: ArrangeItem): boolean {
 		if (key === 'parent') return Boolean(item.parent && this.store.items.some(parent => parent.id === item.parent));
-		if (key === 'top') return !item.completedAt && !item.pinned;
+		if (key === 'top') return !item.completedAt;
 		if (key === 'pin' || key === 'developmentCompleted') return !item.completedAt;
 		return true;
 	}
@@ -1088,6 +1094,7 @@ export class ArrangeView extends ItemView {
 			closeThreshold: '向下拖动关闭阈值',
 			detailFontSize: '详情标题字号', bodyFontSize: '详情正文字号', dateFontSize: '日期提示字号（列表与详情共用）',
 			rowIconGap: '列表操作图标间距', detailIconGap: '详情操作图标间距',
+			checkboxScale: '勾选框尺寸（原尺寸百分比）', rowRightGap: '列表右侧留白（字宽）',
 		};
 		// Keep the established settings order; input implementation must not reorder it.
 		for (const settingKey of Object.keys(names) as (keyof typeof names)[]) {
@@ -1139,6 +1146,9 @@ export class ArrangeView extends ItemView {
 					input.value = String(initial); input.removeAttribute('aria-invalid'); updateSlider(initial); configure({ [key]: initial });
 				}));
 		}
+		new Setting(modal.contentEl).setName('钉住竖条颜色')
+			.addDropdown(dropdown => dropdown.addOptions({ gold: '金色（默认）', purple: '紫色', blue: '蓝色' })
+				.setValue(this.store.state.pinColor).onChange(value => configure({ pinColor: value as ArrangeState['pinColor'] })));
 		new Setting(modal.contentEl).setName('今天与日期提示颜色').setDesc('列表“今天”与详情日期共用；逾期仍为红色。')
 			.addDropdown(dropdown => dropdown.addOptions({ vivid: '鲜亮蓝（默认）', electric: '电光蓝', cyan: '亮青蓝' })
 				.setValue(this.store.state.dateHintColor).onChange(value => configure({ dateHintColor: value as ArrangeState['dateHintColor'] })));

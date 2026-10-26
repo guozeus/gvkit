@@ -104,6 +104,17 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		assert.ok(view.list.querySelector(`[data-id="${parent}"] .gvkit-arrange-has-children`));
+		assert.equal(view.list.querySelector(`[data-id="${first}"] .gvkit-arrange-has-children`), null);
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-checkbox'), '17.6px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-checkbox'), '16.8px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-right-gap'), '34px');
+		await store.togglePin(first); await store.togglePin(second); await view.reload();
+		assert.ok(view.list.querySelector(`[data-id="${first}"] [aria-label="置顶"]`));
+		(view.list.querySelector(`[data-id="${first}"] [aria-label="置顶"]`) as any).click();
+		while (view.busy) await new Promise(resolve => setTimeout(resolve, 1));
+		assert.equal(store.state.order[0], first);
+		await store.togglePin(first); await store.togglePin(second); await view.reload();
 		const slot = host.querySelector('.view-header-title-container')!;
 		assert.equal(slot.querySelectorAll('.gvkit-arrange-header').length, 1);
 		assert.equal(root.querySelector('.gvkit-arrange-header'), null);
@@ -383,7 +394,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.select(null);
 		// Above-list release remains global top, with the first two pinned slots protected.
 		const pinnedIds = store.state.order.slice(0, 2);
-		for (const id of pinnedIds) await store.togglePin(id);
+		for (const id of pinnedIds) if (!store.items.find((x: any) => x.id === id).pinned) await store.togglePin(id);
 		view.paintLists();
 		const moving = store.state.order.findLast((id: string) => !store.items.find((x: any) => x.id === id).pinned);
 		const original = [...store.state.order];
@@ -527,7 +538,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		for (const [key, value] of Object.entries(compact)) assert.equal(fresh.state[key], value);
 		assert.equal(view.editing.title, editor); assert.equal(editor.value, '字体改变也保留此标题');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-row-height'), '24px');
-		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-checkbox'), '19px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-checkbox'), '15.2px');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-icon'), '17px');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-slot'), '19px');
 		await store.setDate(family, today); view.paintLists();

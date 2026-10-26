@@ -26,16 +26,33 @@ test('new child and top use the first free slot after five pinned rows', () => {
 	assert.deepEqual(moveInOrder(order, items, 'child'), ['a','b','c','d','e','child','f','g']);
 	assert.deepEqual(moveInOrder(order, items, 'g'), ['a','b','c','d','e','g','f']);
 });
-test('only third pinned stays third under inserts and reorder, completion closes gaps', () => {
+test('legacy mixed order groups pins first under inserts, drag and completion', () => {
 	const items = ['a','b','c','d','e'].map(id => item(id, { pinned: id === 'c' }));
 	const order = items.map(x => x.id);
-	assert.deepEqual(moveInOrder(order, items, 'new'), ['new','a','c','b','d','e']);
-	assert.deepEqual(moveInOrder(order, items, 'e', 'b'), ['a','e','c','b','d']);
-	assert.deepEqual(moveInOrder(order, items, 'a', 'e', true), ['b','d','c','e','a']);
+	assert.deepEqual(moveInOrder(order, items, 'new'), ['c','new','a','b','d','e']);
+	assert.deepEqual(moveInOrder(order, items, 'e', 'b'), ['c','a','e','b','d']);
+	assert.deepEqual(moveInOrder(order, items, 'a', 'e', true), ['c','b','d','e','a']);
 	items[0]!.completedAt = '2026-10-24T04:00:00Z';
 	const after = pendingOrder(items, order);
-	assert.deepEqual(after, ['b','c','d','e']);
-	assert.deepEqual(moveInOrder(after, items, 'new'), ['new','c','b','d','e']);
+	assert.deepEqual(after, ['c','b','d','e']);
+	assert.deepEqual(moveInOrder(after, items, 'new'), ['c','new','b','d','e']);
+});
+test('multiple pins can repeatedly move to top, unpin falls below all pins, and reload is stable', () => {
+	const items = ['a','b','c','d'].map(id => item(id, { pinned: id !== 'd' }));
+	let order = pendingOrder(items, ['d','a','b','c','a','stale']);
+	assert.deepEqual(order, ['a','b','c','d']);
+	order = moveInOrder(order, items, 'c');
+	assert.deepEqual(order, ['c','a','b','d']);
+	assert.deepEqual(moveInOrder(order, items, 'c'), order);
+	order = moveInOrder(order, items, 'b');
+	assert.deepEqual(order, ['b','c','a','d']);
+	items[1]!.pinned = false;
+	order = pendingOrder(items, order);
+	assert.deepEqual(order, ['c','a','b','d']);
+	assert.deepEqual(pendingOrder(items, order), order);
+	assert.deepEqual(moveInOrder(order, items, 'd', 'c'), ['c','a','d','b']);
+	assert.deepEqual(moveInOrder(order, items, 'a', 'd'), order, 'pin drag stays disabled');
+	assert.deepEqual(moveInOrder(order, items, 'd', 'd'), order);
 });
 test('parent relationships accept arbitrary depth but refuse ancestors and missing parents', () => {
 	const items = [item('a'), item('b', { parent: 'a' }), item('c', { parent: 'b' })];
@@ -47,7 +64,7 @@ test('parent relationships accept arbitrary depth but refuse ancestors and missi
 });
 test('restoring a completion after the order was saved does not displace a pinned item', () => {
 	const items = ['new', 'pinned', 'other', 'restored'].map(id => item(id, { pinned: id === 'pinned' }));
-	assert.deepEqual(pendingOrder(items, ['new', 'pinned', 'other']), ['restored', 'pinned', 'new', 'other']);
+	assert.deepEqual(pendingOrder(items, ['new', 'pinned', 'other']), ['pinned', 'restored', 'new', 'other']);
 });
 test('8/5 stays red with one required remaining; blue/gold are independent of x', () => {
 	const state = defaultArrangeState();

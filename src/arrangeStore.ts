@@ -68,6 +68,7 @@ export class ArrangeStore {
 			}
 			if (typeof fields.rowDividers === 'boolean') state.rowDividers = fields.rowDividers;
 			if (fields.selectionColor === 'blue' || fields.selectionColor === 'purple' || fields.selectionColor === 'gold') state.selectionColor = fields.selectionColor;
+			if (fields.pinColor === 'gold' || fields.pinColor === 'purple' || fields.pinColor === 'blue') state.pinColor = fields.pinColor;
 			if (typeof fields.dateHintColor === 'string' && Object.keys(DATE_HINT_COLORS).includes(fields.dateHintColor))
 				state.dateHintColor = fields.dateHintColor as ArrangeState['dateHintColor'];
 		}
@@ -213,6 +214,7 @@ export class ArrangeStore {
 			const item = this.items.find(item => item.id === id);
 			if (!item || item.completedAt) return;
 			await this.patch(id, { pinned: !item.pinned }); await this.load();
+			await this.saveState();
 		});
 	}
 	toggleDevelopmentCompleted(id: string): Promise<void> {
