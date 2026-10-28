@@ -86,25 +86,30 @@ export function pendingOrder(items: ArrangeItem[], order: string[]): string[] {
 		// A new ID has no protected position until it enters the global sequence.
 		result = moveInOrder(result, items.filter(other => other.id !== item.id), item.id);
 	}
-	return pinFirst(result, items);
+	return result;
 }
 
-/** Stable groups share the existing global order; pinned pending items always lead. */
-function pinFirst(order: string[], items: ArrangeItem[]): string[] {
-	const pinned = new Set(items.filter(item => item.pinned && !item.completedAt).map(item => item.id));
-	return [...order.filter(id => pinned.has(id)), ...order.filter(id => !pinned.has(id))];
-}
-
-/** Top operates within a group; ordinary drag/drop cannot cross the pinned group. */
+/** Ordinary moves preserve pinned slots; explicit pinned top reorders only those slots. */
 export function moveInOrder(order: string[], items: ArrangeItem[], id: string, before?: string, after = false): string[] {
 	const pinned = new Set(items.filter(item => item.pinned && !item.completedAt).map(item => item.id));
-	const ordered = pinFirst(order, items);
-	if (before === id || (pinned.has(id) && before)) return ordered;
-	const group = ordered.filter(value => pinned.has(value) === pinned.has(id) && value !== id);
-	const target = before ? group.indexOf(before) : -1;
-	group.splice(target < 0 ? 0 : target + (after ? 1 : 0), 0, id);
-	const other = ordered.filter(value => pinned.has(value) !== pinned.has(id));
-	return pinned.has(id) ? [...group, ...other] : [...other, ...group];
+	if (before === id) return [...order];
+	if (pinned.has(id)) {
+		if (before || !order.includes(id)) return [...order];
+		const pins = [id, ...order.filter(value => pinned.has(value) && value !== id)];
+		let cursor = 0;
+		return order.map(value => pinned.has(value) ? pins[cursor++]! : value);
+	}
+	const movable = order.filter(value => !pinned.has(value) && value !== id);
+	const target = before ? order.indexOf(before) + (after ? 1 : 0) : 0;
+	const index = before && target >= 0
+		? order.slice(0, target).filter(value => !pinned.has(value) && value !== id).length : 0;
+	movable.splice(index, 0, id);
+	let cursor = 0;
+	const length = order.includes(id) ? order.length : order.length + 1;
+	return Array.from({ length }, (_, position) => {
+		const old = order[position];
+		return old && pinned.has(old) ? old : movable[cursor++]!;
+	});
 }
 
 export function validParent(items: ArrangeItem[], id: string, parent: string | null): boolean {
