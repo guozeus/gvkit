@@ -63,6 +63,8 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   let afterWrite: (body: any) => any = () => undefined;
   let responseForRead: (body: any) => any = () => undefined;
   let disk: any = {};
+  let token = TOKEN;
+  const files: Record<string, string> = {};
   const settings = {
     getZhouyouUrl: () => ENDPOINT,
     getAutoPublishBindings: () => structuredClone(disk.zhouyouAutoBindings ?? {}),
@@ -75,12 +77,14 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     vault: {
       configDir: '.obsidian',
       read: async () => raw,
-      adapter: { exists: async () => false, read: async () => '' },
+      adapter: { exists: async (p: string) => p in files, read: async (p: string) => {
+        if (!(p in files)) throw Error('missing file'); return files[p];
+      } },
     },
     metadataCache: { getFileCache: () => ({ frontmatter: { gvid: SOURCE_ID } }) },
     workspace: { getLeavesOfType: () => [] },
   };
-  const secret = { runtimeCredential: () => TOKEN };
+  const secret = { runtimeCredential: () => token };
   const context = { file, view: { save: async () => undefined, editor: { getValue: () => raw } },
     isCurrent: () => true };
   const publisher = new Publisher(app, settings, secret);
@@ -126,7 +130,8 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     } }, headers: {} };
   };
   return {
-    publisher, settings, app, context, file, requests, notices,
+    publisher, settings, app, context, file, requests, notices, files,
+    set token(value: string) { token = value; },
     get raw() { return raw; },
     set raw(value: string) { raw = value; },
     get disk() { return disk; },
@@ -253,4 +258,140 @@ test('oversize payload is rejected locally before a write', async () => {
 test('publishBody strips only legacy metadata and normalizes CRLF', () => {
   const body = '---\r\ngvid: ' + SOURCE_ID + '\r\nzhou_source_id: former\r\nname: keep\r\n---\r\nhello\r\n';
   assert.equal(publishBody(body), '---\ngvid: ' + SOURCE_ID + '\nname: keep\n---\nhello\n');
+});
+
+const OLD_OP = '00000000-0000-4000-8000-000000000001';
+const PRIVATE_ROOT = '.obsidian/plugins/gvkit/';
+function approveRecovery(h: ReturnType<typeof makeHarness>) {
+  const pending = { operationId: OLD_OP, title: '原始标题', content: '原始正文' };
+  h.disk = { otherSetting: { retained: true }, zhouyouAutoBindings: { [SOURCE_ID]: {
+    sourceId: SOURCE_ID, path: h.file.path, pending,
+  } } };
+  const backupPath = 'zhouyou-legacy-backup-fixture.json', backup = JSON.stringify(h.disk);
+  h.files[PRIVATE_ROOT + backupPath] = backup;
+  h.files[PRIVATE_ROOT + 'zhouyou-legacy-recovery.json'] = JSON.stringify([{
+    sourceIdHash: hash('obsidian-sync-diagnostic:v1:' + SOURCE_ID).slice(0, 24),
+    oldOperationIdHash: hash('obsidian-sync-diagnostic:v1:' + OLD_OP).slice(0, 24),
+    endpoint: ENDPOINT, backupPath, backupSha256: hash(backup),
+  }]);
+  return { pending, backupPath, backup };
+}
+test('reviewed legacy recovery preserves full backup and evidence; update/repeat/restart stay on one document', async () => {
+  const h = makeHarness(), evidence = approveRecovery(h);
+  const raw = h.raw;
+  h.beforeWrite = (body, disk) => {
+    assert.notEqual(body.operationId, OLD_OP);
+    assert.equal(body.sourceId, SOURCE_ID);
+    assert.equal(body.documentId, null);
+    assert.equal(body.recordVersion, null);
+    assert.deepEqual(disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending, evidence.pending);
+    assert.equal(disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.oldOutcome, 'unknown');
+    assert.equal(disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.newOperationId, body.operationId);
+  };
+  await h.publisher.publish(h.context);
+  assert.equal(h.writes, 1);
+  assert.equal(h.raw, raw);
+  assert.equal(h.files[PRIVATE_ROOT + evidence.backupPath], evidence.backup);
+  h.beforeWrite = () => undefined;
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, 1);
+  h.raw += '修改一次\n';
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, 2);
+  assert.equal(h.remote.documentId, 'doc-1');
+  assert.equal(h.remote.currentVersionNo, 2);
+  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending, evidence.pending);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.oldOutcome, 'unknown');
+  assert.deepEqual(h.disk.otherSetting, { retained: true });
+});
+test('legacy recovery refuses stale backup, unreviewed source, changed endpoint and prior success', async () => {
+  for (const change of [
+    (h: any) => { h.files[PRIVATE_ROOT + 'zhouyou-legacy-backup-fixture.json'] += ' '; },
+    (h: any) => { h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId = 'different'; },
+    (h: any) => { const p = PRIVATE_ROOT + 'zhouyou-legacy-recovery.json';
+      h.files[p] = h.files[p].replace(ENDPOINT, 'https://other.example.test/sync'); },
+    (h: any) => { h.disk.zhouyouAutoBindings[SOURCE_ID].version = 1; },
+  ]) {
+    const h = makeHarness(); approveRecovery(h); change(h);
+    const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+    await h.publisher.publish(h.context);
+    assert.equal(h.writes, 0);
+    assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
+    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence, undefined);
+  }
+});
+test('reviewed legacy recovery pauses if current document appears, even with identical content', async () => {
+  const h = makeHarness(); approveRecovery(h);
+  h.remote = { sourceId: SOURCE_ID, documentId: 'existing', recordVersion: 1, currentVersionNo: 1,
+    title: '原始标题', content: '原始正文', documentStatus: 'active' };
+  await h.publisher.publish(h.context);
+  assert.equal(h.writes, 0);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId, OLD_OP);
+});
+test('recovery conflict stops permanently pending reconciliation, including across restart', async () => {
+  for (const code of ['OBSIDIAN_SYNC_RECORD_VERSION_CONFLICT', 'SOURCE_ALREADY_EXISTS']) {
+    const h = makeHarness(); approveRecovery(h);
+    h.beforeWrite = () => ({ status: 409, json: { code }, headers: {} });
+    await h.publisher.publish(h.context);
+    const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+    assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 1);
+    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.blocked, true);
+    await h.restart().publish(h.context);
+    assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 1);
+    assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
+  }
+});
+test('recovery lost ACK retains new key and confirms by independent read; never reuses legacy key', async () => {
+  const h = makeHarness(); approveRecovery(h);
+  h.afterWrite = () => { throw Error('lost ACK'); };
+  await h.publisher.publish(h.context);
+  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+  assert.notEqual(pending.operationId, OLD_OP);
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, 1);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending.operationId, OLD_OP);
+});
+test('recovery unsaved response reuses exact new request; changed identity cannot retry or confirm', async () => {
+  const h = makeHarness(); approveRecovery(h);
+  h.beforeWrite = () => ({ status: 503, json: { code: 'DOWN' }, headers: {} });
+  await h.publisher.publish(h.context);
+  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+  h.token = 'ANOTHER_FAKE_TOKEN';
+  const calls = h.requests.length;
+  await h.restart().publish(h.context);
+  assert.equal(h.requests.length, calls);
+  h.token = TOKEN;
+  h.beforeWrite = () => undefined;
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, 1);
+  assert.deepEqual(h.requests.filter(r => r.action === 'sync_smart').map(r => r.operationId),
+    [pending.operationId, pending.operationId]);
+});
+test('identity change while reading stops recovery before any save request', async () => {
+  const h = makeHarness(); approveRecovery(h);
+  h.responseForRead = () => { h.token = 'ANOTHER_FAKE_TOKEN'; };
+  await h.publisher.publish(h.context);
+  assert.equal(h.writes, 0);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId, OLD_OP);
+});
+test('recovery rejects archived, forbidden, unknown 404 and content-hash mismatch', async () => {
+  for (const reply of [
+    { status: 403, json: { code: 'FORBIDDEN' }, headers: {} },
+    { status: 404, json: { code: 'UNKNOWN' }, headers: {} },
+    { status: 200, json: { code: 0, data: { sourceId: SOURCE_ID, documentId: 'old',
+      recordVersion: 1, title: 'x', content: 'x', documentStatus: 'archived' } }, headers: {} },
+  ]) {
+    const h = makeHarness(); approveRecovery(h);
+    h.responseForRead = () => reply;
+    await h.publisher.publish(h.context);
+    assert.equal(h.writes, 0);
+    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId, OLD_OP);
+  }
+  const h = makeHarness(); approveRecovery(h);
+  h.afterWrite = () => { h.remote.contentHash = 'incorrect'; };
+  await h.publisher.publish(h.context);
+  assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
 });
