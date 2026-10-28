@@ -10,7 +10,7 @@ export interface ArrangeItem {
 	developmentCompleted?: boolean;
 }
 
-export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown', 'archive', 'developmentCompleted'] as const;
+export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'copy', 'archive', 'developmentCompleted'] as const;
 export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
@@ -69,7 +69,7 @@ export function defaultArrangeState(): ArrangeState {
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
 		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2,
-		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown'],
+		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent'],
 		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
 		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue',

@@ -1,4 +1,4 @@
-import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 
@@ -6,7 +6,7 @@ export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
 	parent: { title: '查看上级', icon: 'corner-left-up' }, date: { title: '设置日期', icon: 'calendar' },
 	top: { title: '置顶', icon: 'arrow-up-to-line' }, pin: { title: '钉住位置', icon: 'pin' },
-	changeParent: { title: '修改上级', icon: 'list-tree' }, markdown: { title: '打开 Markdown', icon: 'file-text' },
+	changeParent: { title: '修改上级', icon: 'list-tree' }, copy: { title: '复制标题', icon: 'copy' },
 	archive: { title: '归档', icon: 'archive' },
 	developmentCompleted: { title: '已完成开发', icon: 'code-xml' },
 };
@@ -107,6 +107,7 @@ export class ArrangeView extends ItemView {
 	private restoreHeader: (() => void) | null = null;
 	private cancelReorder: (() => void) | null = null;
 	private titleFocusScroll: { input: HTMLTextAreaElement; top: number } | null = null;
+	private bodyRender = 0;
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -681,6 +682,7 @@ export class ArrangeView extends ItemView {
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
 		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
 		else if (key === 'changeParent') void this.changeParent(item.id);
+		else if (key === 'copy') void this.copyItem(item);
 		else if (key === 'archive') void this.run(async () => {
 			if (!(await this.saveEdit())) return;
 			await this.store.archive(item.id);
@@ -689,12 +691,14 @@ export class ArrangeView extends ItemView {
 				this.detail.style.height = ''; this.detail.style.maxHeight = '';
 			}
 		});
-		else if (key === 'markdown') void (async () => {
-			if (!(await this.saveEdit())) return;
-			const current = this.store.items.find(value => value.id === item.id);
-			const file = current && this.app.vault.getAbstractFileByPath(current.path);
-			if (file instanceof TFile) void this.app.workspace.getLeaf('tab').openFile(file);
-		})();
+	}
+	private async copyItem(item: ArrangeItem, includeBody = false): Promise<void> {
+		const edit = this.editing?.id === item.id ? this.editing : null;
+		const title = edit?.title.value ?? item.title, body = edit?.body.value ?? item.body;
+		try {
+			await navigator.clipboard.writeText(includeBody ? `${title}\n\n${body}` : title);
+			new Notice(includeBody ? '已复制标题及附注' : '已复制标题');
+		} catch { new Notice('复制失败，请重试'); }
 	}
 	private reveal(id: string): void {
 		const parent = this.selected ? this.children : this.list;
@@ -814,7 +818,8 @@ export class ArrangeView extends ItemView {
 		this.panelGesture(grip);
 		const tools = this.detail.createDiv('gvkit-arrange-detail-tools');
 		iconButton(tools, '返回主列表', 'arrow-left', () => { void this.select(null); });
-		tools.createSpan({ cls: 'gvkit-arrange-detail-date' });
+		const date = tools.createEl('button', { cls: 'gvkit-arrange-detail-date', attr: { type: 'button', 'aria-label': '设置日期' } });
+		date.onclick = event => this.action('date', this.store.items.find(value => value.id === item.id) ?? item, event);
 		tools.createDiv('gvkit-arrange-detail-actions');
 		this.paintDetailActions();
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
@@ -860,10 +865,10 @@ export class ArrangeView extends ItemView {
 			body.setSelectionRange(offset, offset);
 		};
 		preview.onclick = event => {
-			if ((event.target as HTMLElement).closest('a') || window.getSelection()?.toString()) return;
+			if ((event.target as HTMLElement).closest('a, button') || window.getSelection()?.toString()) return;
 			openBody(bodyCaretOffset(preview, body.value, event));
 		};
-		preview.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); openBody(); } };
+		preview.onkeydown = event => { if (event.target === preview && event.key === 'Enter') { event.preventDefault(); openBody(); } };
 		this.detailScroll.onclick = event => { if (event.target === this.detailScroll && !window.getSelection()?.toString()) openBody(); };
 		for (const input of [title, body]) {
 			input.addEventListener('compositionstart', () => { edit.composing = true; });
@@ -1016,12 +1021,23 @@ export class ArrangeView extends ItemView {
 			|| edit.composing || document.activeElement === edit.title || document.activeElement === edit.body));
 	}
 	private renderBody(): void {
+		const render = ++this.bodyRender;
 		const edit = this.editing;
 		if (!edit) return;
 		edit.body.hidden = true; edit.preview.hidden = false; edit.preview.empty();
 		if (edit.body.value) {
 			const item = this.store.items.find(item => item.id === edit.id);
-			void MarkdownRenderer.render(this.app, edit.body.value, edit.preview, item?.path ?? '', this);
+			void MarkdownRenderer.render(this.app, edit.body.value, edit.preview, item?.path ?? '', this).then(() => {
+				if (render !== this.bodyRender || this.editing !== edit || edit.preview.hidden || !item || !edit.body.value.trim()) return;
+				const walker = edit.preview.ownerDocument.createTreeWalker(edit.preview, 4 /* SHOW_TEXT */);
+				let last: Node | null = null;
+				while (walker.nextNode()) if (walker.currentNode.textContent?.trim()) last = walker.currentNode;
+				const link = last?.parentElement?.closest('a');
+				const end = link?.parentElement ?? last?.parentElement ?? edit.preview;
+				const copy = iconButton(end, '复制标题及附注', 'copy', () => { void this.copyItem(item, true); });
+				copy.addClass('gvkit-arrange-body-copy');
+				if (link) link.after(copy);
+			});
 		} else edit.preview.createSpan({ cls: 'gvkit-arrange-body-placeholder', text: this.store.state.bodyPlaceholder });
 	}
 	private scheduleEdit(): void {

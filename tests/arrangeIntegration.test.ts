@@ -129,7 +129,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		});
 		await fresh.load();
 		assert.deepEqual(fresh.state.rowActions, ['pin'], 'legacy list preferences are preserved');
-		assert.deepEqual(fresh.state.detailActions, ['parent', 'date', 'top', 'pin', 'changeParent', 'markdown']);
+		assert.deepEqual(fresh.state.detailActions, ['parent', 'date', 'top', 'pin', 'changeParent']);
 		assert.equal(fresh.state.showCompletedChildren, true);
 		await store.configure({ detailActions: [], showCompletedChildren: false });
 		await fresh.load(); assert.deepEqual(fresh.state.detailActions, []); assert.equal(fresh.state.showCompletedChildren, false);

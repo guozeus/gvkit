@@ -38,10 +38,16 @@ export const stringifyYaml=value=>JSON.stringify(value,null,2)+'\\n';
 test('inline edits persist to Markdown, switch safely, and retain drafts on invalid or failed saves', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'gvkit-detail-test-'));
 	const window = new Window();
-	const globals = new Map(['window', 'document', 'MouseEvent'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let view: any;
 	try {
 		Object.assign(globalThis, { window, document: window.document, MouseEvent: window.MouseEvent });
+		const copied: string[] = [];
+		let copyFails = false;
+		Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (text: string) => {
+			if (copyFails) throw Error('clipboard unavailable');
+			copied.push(text);
+		} } } });
 		const proto: any = window.HTMLElement.prototype;
 		proto.empty = function () { this.replaceChildren(); };
 		proto.addClass = function (...names: string[]) { this.classList.add(...names); };
@@ -485,6 +491,46 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		delete (window.document as any).caretRangeFromPoint;
 		view.renderBody(); const link = preview.createEl('a', { text: '链接', attr: { href: '#target' } }); link.click();
 		assert.equal(view.editing.body.hidden, true, 'links do not enter the editor');
+		// Batch four: the date region reuses the date operation; copying never edits the item.
+		const originalCopyDate = store.items.find((x: any) => x.id === family).date;
+		await store.setDate(family, '2026-10-28'); await view.reload();
+		const beforeCopy = await vault.read(files.get(store.items.find((x: any) => x.id === family).path));
+		const dateRegion = root.querySelector<HTMLButtonElement>('.gvkit-arrange-detail-date')!;
+		assert.equal(dateRegion.tagName, 'BUTTON'); assert.equal(dateRegion.hidden, false);
+		dateRegion.click();
+		assert.ok((window as any).menus.at(-1).entries.some((entry: any) => entry.title === '选择日期…'));
+		view.itemMenu(store.items.find((x: any) => x.id === family), new window.MouseEvent('click'));
+		const batch4Menu = window.document.querySelector('.gvkit-arrange-item-menu')!;
+		assert.equal(batch4Menu.textContent!.includes('Markdown'), false);
+		const copyTitle = [...batch4Menu.querySelectorAll<HTMLButtonElement>('.gvkit-arrange-menu-action')].find(button => button.textContent === '复制标题')!;
+		copyTitle.click(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(copied.at(-1), '光标标题');
+		let copyBody = root.querySelector<HTMLButtonElement>('.gvkit-arrange-body-copy')!;
+		assert.ok(copyBody); copyBody.click(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(copied.at(-1), '光标标题\n\n## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字');
+		assert.equal(view.editing.body.hidden, true, 'copy does not enter the body editor');
+		view.renderBody(); view.renderBody();
+		await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(root.querySelectorAll('.gvkit-arrange-body-copy').length, 1, 'overlapping renders append only one copy icon');
+		assert.equal(await vault.read(files.get(store.items.find((x: any) => x.id === family).path)), beforeCopy);
+		// Rendered block/inline markup keeps the icon at the final word, outside links.
+		for (const html of ['<p>段落<strong>最后字</strong></p>', '<ul><li>列表最后字</li></ul>', '<p>末尾<a href="#x">链接</a></p>']) {
+			view.renderBody(); view.editing.preview.innerHTML = html;
+			await new Promise(resolve => setTimeout(resolve, 0));
+			copyBody = root.querySelector<HTMLButtonElement>('.gvkit-arrange-body-copy')!;
+			assert.ok(copyBody); assert.equal(copyBody.closest('a'), null);
+			assert.equal(copyBody.parentElement!.lastChild, copyBody);
+		}
+		copyFails = true; copyBody.click(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal((window as any).notices.at(-1), '复制失败，请重试'); copyFails = false;
+		view.editing.title.value = '正在编辑的标题';
+		view.action('copy', store.items.find((x: any) => x.id === family), new window.MouseEvent('click'));
+		await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(copied.at(-1), '正在编辑的标题');
+		view.editing.title.value = '光标标题';
+		view.editing.body.value = ''; view.renderBody(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(root.querySelector('.gvkit-arrange-body-copy'), null, 'empty notes have no copy icon');
+		view.editing.body.value = '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字'; view.renderBody();
+		await store.setDate(family, originalCopyDate);
 		// Settings update the existing editor, and new Store reads all preferences from Markdown.
 		const preferences = { listFontSize: 14, rowHeight: 40, rowDividers: false, gripHeight: 56, gripWidth: 96,
 			toolbarHeight: 56, parentFontSize: 18, closeThreshold: 10, selectionColor: 'purple' };
