@@ -2,6 +2,14 @@
 
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
+## 0.6.30 GVKit（完成反馈与多设备设置）
+
+- 列表和详情勾选事项成功保存后，播放短促、轻柔的上扬音效；撤销完成、标记开发完成、同步或写入失败均不播放。
+- 支持 Vibration API 的设备会尝试一次 18ms 短震。没有此接口的平台（包括常见 iPhone WebView）、系统静音或禁止震动时不保证触觉效果；实际音量、音色和震感需真机体验。
+- 安排界面配置继续统一保存在 `settings/gvkit/arrange.md`。同一 Vault 的同步需包含该文件和 `settings` 目录；文件到达另一设备后，已打开的安排界面自动刷新，重新打开也会读取。沿用已有 Vault 同步，不增加服务或另存一份设备配置。离线设备须等待原同步工具完成同步。
+
+在 BRAT 更新 `guozeus/gvkit` 到 **0.6.30** 并重载插件。两项开发完成待制作人验收，实体设备的声音、触觉及实际跨设备同步仍需确认。
+
 ## 0.6.28 GVKit（自御安排快捷操作和复制）
 
 - 点击详情左上日期可直接打开原日期操作菜单。

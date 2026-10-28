@@ -76,8 +76,11 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const disk = (path: string) => join(dir, encodeURIComponent(path));
 		let fail = false;
 		let pause: (() => Promise<void>) | null = null;
+		const vaultEvents = new Map<string, ((file: any) => void)[]>();
 		const vault = {
-			on: () => ({}), getMarkdownFiles: () => [...files.values()].filter(f => f instanceof TFile),
+			on: (name: string, callback: (file: any) => void) => {
+				vaultEvents.set(name, [...vaultEvents.get(name) ?? [], callback]); return {};
+			}, getMarkdownFiles: () => [...files.values()].filter(f => f instanceof TFile),
 			getAbstractFileByPath: (path: string) => files.get(path), read: (file: any) => readFile(disk(file.path), 'utf8'),
 			createFolder: async (path: string) => { files.set(path, new TFolder()); },
 			create: async (path: string, source: string) => { await writeFile(disk(path), source); const f = new TFile(path); files.set(path, f); return f; },
@@ -740,6 +743,58 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await settle(); await new Promise(resolve => setTimeout(resolve, 0));
 		assert.equal(createCalls, 3); assert.equal(store.items.filter((x: any) => x.title === '手机点击').length, 1);
 		root.removeEventListener('keydown', bubble); store.create = originalCreate;
+		// Feedback is tied to saved completion, from both checkbox surfaces.
+		let prepared = 0, played = 0;
+		view.feedback = { prepare: () => { prepared++; }, play: () => {
+			assert.ok(store.items.find((x: any) => x.id === reviewId).completedAt);
+			played++;
+		}, close: () => {} };
+		await view.select(reviewId);
+		view.detail.querySelector('.gvkit-arrange-detail-title-row input').click(); await settle();
+		assert.equal(played, 1); assert.equal(prepared, 1);
+		assert.equal(await store.complete(reviewId, true), false, 'already completed by another device is not a new completion');
+		await view.toggleComplete(reviewId); assert.equal(played, 1, 'undo is silent');
+		fail = true; await view.toggleComplete(reviewId); fail = false;
+		assert.equal(played, 1, 'failed save is silent');
+		assert.equal(store.items.find((x: any) => x.id === reviewId).completedAt, null);
+		view.list.querySelector(`[data-id="${reviewId}"] input`).click(); await settle();
+		assert.equal(played, 2);
+		await view.toggleComplete(reviewId);
+		await store.toggleDevelopmentCompleted(reviewId); await view.reload();
+		assert.equal(played, 2, 'development and reload are silent');
+		// A second device reads/writes its own configuration bytes, then the
+		// existing Vault transport delivers those bytes to this open view.
+		const statePath = 'settings/gvkit/arrange.md', stateFile = files.get(statePath);
+		let otherDeviceBytes = await vault.read(stateFile);
+		const otherVault = { ...vault,
+			read: (file: any) => file.path === statePath ? Promise.resolve(otherDeviceBytes) : vault.read(file),
+			process: async (file: any, change: (s: string) => string) => {
+				assert.equal(file.path, statePath); otherDeviceBytes = change(otherDeviceBytes);
+			} };
+		const otherDevice = new ArrangeStore({ ...app, vault: otherVault }); await otherDevice.load();
+		assert.deepEqual(otherDevice.state, store.state, 'all settings travel in the single Markdown file');
+		await otherDevice.configure({ listFontSize: 21, pinColor: 'purple', composerMaxRows: 4,
+			bodyPlaceholder: '另一设备同步提示', bodyMinRows: 5, timezone: 'Asia/Shanghai', rowActions: ['copy', 'top'] });
+		await view.select(reviewId); view.editing.title.focus();
+		view.editing.title.value = '同步时保留未保存标题';
+		const draftNode = view.editing.title;
+		view.busy = true;
+		await writeFile(disk(statePath), otherDeviceBytes);
+		for (const listener of vaultEvents.get('modify') ?? []) listener(stateFile);
+		await new Promise(resolve => setTimeout(resolve, 220));
+		assert.notEqual(store.state.listFontSize, 21, 'incoming refresh waits for the current operation');
+		view.busy = false;
+		await new Promise(resolve => setTimeout(resolve, 220));
+		assert.deepEqual(store.state, otherDevice.state);
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-list-font'), '21px');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-body-rows'), '5');
+		assert.equal(view.editing.body.placeholder, '另一设备同步提示');
+		assert.equal(view.editing.title, draftNode); assert.equal(draftNode.value, '同步时保留未保存标题');
+		assert.equal(played, 2, 'incoming settings never produce completion feedback');
+		await view.saveEdit();
+		await store.configure({ keyboardGap: 12 });
+		otherDeviceBytes = await vault.read(stateFile); await otherDevice.load();
+		assert.deepEqual(otherDevice.state, store.state, 'the existing file works in the return direction too');
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

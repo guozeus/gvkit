@@ -1,6 +1,7 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
+import { ArrangeFeedback } from './arrangeFeedback';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -70,6 +71,7 @@ export function registerArrange(plugin: Plugin): void {
 
 export class ArrangeView extends ItemView {
 	private store: ArrangeStore;
+	private feedback = new ArrangeFeedback();
 	private selected: string | null = null;
 	private filter: 'all' | 'today' | 'overdue' = 'all';
 	private searchOpen = false;
@@ -198,7 +200,10 @@ export class ArrangeView extends ItemView {
 		});
 		const refresh = () => {
 			if (this.timer !== null) window.clearTimeout(this.timer);
-			this.timer = window.setTimeout(() => { this.timer = null; if (!this.busy) void this.reload(); }, 180);
+			this.timer = window.setTimeout(() => {
+				this.timer = null;
+				if (this.busy) refresh(); else void this.reload();
+			}, 180);
 		};
 		for (const name of ['create', 'modify', 'delete', 'rename'] as const) {
 			this.registerEvent(this.app.vault.on(name as 'modify', file => {
@@ -274,6 +279,7 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.feedback.close();
 		this.titleFocusScroll = null;
 		delete this.contentEl.dataset.ignoreSwipe;
 		this.cancelReorder?.();
@@ -778,10 +784,16 @@ export class ArrangeView extends ItemView {
 		this.paintLists(); this.paintDetail();
 	}
 	private async toggleComplete(id: string): Promise<void> {
+		if (this.busy) return;
+		if (!this.store.items.find(item => item.id === id)?.completedAt) this.feedback.prepare();
 		await this.run(async () => {
 			if (!(await this.saveEdit())) return;
 			const item = this.store.items.find(item => item.id === id);
-			if (item) await this.store.complete(id, !item.completedAt);
+			if (item) {
+				const done = !item.completedAt;
+				const changed = await this.store.complete(id, done);
+				if (changed && done && !this.closed) this.feedback.play();
+			}
 		});
 	}
 	private paintDetailState(): void {
@@ -1099,6 +1111,7 @@ export class ArrangeView extends ItemView {
 	}
 	private settings(): void {
 		const modal = new Modal(this.app); modal.setTitle('安排界面设置');
+		modal.contentEl.createEl('p', { text: '设置自动保存在 settings/gvkit/arrange.md，随同一 Vault 的文件同步到其他设备。请确保同步包含 settings 目录。完成时播放轻音；触觉反馈取决于设备支持与系统设置，不支持震动的平台仅播放音效。' });
 		modal.contentEl.dataset.ignoreSwipe = 'true';
 		let rowActions = [...this.store.state.rowActions];
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {

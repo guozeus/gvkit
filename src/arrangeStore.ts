@@ -173,12 +173,12 @@ export class ArrangeStore {
 			await this.load();
 		});
 	}
-	complete(id: string, done: boolean): Promise<void> {
+	complete(id: string, done: boolean): Promise<boolean> {
 		return this.serial(async () => {
 			const folder = done ? DONE : TODO;
 			await this.requireFolder(folder);
 			const item = this.items.find(item => item.id === id);
-			if (!item || Boolean(item.completedAt) === done) return;
+			if (!item || Boolean(item.completedAt) === done) return false;
 			const destination = `${folder}/${this.file(id).name}`;
 			if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
 			await this.patch(id, { completed_at: done ? new Date().toISOString() : null, pinned: false });
@@ -186,6 +186,7 @@ export class ArrangeStore {
 			await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
 			await this.load();
 			await this.saveState();
+			return true;
 		});
 	}
 	setDate(id: string, date: string | null): Promise<void> {
