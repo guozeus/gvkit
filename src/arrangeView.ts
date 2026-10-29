@@ -1170,10 +1170,10 @@ export class ArrangeView extends ItemView {
 						input.setAttribute('aria-invalid', String(!valid));
 						if (valid) { updateSlider(value); configure({ [key]: value }); }
 					});
-				})
-				.addButton(button => button.setButtonText('恢复默认').onClick(() => {
-					input.value = String(initial); input.removeAttribute('aria-invalid'); updateSlider(initial); configure({ [key]: initial });
-				}));
+				});
+			iconButton(setting.nameEl, `${names[key]}恢复默认`, 'rotate-ccw', () => {
+				input.value = String(initial); input.removeAttribute('aria-invalid'); updateSlider(initial); configure({ [key]: initial });
+			}).addClass('gvkit-arrange-setting-reset');
 		}
 		new Setting(modal.contentEl).setName('钉住竖条颜色')
 			.addDropdown(dropdown => dropdown.addOptions({ gold: '金色（默认）', purple: '紫色', blue: '蓝色' })
