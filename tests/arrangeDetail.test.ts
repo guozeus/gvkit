@@ -30,6 +30,7 @@ export class TFile { constructor(path) { this.path=path;this.name=path.split('/'
 export class TFolder {} export class Plugin {} export class WorkspaceLeaf {}
 export const setIcon=(el,icon)=>{el.dataset.icon=icon};
 export const MarkdownRenderer={render:async(app,text,el)=>{el.textContent=text}};
+export function sanitizeHTMLToDom(html) { const el=document.createElement('template');el.innerHTML=html;return el.content; }
 export function getFrontMatterInfo(s) { const end=s.indexOf('\\n---',4);return s.startsWith('---\\n')&&end>=0?{exists:true,frontmatter:s.slice(4,end),contentStart:end+5}:{exists:false,frontmatter:'',contentStart:0}; }
 export const parseYaml=JSON.parse;
 export const stringifyYaml=value=>JSON.stringify(value,null,2)+'\\n';
@@ -38,10 +39,12 @@ export const stringifyYaml=value=>JSON.stringify(value,null,2)+'\\n';
 test('inline edits persist to Markdown, switch safely, and retain drafts on invalid or failed saves', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'gvkit-detail-test-'));
 	const window = new Window();
-	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let view: any;
 	try {
 		Object.assign(globalThis, { window, document: window.document, MouseEvent: window.MouseEvent });
+		for (const key of ['MutationObserver', 'Node', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
+		Object.assign(globalThis, { requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), getComputedStyle: window.getComputedStyle.bind(window) });
 		const copied: string[] = [];
 		let copyFails = false;
 		Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { clipboard: { writeText: async (text: string) => {
@@ -210,7 +213,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(root.querySelector('.gvkit-arrange-body')!.firstChild, previewText, 'title blur must not replace the text a pending pointer click is landing on');
 		title.value += '\n第二行'; title.dispatchEvent(new window.Event('input'));
 		(root.querySelector('.gvkit-arrange-body') as any).click();
-		let body = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-inline-body')!;
+		let body = view.editing.body;
+		assert.equal(root.querySelector('textarea.gvkit-arrange-inline-body'), null);
 		assert.equal(body.hidden, false);
 		assert.equal(body.placeholder, '记录正文、链接、思路…');
 		for (const hint of ['写下下一步', '']) {
@@ -220,7 +224,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			assert.equal(body.hidden, false); assert.equal(body.value, '');
 			assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-shadow'), 'none');
 		}
-		body.value = '## 附注\n[[原链接]]\n'; body.dispatchEvent(new window.Event('input'));
+		body.value = '## 附注\n[[原链接]]\n';
 		await store.configure({ detailShadow: 16, bodyPlaceholder: '提示不是正文' }); view.applyComposerSettings();
 		assert.equal(body.value, '## 附注\n[[原链接]]\n');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-shadow'), '0 -7px 16px #0003');
@@ -517,7 +521,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const textNode = preview.querySelectorAll('p')[1].firstChild;
 		(window.document as any).caretRangeFromPoint = () => ({ startContainer: textNode, startOffset: 2 });
 		textNode.parentElement.dispatchEvent(new window.MouseEvent('click', { bubbles: true, clientX: 40, clientY: 80 }));
-		assert.equal(view.editing.body.selectionStart, view.editing.body.value.indexOf('第二行文字') + 2);
+		assert.equal(view.editing.body.editor.state.selection.main.head, view.editing.body.value.indexOf('第二行文字') + 2);
 		assert.equal(view.editing.body.value, '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字');
 		delete (window.document as any).caretRangeFromPoint;
 		view.renderBody(); const link = preview.createEl('a', { text: '链接', attr: { href: '#target' } }); link.click();

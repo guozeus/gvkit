@@ -24,6 +24,7 @@ export class TFolder {}
 export class Plugin {}
 export class WorkspaceLeaf {}
 export const MarkdownRenderer = { render: async () => {} };
+export function sanitizeHTMLToDom(html) { const el=document.createElement('template');el.innerHTML=html;return el.content; }
 export const setIcon = () => {};
 export const getFrontMatterInfo = () => ({});
 export const parseYaml = JSON.parse;
@@ -43,7 +44,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	meta.name = 'viewport'; meta.content = 'width=device-width, initial-scale=1, maximum-scale=5';
 	window.document.head.append(meta);
 	const originalViewport = meta.content;
-	const saved = new Map(['window', 'document', 'ResizeObserver'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const saved = new Map(['window', 'document', 'ResizeObserver', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let notifyResize = () => {};
 	let disconnected = false;
 	let observedBox = '';
@@ -68,10 +69,16 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	};
 	proto.createDiv = function (options: unknown) { return this.createEl('div', options); };
 	proto.createSpan = function (options: unknown) { return this.createEl('span', options); };
+	for (const key of ['MutationObserver', 'Node', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
+	Object.assign(globalThis, { requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), getComputedStyle: window.getComputedStyle.bind(window) });
 	Object.assign(globalThis, { window, document: window.document, ResizeObserver: class {
-		constructor(callback: () => void) { notifyResize = callback; }
-		observe(target: unknown, options: { box: string }) { observedTarget = target; observedBox = options.box; }
-		disconnect() { disconnected = true; }
+		callback: () => void;
+		rootObserver = false;
+		constructor(callback: () => void) { this.callback = callback; }
+		observe(target: unknown, options?: { box: string }) {
+			if (target === root) { this.rootObserver = true; notifyResize = this.callback; observedTarget = target; observedBox = options?.box ?? ''; }
+		}
+		disconnect() { if (this.rootObserver) disconnected = true; }
 	} });
 	let view: any;
 	let active = true;

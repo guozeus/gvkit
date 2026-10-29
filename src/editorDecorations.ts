@@ -8,7 +8,7 @@ function isLivePreview(view: EditorView): boolean {
 	return view.dom.closest('.is-live-preview') !== null;
 }
 
-function buildDecorations(view: EditorView): DecorationSet {
+export function buildDecorations(view: EditorView): DecorationSet {
 	if (!isLivePreview(view)) return Decoration.none;
 
 	const ranges: Range<Decoration>[] = [];

@@ -191,6 +191,19 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-detail-title-row > input[type="checkbox"] { position: absolute; top: 2px; left: 0; z-index: 1; width: var(--gvkit-arrange-detail-checkbox, 21px); height: var(--gvkit-arrange-detail-checkbox, 21px); margin: 0; }
 .gvkit-arrange .gvkit-arrange-detail-title { min-width: 0; margin: 0; min-height: 1.4em; line-height: 1.4; font-size: var(--gvkit-arrange-detail-font, 18px); font-weight: 600; text-decoration: none; text-indent: calc(var(--gvkit-arrange-detail-checkbox, 21px) + 8px); }
 .gvkit-arrange .gvkit-arrange-inline-body { margin: 0; min-height: calc(var(--gvkit-arrange-body-rows, 3) * 1.6em); font-size: var(--gvkit-arrange-body-font, 16px); line-height: 1.6; }
+.gvkit-arrange .gvkit-arrange-inline-body .cm-scroller { font: inherit; overflow: visible; min-height: inherit; }
+.gvkit-arrange .gvkit-arrange-inline-body .cm-content { padding: 0; min-height: inherit; caret-color: var(--text-normal); }
+.gvkit-arrange .gvkit-arrange-inline-body .cm-line { padding: 0; }
+.gvkit-arrange .gvkit-arrange-inline-body .cm-placeholder { color: var(--text-faint); }
+.gvkit-arrange .gvkit-arrange-inline-body.cm-focused { outline: none; }
+.gvkit-arrange-inline-body .gvkit-arrange-heading { font-weight: var(--heading-weight, 600); line-height: 1.3; }
+.gvkit-arrange-inline-body .gvkit-arrange-h1 { font-size: 2em; }
+.gvkit-arrange-inline-body .gvkit-arrange-h2 { font-size: 1.5em; }
+.gvkit-arrange-inline-body .gvkit-arrange-h3 { font-size: 1.25em; }
+.gvkit-arrange-inline-body .gvkit-arrange-quote { border-left: 2px solid var(--text-faint); padding-left: 12px !important; }
+.gvkit-arrange-inline-body .gvkit-arrange-code-line { background: var(--code-background); font-family: var(--font-monospace); }
+.gvkit-arrange-inline-body .gvkit-arrange-table-cell { display: inline-block; min-width: 6em; padding: 0 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.gvkit-arrange-inline-body .gvkit-arrange-rendered-fragment > p { display: inline; margin: 0; }
 .gvkit-arrange-body { min-height: calc(var(--gvkit-arrange-body-rows, 3) * 1.6em); overflow-wrap: anywhere; font-size: var(--gvkit-arrange-body-font, 16px); line-height: 1.6; cursor: text; user-select: text; -webkit-user-select: text; }
 .gvkit-arrange .gvkit-arrange-inline-body[hidden], .gvkit-arrange-body[hidden], .gvkit-arrange-edit-error[hidden] { display: none; }
 .gvkit-arrange-body-placeholder { color: var(--text-faint); }

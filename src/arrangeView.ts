@@ -2,6 +2,7 @@ import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setI
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 import { ArrangeFeedback } from './arrangeFeedback';
+import { ArrangeBodyEditor } from './arrangeBodyEditor';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -101,7 +102,7 @@ export class ArrangeView extends ItemView {
 	private full = false;
 	private busy = false;
 	private closed = false;
-	private editing: { id: string; title: HTMLTextAreaElement; body: HTMLTextAreaElement; preview: HTMLElement; error: HTMLElement; savedTitle: string; savedBody: string; composing: boolean } | null = null;
+	private editing: { id: string; title: HTMLTextAreaElement; body: ArrangeBodyEditor; preview: HTMLElement; error: HTMLElement; savedTitle: string; savedBody: string; composing: boolean } | null = null;
 	private editTimer: number | null = null;
 	private savingEdit: Promise<boolean> | null = null;
 	private timer: number | null = null;
@@ -291,6 +292,7 @@ export class ArrangeView extends ItemView {
 		if (this.timer !== null) window.clearTimeout(this.timer);
 		if (this.editTimer !== null) window.clearTimeout(this.editTimer);
 		await this.saveEdit();
+		this.editing?.body.destroy();
 	}
 	private async reload(): Promise<void> {
 		try { await this.store.load(); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
@@ -304,7 +306,7 @@ export class ArrangeView extends ItemView {
 		let timer: number | null = null;
 		const smallEditor = (target: EventTarget | null): boolean => {
 			const el = target as HTMLElement | null;
-			return Boolean(el && root.contains(el) && el.matches?.('textarea,input:not([type="checkbox"])')
+			return Boolean(el && root.contains(el) && el.matches?.('textarea,input:not([type="checkbox"]),.gvkit-arrange-inline-body .cm-content')
 				&& parseFloat(window.getComputedStyle(el).fontSize) < 16);
 		};
 		const restore = () => {
@@ -360,9 +362,7 @@ export class ArrangeView extends ItemView {
 		this.updateComposer();
 		const edit = this.editing;
 		if (edit) {
-			for (const input of [edit.title, edit.body]) {
-				if (!input.hidden) { input.style.height = '0'; input.style.height = `${input.scrollHeight}px`; }
-			}
+			edit.title.style.height = '0'; edit.title.style.height = `${edit.title.scrollHeight}px`;
 			edit.body.placeholder = this.store.state.bodyPlaceholder;
 			// Update only the empty hint; never replace an editor or its unsaved text.
 			const hint = edit.preview.querySelector<HTMLElement>('.gvkit-arrange-body-placeholder');
@@ -695,7 +695,7 @@ export class ArrangeView extends ItemView {
 			if (!(await this.saveEdit())) return;
 			await this.store.archive(item.id);
 			if (this.selected === item.id) {
-				this.editing = null; this.selected = null; this.full = false;
+				this.editing?.body.destroy(); this.editing = null; this.selected = null; this.full = false;
 				this.detail.style.height = ''; this.detail.style.maxHeight = '';
 			}
 		});
@@ -778,7 +778,7 @@ export class ArrangeView extends ItemView {
 	private async select(id: string | null): Promise<void> {
 		if (this.choosingParent) return;
 		if (!(await this.saveEdit())) return;
-		this.editing = null;
+		this.editing?.body.destroy(); this.editing = null;
 		this.selected = id;
 		this.full = false;
 		this.detail.style.height = '';
@@ -829,6 +829,7 @@ export class ArrangeView extends ItemView {
 	private paintDetail(): void {
 		if (this.choosingParent) { this.detail.hidden = true; return; }
 		const item = this.store.items.find(item => item.id === this.selected);
+		this.editing?.body.destroy();
 		if (!item) { this.selected = null; this.editing = null; this.detail.hidden = true; return; }
 		const scroll = this.editing?.id === item.id ? this.detailScroll?.scrollTop ?? 0 : 0;
 		this.detail.hidden = false;
@@ -874,16 +875,17 @@ export class ArrangeView extends ItemView {
 		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
 		error.hidden = true;
 		const preview = this.detailScroll.createDiv({ cls: 'gvkit-arrange-body', attr: { tabindex: '0', 'aria-label': '编辑事项正文' } });
-		const body = this.detailScroll.createEl('textarea', { cls: 'gvkit-arrange-inline-body', attr: { 'aria-label': '事项正文', rows: '1', placeholder: this.store.state.bodyPlaceholder } });
-		body.value = item.body; body.hidden = true;
+		const body = new ArrangeBodyEditor(this.detailScroll, item.body, this.store.state.bodyPlaceholder, this.app, item.path, this, () => {
+			error.hidden = true; this.scheduleEdit();
+		});
+		body.hidden = true;
 		const edit = this.editing = { id: item.id, title, body, preview, error, savedTitle: item.title, savedBody: item.body, composing: false as boolean };
 		this.renderBody();
 		const resize = (input: HTMLTextAreaElement) => { input.style.height = '0'; input.style.height = `${input.scrollHeight}px`; };
 		resize(title);
 		// Native textarea hit testing handles the title, including its very first tap.
 		const openBody = (offset = 0) => {
-			preview.hidden = true; body.hidden = false; resize(body); body.focus({ preventScroll: true });
-			body.setSelectionRange(offset, offset);
+			preview.hidden = true; body.hidden = false; body.focus(offset);
 		};
 		preview.onclick = event => {
 			if ((event.target as HTMLElement).closest('a, button') || window.getSelection()?.toString()) return;
@@ -891,13 +893,13 @@ export class ArrangeView extends ItemView {
 		};
 		preview.onkeydown = event => { if (event.target === preview && event.key === 'Enter') { event.preventDefault(); openBody(); } };
 		this.detailScroll.onclick = event => { if (event.target === this.detailScroll && !window.getSelection()?.toString()) openBody(); };
-		for (const input of [title, body]) {
+		for (const input of [title, body.editor.contentDOM]) {
 			input.addEventListener('compositionstart', () => { edit.composing = true; });
 			input.addEventListener('compositionend', () => { edit.composing = false; this.scheduleEdit(); });
-			input.oninput = () => { resize(input); error.hidden = true; title.removeAttribute('aria-invalid'); this.scheduleEdit(); };
+			if (input === title) input.oninput = () => { resize(title); error.hidden = true; title.removeAttribute('aria-invalid'); this.scheduleEdit(); };
 			input.onblur = () => { void this.saveEdit().then(ok => {
 				// Replacing preview text on title blur can swallow the click landing on it.
-				if (ok && input === body && this.editing === edit && document.activeElement !== body) this.renderBody();
+				if (ok && input !== title && this.editing === edit && !body.focused) this.renderBody();
 			}); };
 		}
 		this.children = this.detailScroll.createDiv('gvkit-arrange-children');
@@ -1039,7 +1041,7 @@ export class ArrangeView extends ItemView {
 	private keepEditor(): boolean {
 		const edit = this.editing;
 		return Boolean(edit && (edit.title.value !== edit.savedTitle || edit.body.value !== edit.savedBody
-			|| edit.composing || document.activeElement === edit.title || document.activeElement === edit.body));
+			|| edit.composing || document.activeElement === edit.title || edit.body.focused));
 	}
 	private renderBody(): void {
 		const render = ++this.bodyRender;
