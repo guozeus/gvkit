@@ -112,6 +112,7 @@ export class ArrangeView extends ItemView {
 	private today = '';
 	private restoreHeader: (() => void) | null = null;
 	private cancelReorder: (() => void) | null = null;
+	private cancelResize: (() => void) | null = null;
 	private titleFocusScroll: { input: HTMLTextAreaElement; top: number } | null = null;
 	private bodyRender = 0;
 
@@ -185,6 +186,8 @@ export class ArrangeView extends ItemView {
 		this.area = root.createDiv('gvkit-arrange-area');
 		this.list = this.area.createDiv('gvkit-arrange-list');
 		this.list.setAttribute('aria-label', '事项列表');
+		const divider = this.area.createDiv({ cls: 'gvkit-arrange-divider', attr: { role: 'separator', 'aria-label': '拖动调整列表与详情宽度', 'aria-orientation': 'vertical' } });
+		this.widthGesture(divider);
 		this.detail = this.area.createDiv('gvkit-arrange-detail');
 		this.detail.hidden = true;
 		const composer = root.createDiv('gvkit-arrange-composer');
@@ -296,6 +299,7 @@ export class ArrangeView extends ItemView {
 		this.titleFocusScroll = null;
 		delete this.contentEl.dataset.ignoreSwipe;
 		this.cancelReorder?.();
+		this.cancelResize?.();
 		this.restoreHeader?.();
 		this.contentEl.style.removeProperty('--gvkit-arrange-detail-shadow');
 		this.contentEl.style.removeProperty('--gvkit-arrange-submit-size');
@@ -620,11 +624,12 @@ export class ArrangeView extends ItemView {
 			let topDrop = false;
 			let axis: 'left' | 'other' | null = null;
 			let lastX = x, lastY = y;
-			const timer = window.setTimeout(() => {
-				if (moved || this.busy || item.pinned || item.completedAt) return;
+			const beginDrag = () => {
+				if (this.busy || item.pinned || item.completedAt) return;
 				dragging = true; row.addClass('is-dragging');
 				suppressClickUntil = Infinity;
-			}, 380);
+			};
+			const timer = window.setTimeout(() => { if (!moved) beginDrag(); }, 380);
 			const cleanup = () => {
 				window.clearTimeout(timer);
 				document.removeEventListener('touchmove', touchMove); document.removeEventListener('touchend', touchEnd);
@@ -642,13 +647,15 @@ export class ArrangeView extends ItemView {
 					const dx = clientX - x, dy = clientY - y;
 					if (Math.hypot(dx, dy) > 8) {
 						moved = true; window.clearTimeout(timer);
+						// Vertical mouse movement starts sorting; horizontal swipes and touch keep their behavior.
+						if (!touch && !Platform.isMobileApp && Math.abs(dy) > Math.abs(dx) / 1.5) beginDrag();
 						axis ??= dx < -Math.abs(dy) * 1.5 ? 'left' : 'other';
 					}
-					if (axis === 'left' && this.store.state.swipeAction !== 'none') {
+					if (!dragging && axis === 'left' && this.store.state.swipeAction !== 'none') {
 						event.preventDefault();
 						row.style.transform = `translateX(${Math.max(-80, Math.min(0, dx))}px)`;
 					}
-					return;
+					if (!dragging) return;
 				}
 				event.preventDefault();
 				row.style.transform = `translateY(${clientY - y}px)`;
@@ -713,6 +720,36 @@ export class ArrangeView extends ItemView {
 			suppressClickUntil = 0;
 			if (event.pointerType !== 'touch' && event.button === 0 && onBody(event.target)) start(event.clientX, event.clientY, false);
 		});
+	}
+	private widthGesture(divider: HTMLElement): void {
+		divider.onpointerdown = event => {
+			if (Platform.isMobileApp || event.button !== 0 || this.detail.hidden) return;
+			event.preventDefault();
+			this.cancelResize?.(); this.cancelReorder?.();
+			divider.setPointerCapture(event.pointerId);
+			divider.addClass('is-resizing');
+			const move = (e: PointerEvent) => {
+				if (e.pointerId !== event.pointerId) return;
+				const bounds = this.area.getBoundingClientRect();
+				const minimum = Math.min(240, bounds.width * .3);
+				const width = Math.max(minimum, Math.min(bounds.width - minimum, bounds.right - e.clientX));
+				this.area.style.setProperty('--gvkit-arrange-detail-width', `${width / bounds.width * 100}%`);
+				const title = this.editing?.title;
+				if (title) { title.style.height = '0'; title.style.height = `${title.scrollHeight}px`; }
+			};
+			const end = () => {
+				divider.removeEventListener('pointermove', move); divider.removeEventListener('pointerup', end);
+				divider.removeEventListener('pointercancel', end); divider.removeEventListener('lostpointercapture', end);
+				window.removeEventListener('blur', end);
+				divider.removeClass('is-resizing');
+				if (divider.hasPointerCapture(event.pointerId)) divider.releasePointerCapture(event.pointerId);
+				this.cancelResize = null;
+			};
+			divider.addEventListener('pointermove', move); divider.addEventListener('pointerup', end);
+			divider.addEventListener('pointercancel', end); divider.addEventListener('lostpointercapture', end);
+			window.addEventListener('blur', end);
+			this.cancelResize = end;
+		};
 	}
 	private actionAvailable(key: RowAction, item: ArrangeItem): boolean {
 		if (key === 'parent') return Boolean(item.parent && this.store.items.some(parent => parent.id === item.parent));

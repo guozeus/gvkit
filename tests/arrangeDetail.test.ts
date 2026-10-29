@@ -6,6 +6,7 @@ import { mkdtemp, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 // Real view + Store, disk-backed test Vault. No user information is accessed.
 const shim = `
@@ -807,6 +808,21 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.select(null);
 		const platform = (await import(pathToFileURL(join(dir, 'view.mjs')).href)).Platform;
 		platform.isMobileApp = false;
+		// Desktop presses need no stationary long hold before entering the existing drop path.
+		view.paintLists();
+		const free = store.state.order.filter((id: string) => !store.items.find((i: any) => i.id === id).pinned);
+		const mouseId = free[0], dropId = free.at(-1);
+		const mouseLabel = view.list.querySelector(`[data-id="${mouseId}"] .gvkit-arrange-title`);
+		const mouseDrop = view.list.querySelector(`[data-id="${dropId}"]`);
+		mouseDrop.getBoundingClientRect = () => ({ top: 100, height: 48 });
+		window.document.elementFromPoint = () => mouseDrop;
+		pointer(mouseLabel, 'pointerdown', 100, 20);
+		pointer(window.document, 'pointermove', 100, 140);
+		assert.equal(mouseLabel.parentElement.classList.contains('is-dragging'), true);
+		assert.equal(mouseDrop.classList.contains('is-drop-target'), true);
+		pointer(window.document, 'pointerup', 100, 140); await settle();
+		assert.equal(store.state.order.at(-1), mouseId);
+		assert.equal(view.selected, null, 'drop does not open a detail');
 		const key = (options: any = {}) => {
 			const event = new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...options });
 			input.dispatchEvent(event); return event;
@@ -874,7 +890,10 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await new Promise(resolve => setTimeout(resolve, 220));
 		assert.notEqual(store.state.listFontSize, 21, 'incoming refresh waits for the current operation');
 		view.busy = false;
-		await new Promise(resolve => setTimeout(resolve, 220));
+		// Debounce is followed by asynchronous disk reads; wait for their actual result.
+		const syncDeadline = Date.now() + 5000;
+		while (!isDeepStrictEqual(store.state, otherDevice.state) && Date.now() < syncDeadline)
+			await new Promise(resolve => setTimeout(resolve, 20));
 		assert.deepEqual(store.state, otherDevice.state);
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-list-font'), '21px');
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-body-rows'), '5');

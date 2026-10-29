@@ -176,7 +176,11 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange .gvkit-arrange-submit { position: absolute; bottom: calc(4px + var(--gvkit-arrange-composer-inset)); right: 8px; display: flex; align-items: center; justify-content: center; width: 40px; min-width: 40px; height: 40px; min-height: 40px; margin: 0; padding: calc((40px - var(--gvkit-arrange-submit-size, 24px)) / 2); border: 0; border-radius: 10px; background: var(--gvkit-arrange-submit-color, #2463b4); color: #fff; box-shadow: none; }
 .gvkit-arrange .gvkit-arrange-submit svg { flex-shrink: 0; width: var(--gvkit-arrange-submit-size, 24px); height: var(--gvkit-arrange-submit-size, 24px); }
 .gvkit-arrange .gvkit-arrange-submit[hidden] { display: none; }
-.gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 46%; min-width: 0; overflow: hidden; border-left: 1px solid var(--background-modifier-border); background: var(--background-primary); }
+.gvkit-arrange-divider { flex: 0 0 1px; position: relative; z-index: 5; background: var(--background-modifier-border); cursor: col-resize; touch-action: none; user-select: none; }
+.gvkit-arrange-divider::before { content: ''; position: absolute; inset: 0 -4px; }
+.gvkit-arrange-divider:hover, .gvkit-arrange-divider.is-resizing { background: var(--interactive-accent); }
+.gvkit-arrange-area:has(> .gvkit-arrange-detail[hidden]) > .gvkit-arrange-divider, .gvkit-arrange-mobile .gvkit-arrange-divider { display: none; }
+.gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 var(--gvkit-arrange-detail-width, 46%); min-width: 0; overflow: hidden; background: var(--background-primary); }
 .gvkit-arrange-detail[hidden] { display: none; }
 .gvkit-arrange-detail-tools { flex: 0 0 var(--gvkit-arrange-toolbar-height, 44px); display: flex; align-items: center; justify-content: flex-end; min-width: 0; padding: 0 8px; }
 .gvkit-arrange .gvkit-arrange-detail-date { flex: 0 1 150px; min-width: 0; height: var(--gvkit-arrange-toolbar-height, 44px); padding: 0; border: 0; box-shadow: none; background: transparent; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); cursor: pointer; }
