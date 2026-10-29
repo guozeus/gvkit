@@ -58,6 +58,20 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		const originalFields = JSON.parse((await vault.read(developmentFile)).split('---\n')[1]);
 		const originalFacts = store.facts(), originalOrder = [...store.state.order];
 		const originalState = await vault.read(entries.get('settings/gvkit/arrange.md'));
+		// Project classification is independent of acceptance and changes no relations/order.
+		for (const expected of [true, false, true, false]) {
+			await store.toggleDevelopmentProject(child1);
+			const reloaded = new ArrangeStore(app); await reloaded.load();
+			assert.equal(reloaded.items.find((x: any) => x.id === child1).developmentProject, expected);
+			const fields = JSON.parse((await vault.read(developmentFile)).split('---\n')[1]);
+			assert.equal(fields.development_project, expected);
+			delete fields.development_project;
+			assert.deepEqual(fields, originalFields);
+			assert.deepEqual(store.facts(), originalFacts);
+			assert.deepEqual(store.state.order, originalOrder);
+			assert.equal(await vault.read(entries.get('settings/gvkit/arrange.md')), originalState);
+		}
+		originalFields.development_project = false;
 		assert.equal(store.items.find((x: any) => x.id === child1).developmentCompleted, false);
 		for (const expected of [true, false, true, false]) {
 			await store.toggleDevelopmentCompleted(child1);

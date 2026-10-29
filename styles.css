@@ -222,6 +222,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-empty { padding: 40px 16px; text-align: center; color: var(--text-muted); }
 .gvkit-arrange[data-root-item-style="background"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-selected):not(.is-dragging):not(.is-invalid-parent) { background: color-mix(in srgb, var(--color-purple, #9860d6) 12%, var(--background-primary)); }
 .gvkit-arrange[data-root-item-style="text"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title:not(.is-overdue) { color: var(--color-purple, #9860d6); }
+.gvkit-arrange .gvkit-arrange-row.is-development-project:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title,
+.gvkit-arrange .gvkit-arrange-detail-title-row.is-development-project:not(.is-completed) .gvkit-arrange-detail-title { color: var(--color-purple, #9860d6); }
 .gvkit-arrange[data-completed-style="background"] .gvkit-arrange-row.is-completed, .gvkit-arrange[data-completed-style="background"] .gvkit-arrange-detail-title-row.is-completed { background: color-mix(in srgb, var(--color-blue) 7%, var(--background-primary)); }
 .gvkit-arrange .gvkit-arrange-row.is-completed .gvkit-arrange-title { text-decoration: none; color: var(--text-normal); }
 .gvkit-arrange[data-completed-style="text"] .gvkit-arrange-row.is-completed .gvkit-arrange-title, .gvkit-arrange[data-completed-style="text"] .gvkit-arrange-detail-title-row.is-completed .gvkit-arrange-detail-title { color: var(--color-blue); }

@@ -11,6 +11,7 @@ const actions: Record<RowAction, { title: string; icon: string }> = {
 	changeParent: { title: '修改上级', icon: 'list-tree' }, copy: { title: '复制标题', icon: 'copy' },
 	archive: { title: '归档', icon: 'archive' },
 	developmentCompleted: { title: '已完成开发', icon: 'code-xml' },
+	developmentProject: { title: '开发工程', icon: 'folder-code' },
 };
 function iconButton(parent: HTMLElement, label: string, icon: string, action: (event: MouseEvent) => void): HTMLButtonElement {
 	const button = parent.createEl('button', { cls: 'gvkit-arrange-icon', attr: { type: 'button', 'aria-label': label, title: label } });
@@ -76,6 +77,8 @@ export class ArrangeView extends ItemView {
 	private selected: string | null = null;
 	private filter: 'all' | 'today' | 'overdue' = 'all';
 	private searchOpen = false;
+	private hierarchyFilter: 'all' | 'roots' | 'leaves' = 'all';
+	private hierarchyButton!: HTMLButtonElement;
 	private searchScroll = 0;
 	private searchBar!: HTMLElement;
 	private searchInput!: HTMLInputElement;
@@ -131,6 +134,15 @@ export class ArrangeView extends ItemView {
 		header.dataset.ignoreSwipe = 'true';
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = () => this.setFilter(this.filter === 'today' ? 'all' : 'today');
+		this.hierarchyButton = iconButton(header, '事项筛选：全部', 'list-filter', event => {
+			const menu = new Menu();
+			for (const [value, label] of [['all', '全部'], ['roots', '无上级'], ['leaves', '无下级']] as const) {
+				menu.addItem(entry => entry.setTitle(`${this.hierarchyFilter === value ? '✓ ' : ''}${label}`).onClick(() => {
+					this.hierarchyFilter = value; this.paintLists(); this.list.scrollTop = 0;
+				}));
+			}
+			menu.showAtMouseEvent(event);
+		});
 		this.searchButton = iconButton(header, '搜索事项', 'search', () => this.toggleSearch());
 		this.moreButton = iconButton(header, '安排更多', 'more-horizontal', event => this.headerMenu(event));
 		// Use only this leaf's title slot. Unknown/hidden host layouts keep the thin local bar.
@@ -412,6 +424,11 @@ export class ArrangeView extends ItemView {
 		this.headline.setAttribute('aria-pressed', String(this.filter === 'today' && !this.searchOpen && !this.choosingParent));
 		this.headline.disabled = Boolean(this.choosingParent);
 		this.moreButton.disabled = Boolean(this.choosingParent);
+		this.hierarchyButton.disabled = Boolean(this.choosingParent);
+		const hierarchyLabel = `事项筛选：${{ all: '全部', roots: '无上级', leaves: '无下级' }[this.hierarchyFilter]}`;
+		this.hierarchyButton.setAttribute('aria-label', hierarchyLabel);
+		this.hierarchyButton.title = hierarchyLabel;
+		this.hierarchyButton.setAttribute('aria-pressed', String(this.hierarchyFilter !== 'all'));
 		this.contentEl.dataset.completedStyle = this.store.state.completedStyle ?? 'background';
 		this.contentEl.dataset.rootItemStyle = this.store.state.rootItemStyle;
 		const scroll = this.list.scrollTop;
@@ -440,6 +457,30 @@ export class ArrangeView extends ItemView {
 			}
 			const query = this.searchInput.value.trim().toLowerCase();
 			items = items.filter(item => item.title.toLowerCase().includes(query));
+		}
+		if (!this.choosingParent) {
+			// Relationships come from all loaded items, before any visibility filter.
+			if (this.hierarchyFilter === 'roots') items = items.filter(item => item.parent === null);
+			if (this.hierarchyFilter === 'leaves') {
+				const parents = new Set(this.store.items.map(item => item.parent).filter(Boolean));
+				items = items.filter(item => !parents.has(item.id));
+			}
+			// Only the default main list folds projects. Search/date views can still
+			// find their descendants; details and parent choice retain real relations.
+			if (!this.searchOpen && this.filter === 'all') {
+				const byId = new Map(this.store.items.map(item => [item.id, item]));
+				items = items.filter(item => {
+					const seen = new Set([item.id]);
+					let parent = item.parent;
+					while (parent && !seen.has(parent)) {
+						seen.add(parent);
+						const ancestor = byId.get(parent);
+						if (ancestor?.developmentProject) return false;
+						parent = ancestor?.parent ?? null;
+					}
+					return true;
+				});
+			}
 		}
 		for (const item of items) this.row(this.list, item);
 		if (!items.length) this.list.createDiv({ cls: 'gvkit-arrange-empty', text: this.searchOpen || this.choosingParent ? '没有符合条件的事项' : this.filter === 'all' ? '想到什么，就从下面记下来。' : '这里已经清空。' });
@@ -520,6 +561,7 @@ export class ArrangeView extends ItemView {
 		row.toggleClass('is-selected', item.id === this.selected);
 		row.toggleClass('is-pinned', item.pinned);
 		row.toggleClass('is-root-item', item.parent === null);
+		row.toggleClass('is-development-project', Boolean(item.developmentProject));
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
 			const invalid = !validParent(this.store.items, this.choosingParent.id, item.id);
@@ -560,6 +602,7 @@ export class ArrangeView extends ItemView {
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'date' && item.date) button.addClass('is-active');
 			if (key === 'developmentCompleted') button.toggleClass('is-active', Boolean(item.developmentCompleted));
+			if (key === 'developmentProject') button.toggleClass('is-active', Boolean(item.developmentProject));
 		}
 		this.rowGesture(row, label, item);
 	}
@@ -689,6 +732,7 @@ export class ArrangeView extends ItemView {
 		else if (key === 'top') void this.run(() => this.store.move(item.id)).then(() => this.reveal(item.id));
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
 		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
+		else if (key === 'developmentProject') void this.run(() => this.store.toggleDevelopmentProject(item.id));
 		else if (key === 'changeParent') void this.changeParent(item.id);
 		else if (key === 'copy') void this.copyItem(item);
 		else if (key === 'archive') void this.run(async () => {
@@ -728,12 +772,13 @@ export class ArrangeView extends ItemView {
 		};
 		for (const key of ARRANGE_ACTIONS) {
 			const title = key === 'pin' && item.pinned ? '取消钉住'
-				: key === 'developmentCompleted' && item.developmentCompleted ? '取消已完成开发' : actions[key].title;
+				: key === 'developmentCompleted' && item.developmentCompleted ? '取消已完成开发'
+				: key === 'developmentProject' && item.developmentProject ? '取消开发工程' : actions[key].title;
 			const row = entry(title, actions[key].icon, () => this.action(key, item, event));
-			if (key === 'developmentCompleted') {
+			if (key === 'developmentCompleted' || key === 'developmentProject') {
 				const button = row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!;
-				button.setAttribute('aria-pressed', String(Boolean(item.developmentCompleted)));
-				button.toggleClass('is-active', Boolean(item.developmentCompleted));
+				button.setAttribute('aria-pressed', String(Boolean(item[key])));
+				button.toggleClass('is-active', Boolean(item[key]));
 			}
 			row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!.disabled = !this.actionAvailable(key, item);
 			for (const [setting, name] of [['rowActions', '列表'], ['detailActions', '详情']] as const) {
@@ -818,6 +863,7 @@ export class ArrangeView extends ItemView {
 		}
 		const row = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-title-row');
 		row?.toggleClass('is-completed', Boolean(item.completedAt));
+		row?.toggleClass('is-development-project', Boolean(item.developmentProject));
 		const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
 		if (checkbox) {
 			checkbox.checked = Boolean(item.completedAt);
@@ -993,7 +1039,8 @@ export class ArrangeView extends ItemView {
 			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
 			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
 			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned
-				|| key === 'developmentCompleted' && Boolean(item.developmentCompleted));
+				|| key === 'developmentCompleted' && Boolean(item.developmentCompleted)
+				|| key === 'developmentProject' && Boolean(item.developmentProject));
 		}
 		strip.scrollLeft = scroll;
 	}

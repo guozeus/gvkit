@@ -103,7 +103,8 @@ export class ArrangeStore {
 				parent: typeof fields.parent === 'string' ? fields.parent : null,
 				date: typeof fields.date === 'string' ? fields.date : null,
 				completedAt: typeof fields.completed_at === 'string' ? fields.completed_at : null,
-				pinned: fields.pinned === true, developmentCompleted: fields.development_completed === true });
+				pinned: fields.pinned === true, developmentCompleted: fields.development_completed === true,
+				developmentProject: fields.development_project === true });
 		}
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
@@ -224,6 +225,14 @@ export class ArrangeStore {
 			const item = this.items.find(item => item.id === id);
 			if (!item || item.completedAt) return;
 			await this.patch(id, { development_completed: !item.developmentCompleted });
+			await this.load();
+		});
+	}
+	toggleDevelopmentProject(id: string): Promise<void> {
+		return this.serial(async () => {
+			const item = this.items.find(item => item.id === id);
+			if (!item) return;
+			await this.patch(id, { development_project: !item.developmentProject });
 			await this.load();
 		});
 	}

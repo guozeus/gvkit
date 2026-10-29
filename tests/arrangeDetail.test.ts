@@ -121,6 +121,64 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		// Exercise real menu actions, persistence, deep descendants and intersecting filters.
+		{
+		const grandchild = await store.create('孙事项', first);
+		const completedChild = await store.create('已完成下级', second);
+		await store.complete(completedChild, true);
+		await view.reload();
+		const stableOrder = [...store.state.order], stableFacts = store.facts();
+		const stableRelations = store.items.map((item: any) => [item.id, item.parent, item.completedAt]);
+		const visible = () => [...view.list.querySelectorAll('.gvkit-arrange-row')].map((row: any) => row.dataset.id);
+		const chooseHierarchy = (label: string) => {
+			view.hierarchyButton.click();
+			window.menus.at(-1).entries.find((entry: any) => entry.title.replace('✓ ', '') === label).click();
+		};
+		assert.equal(view.hierarchyButton.nextElementSibling, view.searchButton);
+		view.itemMenu(store.items.find((item: any) => item.id === parent), new window.MouseEvent('click'));
+		const projectAction = [...window.document.querySelectorAll('.gvkit-arrange-menu-action')].find(button => button.textContent === '开发工程') as any;
+		assert.ok(projectAction); projectAction.click();
+		while (view.busy) await new Promise(resolve => setTimeout(resolve, 1));
+		assert.equal(store.items.find((item: any) => item.id === parent).developmentProject, true);
+		assert.equal(store.items.find((item: any) => item.id === parent).developmentCompleted, false);
+		assert.ok(visible().includes(parent)); assert.ok(!visible().includes(first)); assert.ok(!visible().includes(grandchild));
+		assert.ok(view.list.querySelector(`[data-id="${parent}"].is-development-project`));
+		await view.select(parent);
+		assert.ok(view.children.querySelector(`[data-id="${first}"]`));
+		assert.equal(view.children.querySelector(`[data-id="${grandchild}"]`), null);
+		assert.ok(view.detail.querySelector('.gvkit-arrange-detail-title-row.is-development-project'));
+		chooseHierarchy('无下级');
+		assert.ok(!visible().includes(second), 'completed direct children still prevent leaf classification');
+		assert.ok(!visible().includes(parent));
+		view.toggleSearch();
+		assert.deepEqual(visible(), [grandchild], 'search can find project descendants');
+		chooseHierarchy('无上级'); assert.deepEqual(new Set(visible()), new Set([parent, second]));
+		const firstItem = store.items.find((item: any) => item.id === first);
+		const oldParent = firstItem.parent; firstItem.parent = 'archived-parent'; view.paintLists();
+		assert.ok(!visible().includes(first), 'missing parent reference is not a root'); firstItem.parent = oldParent;
+		chooseHierarchy('全部');
+		view.searchInput.value = '孙'; view.searchInput.oninput(); assert.deepEqual(visible(), [grandchild]);
+		await store.setDate(grandchild, stableFacts.day); await view.reload();
+		view.searchDate = { day: stableFacts.day, grain: 'day' }; view.paintLists();
+		assert.deepEqual(visible(), [grandchild]);
+		chooseHierarchy('无下级'); assert.deepEqual(visible(), [grandchild]);
+		chooseHierarchy('无上级'); assert.deepEqual(visible(), []);
+		chooseHierarchy('全部'); view.searchDate = null; view.toggleSearch();
+		view.setFilter('today'); assert.ok(visible().includes(grandchild), 'today exposes a folded descendant');
+		view.setFilter('all'); assert.ok(!visible().includes(grandchild));
+		assert.deepEqual(store.state.order, stableOrder);
+		assert.deepEqual(store.items.map((item: any) => [item.id, item.parent, item.completedAt]), stableRelations);
+		await store.setDate(grandchild, null);
+		assert.deepEqual(store.facts(), stableFacts);
+		view.itemMenu(store.items.find((item: any) => item.id === parent), new window.MouseEvent('click'));
+		([...window.document.querySelectorAll('.gvkit-arrange-menu-action')].find(button => button.textContent === '取消开发工程') as any).click();
+		while (view.busy) await new Promise(resolve => setTimeout(resolve, 1));
+		assert.ok(visible().includes(first) && visible().includes(grandchild));
+		assert.equal(view.list.querySelector(`[data-id="${parent}"].is-development-project`), null);
+		// Remove only temporary test fixtures so the existing regression scenarios stay intact.
+		await view.select(null); await store.archive(grandchild);
+		await store.complete(completedChild, false); await store.archive(completedChild); await view.reload();
+		}
 		assert.ok(view.list.querySelector(`[data-id="${parent}"].is-root-item`));
 		assert.equal(view.list.querySelector(`[data-id="${first}"].is-root-item`), null);
 		const beforeAppearance = { order: [...store.state.order], facts: store.facts(), items: structuredClone(store.items) };
