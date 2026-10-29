@@ -50,6 +50,7 @@ export class ArrangeStore {
 				if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) state[key] = value;
 			}
 			if (fields.completedStyle === 'background' || fields.completedStyle === 'text') state.completedStyle = fields.completedStyle;
+			if (fields.rootItemStyle === 'background' || fields.rootItemStyle === 'text' || fields.rootItemStyle === 'none') state.rootItemStyle = fields.rootItemStyle;
 			for (const key of ['rowActions', 'detailActions'] as const) {
 				const value = fields[key];
 				if (strings(value)) state[key] = value.filter((a): a is ArrangeState['rowActions'][number] => (ARRANGE_ACTIONS as readonly string[]).includes(a));

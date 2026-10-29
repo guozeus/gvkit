@@ -28,6 +28,7 @@ export interface ArrangeState {
 	composerMaxRows: number;
 	bodyMinRows: number;
 	completedStyle: 'background' | 'text';
+	rootItemStyle: 'background' | 'text' | 'none';
 	rowActions: RowAction[];
 	detailActions: RowAction[];
 	swipeAction: RowAction | 'none';
@@ -67,7 +68,7 @@ export const ARRANGE_FREE_SIZES = {
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
-		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background',
+		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background', rootItemStyle: 'background',
 		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2,
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent'],
 		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,

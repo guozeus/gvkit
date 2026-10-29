@@ -413,6 +413,7 @@ export class ArrangeView extends ItemView {
 		this.headline.disabled = Boolean(this.choosingParent);
 		this.moreButton.disabled = Boolean(this.choosingParent);
 		this.contentEl.dataset.completedStyle = this.store.state.completedStyle ?? 'background';
+		this.contentEl.dataset.rootItemStyle = this.store.state.rootItemStyle;
 		const scroll = this.list.scrollTop;
 		this.list.empty();
 		if (this.filter === 'overdue' && !this.searchOpen && !this.choosingParent) {
@@ -518,6 +519,7 @@ export class ArrangeView extends ItemView {
 		row.dataset.id = item.id;
 		row.toggleClass('is-selected', item.id === this.selected);
 		row.toggleClass('is-pinned', item.pinned);
+		row.toggleClass('is-root-item', item.parent === null);
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
 			const invalid = !validParent(this.store.items, this.choosingParent.id, item.id);
@@ -804,7 +806,14 @@ export class ArrangeView extends ItemView {
 		const label = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-date');
 		if (label) {
 			label.hidden = !item.date;
-			label.textContent = item.date ? relativeDate(item.date, this.today, Boolean(item.completedAt)) : '';
+			const text = item.date ? relativeDate(item.date, this.today, Boolean(item.completedAt)) : '';
+			const overdue = text.indexOf('已逾期');
+			label.empty();
+			if (overdue >= 0) {
+				label.append(document.createTextNode(text.slice(0, overdue)));
+				label.createSpan({ cls: 'gvkit-arrange-detail-overdue', text: '已逾期' });
+				label.append(document.createTextNode(text.slice(overdue + 3)));
+			} else label.textContent = text;
 			label.title = item.date ?? '';
 		}
 		const row = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-title-row');
@@ -1189,6 +1198,9 @@ export class ArrangeView extends ItemView {
 		new Setting(modal.contentEl).setName('已完成事项外观')
 			.addDropdown(dropdown => dropdown.addOptions({ background: '淡蓝底板、正常文字', text: '原底板、蓝色文字' })
 				.setValue(this.store.state.completedStyle).onChange(value => configure({ completedStyle: value as ArrangeState['completedStyle'] })));
+		new Setting(modal.contentEl).setName('无上级事项外观').setDesc('仅应用于真实上级为空的事项；不改变排序或钉住位置，已完成外观优先。')
+			.addDropdown(dropdown => dropdown.addOptions({ background: '淡紫底板（默认）', text: '紫色文字', none: '普通样式' })
+				.setValue(this.store.state.rootItemStyle).onChange(value => configure({ rootItemStyle: value as ArrangeState['rootItemStyle'] })));
 		new Setting(modal.contentEl).setName('事项详情显示已完成下级')
 			.addToggle(toggle => toggle.setValue(this.store.state.showCompletedChildren).onChange(value => configure({ showCompletedChildren: value })));
 		new Setting(modal.contentEl).setName('事项左滑操作')

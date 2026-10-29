@@ -181,6 +181,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-detail-tools { flex: 0 0 var(--gvkit-arrange-toolbar-height, 44px); display: flex; align-items: center; justify-content: flex-end; min-width: 0; padding: 0 8px; }
 .gvkit-arrange .gvkit-arrange-detail-date { flex: 0 1 150px; min-width: 0; height: var(--gvkit-arrange-toolbar-height, 44px); padding: 0; border: 0; box-shadow: none; background: transparent; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); cursor: pointer; }
 .gvkit-arrange-detail-date[hidden] { display: none; }
+.gvkit-arrange-detail-date .gvkit-arrange-detail-overdue { color: var(--text-error, #d93025); }
 .gvkit-arrange-detail-actions { display: flex; flex: 1 1 calc(var(--gvkit-arrange-detail-slot, 27px) * 3); min-width: min(calc(var(--gvkit-arrange-detail-slot, 27px) * 3), max(0px, calc(100% - var(--gvkit-arrange-detail-slot, 27px) * 2 - 54px))); overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-detail-actions > :first-child { margin-left: auto; }
 .gvkit-arrange-detail-actions::-webkit-scrollbar { display: none; }
@@ -206,6 +207,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-children { margin: 8px -8px 0; }
 .gvkit-arrange-panel-grip { display: none; }
 .gvkit-arrange-empty { padding: 40px 16px; text-align: center; color: var(--text-muted); }
+.gvkit-arrange[data-root-item-style="background"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-selected):not(.is-dragging):not(.is-invalid-parent) { background: color-mix(in srgb, var(--color-purple, #9860d6) 12%, var(--background-primary)); }
+.gvkit-arrange[data-root-item-style="text"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title:not(.is-overdue) { color: var(--color-purple, #9860d6); }
 .gvkit-arrange[data-completed-style="background"] .gvkit-arrange-row.is-completed, .gvkit-arrange[data-completed-style="background"] .gvkit-arrange-detail-title-row.is-completed { background: color-mix(in srgb, var(--color-blue) 7%, var(--background-primary)); }
 .gvkit-arrange .gvkit-arrange-row.is-completed .gvkit-arrange-title { text-decoration: none; color: var(--text-normal); }
 .gvkit-arrange[data-completed-style="text"] .gvkit-arrange-row.is-completed .gvkit-arrange-title, .gvkit-arrange[data-completed-style="text"] .gvkit-arrange-detail-title-row.is-completed .gvkit-arrange-detail-title { color: var(--color-blue); }

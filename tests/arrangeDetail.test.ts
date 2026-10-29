@@ -97,6 +97,11 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		} }, workspace: { getActiveViewOfType: () => active ? view : null,
 			on: (name: string, callback: () => void) => { events.set(name, callback); return {}; } } };
 		const store = new ArrangeStore(app);
+		assert.equal(store.state.rootItemStyle, 'background');
+		await store.configure({ rootItemStyle: 'text' });
+		const rootStyleReload = new ArrangeStore(app); await rootStyleReload.load();
+		assert.equal(rootStyleReload.state.rootItemStyle, 'text');
+		await store.configure({ rootItemStyle: 'background' });
 		assert.equal(store.state.composerMaxRows, 6);
 		assert.equal(store.state.bodyMinRows, 3);
 		await store.configure({ composerMaxRows: 4, bodyMinRows: 2 });
@@ -113,6 +118,29 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		assert.ok(view.list.querySelector(`[data-id="${parent}"].is-root-item`));
+		assert.equal(view.list.querySelector(`[data-id="${first}"].is-root-item`), null);
+		const beforeAppearance = { order: [...store.state.order], facts: store.facts(), items: structuredClone(store.items) };
+		for (const style of ['text', 'none', 'background']) {
+			await store.configure({ rootItemStyle: style }); await view.reload();
+			assert.equal(root.dataset.rootItemStyle, style);
+			assert.deepEqual(store.state.order, beforeAppearance.order);
+			assert.deepEqual(store.facts(), beforeAppearance.facts);
+			assert.deepEqual(store.items, beforeAppearance.items);
+		}
+		// A missing/archived parent is still a real parent reference.
+		const child = store.items.find((item: any) => item.id === first)!;
+		child.parent = 'archived-parent'; view.paintLists();
+		assert.equal(view.list.querySelector(`[data-id="${first}"].is-root-item`), null);
+		child.parent = parent;
+		await store.setDate(first, '2020-01-01'); await view.reload(); await view.select(first);
+		const overdueLabel = view.detail.querySelector('.gvkit-arrange-detail-date')!;
+		assert.equal(overdueLabel.querySelector('.gvkit-arrange-detail-overdue')?.textContent, '已逾期');
+		assert.match(overdueLabel.textContent!, /^已逾期，2020年1月1号$/);
+		assert.equal(overdueLabel.title, '2020-01-01');
+		await store.setDate(first, store.facts().day); await view.reload();
+		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-overdue'), null);
+		await store.setDate(first, null); await view.reload(); await view.select(null);
 		assert.ok(view.list.querySelector(`[data-id="${parent}"] .gvkit-arrange-has-children`));
 		assert.equal(view.list.querySelector(`[data-id="${first}"] .gvkit-arrange-has-children`), null);
 		assert.equal(root.style.getPropertyValue('--gvkit-arrange-checkbox'), '17.6px');
