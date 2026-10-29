@@ -20,7 +20,7 @@ type LegacyEvidence = { pending: OldPending; historicalEndpoint: 'unknown'; oldO
   backupPath: string; endpoint: string; identityHash: string; newOperationId: string; blocked?: boolean };
 const recoveryFile = 'zhouyou-legacy-recovery.json';
 type Remote = { sourceId: string; documentId: string; recordVersion: number; title: string;
-  content: string; contentHash?: string; productId?: string; productName?: string; currentVersionNo?: number;
+  content: string; contentHash?: string; publishedContentHash?: string; productId?: string; productName?: string; currentVersionNo?: number;
   documentStatus?: string };
 function isSmartPending(p: SmartPending | OldPending): p is SmartPending {
   return 'action' in p && p.action === 'sync_smart' && 'payload' in p;
@@ -54,6 +54,7 @@ export class ZhouyouAutoPublisher {
   private rows(): Record<string, Binding> { return this.settings.getAutoPublishBindings(); }
   statusLabel(context: PublishDocumentContext): string {
     const b = this.rows()[this.key(context.file)];
+    if (b?.pending) return '🟠 上次发布待确认，点击重试';
     if (!b?.version) return '';
     if (b.content === undefined) return '✅ 已发布';
     return publishBody(context.view.editor.getValue()) === b.content ? '✅ 已发布，无新改动' : '🟠 上次发布后有更新';
@@ -120,7 +121,7 @@ export class ZhouyouAutoPublisher {
       throw new Error('旧操作恢复入口或备份信息已变化，已暂停发布。');
     const backup = await adapter.read(root + approval.backupPath);
     if (await sha256Utf8(backup) !== approval.backupSha256)
-      throw new Error('旧操作完整备份校验失败，已暂停发布。');
+      throw new Error('旧操作完整备份校验未通过，已暂停发布。');
     const original = Object.values(JSON.parse(backup).zhouyouAutoBindings ?? {}).find((row: any) =>
       row.sourceId === b.sourceId && JSON.stringify(row.pending) === JSON.stringify(b.pending)) as Binding | undefined;
     if (!original || original.documentId !== undefined || original.recordVersion !== undefined ||
@@ -175,9 +176,15 @@ export class ZhouyouAutoPublisher {
     if (value.documentStatus !== undefined && value.documentStatus !== 'active')
       throw new Error('原文档状态无法确认，已暂停发布。');
     const hash = await sha256Utf8(value.content);
-    if (value.contentHash !== undefined && value.contentHash !== hash)
+    if (value.contentHash !== hash)
       throw new Error('原文档正文哈希不一致，已暂停发布。');
     return value as Remote;
+  }
+  private isPublished(remote: Remote, content: string, title: string): boolean {
+    // verifiedCurrent has already checked contentHash against the actual body.
+    return remote.content === content && remote.title === title &&
+      typeof remote.contentHash === 'string' && remote.publishedContentHash === remote.contentHash &&
+      typeof remote.currentVersionNo === 'number' && remote.currentVersionNo > 0;
   }
   private async confirmed(key: string, b: Binding, remote: Remote): Promise<Binding> {
     const updated: Binding = { ...b, documentId: remote.documentId,
@@ -238,34 +245,16 @@ export class ZhouyouAutoPublisher {
               backupPath: approval.backupPath, endpoint, identityHash, newOperationId: '',
             } };
           } else {
-            const oldContent = isSmartPending(previous) ? previous.payload.content : previous.content;
-            const oldTitle = isSmartPending(previous) ? previous.payload.title : previous.title;
-            if (remote && remote.content === oldContent && remote.title === oldTitle &&
-              (!isSmartPending(previous) || previous.payload.documentId === null ||
-                remote.documentId === previous.payload.documentId)) {
-              b = await this.confirmed(key, b, remote);
-              if (remote.content === content && remote.title === title) {
-                new Notice(file.basename + '\n已确认原操作成功，无需重复创建。', 6000);
-                return;
-              }
-            } else {
-              if (!isSmartPending(previous))
-                throw new Error('旧版发布遗留待确认操作，缺少完整原请求。请核对原文档后再继续，不能变更原操作重发。');
-              if (previous.endpoint !== endpoint || previous.operationId !== previous.payload.operationId ||
-                previous.payload.sourceId !== b.sourceId || previous.payload.content !== content ||
-                previous.payload.title !== title)
-                throw new Error('上次发布尚未确认，来源、地址或正文已变化。已保留原请求，请先核对。');
-              if (remote && (previous.payload.documentId === null ||
-                remote.documentId !== previous.payload.documentId ||
-                remote.recordVersion !== previous.payload.recordVersion))
-                throw new Error('原文档状态已变化，不能重新发送未确认的原操作。');
-              if (!remote && previous.payload.documentId !== null)
-                throw new Error('原文档缺失，不能重发已绑定文档的待确认操作。');
-            }
+            if (!isSmartPending(previous))
+              throw new Error('旧版发布遗留待确认操作，缺少完整原请求。请核对原文档后再继续，不能变更原操作重发。');
+            if (previous.endpoint !== endpoint || previous.operationId !== previous.payload.operationId ||
+              previous.payload.sourceId !== b.sourceId)
+              throw new Error('上次发布的来源或地址已变化，原请求已保留，请先核对。');
+            // Exact replay retrieves the server's idempotent receipt even after a lost ACK,
+            // a newer draft, or local edits. Never infer the operation's outcome from a draft.
           }
         }
-        if (!b.pending && remote && remote.content === content && remote.title === title &&
-          (remote.currentVersionNo === undefined || remote.currentVersionNo > 0)) {
+        if (!b.pending && remote && this.isPublished(remote, content, title)) {
           b = await this.confirmed(key, b, remote);
           new Notice(file.basename + '\n已发布，正文无新改动。', 6000);
           return;
@@ -314,9 +303,10 @@ export class ZhouyouAutoPublisher {
           { sourceId: b.sourceId, documentId: ack.documentId }, endpoint, token),
           b.sourceId, ack.documentId);
         if (verified.recordVersion !== ack.recordVersion ||
-          verified.content !== toSend.payload.content || verified.title !== toSend.payload.title)
-          throw new Error('独立读回的文档与发布回执不一致，原操作已保留。');
+          !this.isPublished(verified, toSend.payload.content, toSend.payload.title))
+          throw new Error('正式发布的正文尚未核对一致，原操作已保留，请重新点击核对。');
         b = await this.confirmed(key, b, verified);
+        if (toSend.payload.content !== content || toSend.payload.title !== title) continue;
         const versionText = typeof verified.currentVersionNo === 'number' ?
           ' · V' + verified.currentVersionNo : '';
         new Notice(file.basename + '\n已发布到宙游文档中心' + versionText, 6000);

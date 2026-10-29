@@ -59,6 +59,7 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   let remote: any = null;
   const requests: any[] = [];
   let writes = 0;
+  const receipts = new Map<string, { payload: any; ack: any }>();
   let beforeWrite: (body: any, disk: any) => any = () => undefined;
   let afterWrite: (body: any) => any = () => undefined;
   let responseForRead: (body: any) => any = () => undefined;
@@ -109,6 +110,11 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     assert.deepEqual(pending.payload, (({ action, ...rest }) => rest)(body));
     const pre = beforeWrite(body, disk);
     if (pre) return pre;
+    const receipt = receipts.get(body.operationId);
+    if (receipt) {
+      assert.deepEqual(body, receipt.payload, 'a retry must preserve the complete original request');
+      return { status: 200, json: { code: 0, data: structuredClone(receipt.ack) }, headers: {} };
+    }
     writes++;
     if (!remote) {
       assert.equal(body.documentId, null);
@@ -117,12 +123,15 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
       assert.equal(body.documentId, remote.documentId);
       assert.equal(body.recordVersion, remote.recordVersion);
     }
-    const changed = !remote || remote.content !== body.content || remote.title !== body.title;
+    const changed = !remote || remote.content !== body.content || remote.title !== body.title || remote.publishedContentHash !== hash(body.content);
     remote = { sourceId: body.sourceId, documentId: remote?.documentId ?? 'doc-1',
       recordVersion: (remote?.recordVersion ?? 0) + (changed ? 1 : 0),
-      title: body.title, content: body.content, contentHash: hash(body.content),
+      title: body.title, content: body.content, contentHash: hash(body.content), publishedContentHash: hash(body.content),
       productId: 'auto-product', productName: '自动项目', currentVersionNo: (remote?.currentVersionNo ?? 0) + (changed ? 1 : 0),
       documentStatus: 'active' };
+    receipts.set(body.operationId, { payload: structuredClone(body), ack: {
+      documentId: remote.documentId, recordVersion: remote.recordVersion,
+    } });
     const post = afterWrite(body);
     if (post) return post;
     return { status: 200, json: { code: 0, data: {
@@ -179,7 +188,7 @@ test('update sends current document ID/version; repeat and restart do not create
   assert.equal(h.writes, 2);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, 'doc-1');
 });
-test('lost response retains exact original request and next click confirms without resending', async () => {
+test('lost response retains exact original request and next click retrieves the original receipt without duplicating the write', async () => {
   const h = makeHarness();
   let failOnce = true;
   h.afterWrite = () => {
@@ -192,7 +201,10 @@ test('lost response retains exact original request and next click confirms witho
   await h.restart().publish(h.context);
   assert.equal(h.writes, 1);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
-  assert.ok(h.notices.some(s => s.includes('已确认原操作成功')));
+  assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 2);
+  assert.deepEqual(h.requests.filter(r => r.action === 'sync_smart')[1],
+    { action: pending.action, ...pending.payload });
+  assert.ok(h.notices.some(s => s.includes('已发布到宙游文档中心')));
 });
 test('retry after unconfirmed non-applied response reuses exact saved request and operation ID', async () => {
   const h = makeHarness();
@@ -342,7 +354,7 @@ test('recovery conflict stops permanently pending reconciliation, including acro
     assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
   }
 });
-test('recovery lost ACK retains new key and confirms by independent read; never reuses legacy key', async () => {
+test('recovery lost ACK retrieves its receipt and independently verifies publication; never reuses legacy key', async () => {
   const h = makeHarness(); approveRecovery(h);
   h.afterWrite = () => { throw Error('lost ACK'); };
   await h.publisher.publish(h.context);
@@ -394,4 +406,74 @@ test('recovery rejects archived, forbidden, unknown 404 and content-hash mismatc
   await h.publisher.publish(h.context);
   assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
+});
+
+test('saved current draft matching local is published when the published snapshot is older', async () => {
+  const h = makeHarness();
+  await h.publisher.publish(h.context);
+  h.raw += '新草稿\n';
+  h.remote.content = publishBody(h.raw);
+  h.remote.contentHash = hash(h.remote.content);
+  h.remote.recordVersion++;
+  const prior = h.requests.length;
+  await h.publisher.publish(h.context);
+  assert.deepEqual(h.requests.slice(prior).map(r => r.action), ['read_current', 'sync_smart', 'read_current']);
+  assert.equal(h.remote.currentVersionNo, 2);
+  assert.equal(h.remote.publishedContentHash, hash(publishBody(h.raw)));
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
+});
+
+test('complete recovery pending cannot be cleared merely because current draft matches', async () => {
+  const h = makeHarness(); approveRecovery(h);
+  h.beforeWrite = () => ({ status: 503, json: { code: 'DOWN' }, headers: {} });
+  await h.publisher.publish(h.context);
+  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+  h.remote = { sourceId: SOURCE_ID, documentId: 'doc-concurrent', recordVersion: 2,
+    currentVersionNo: 1, title: pending.payload.title, content: pending.payload.content,
+    contentHash: hash(pending.payload.content), publishedContentHash: hash('older publication'),
+    documentStatus: 'active' };
+  const notices = h.notices.length;
+  await h.restart().publish(h.context);
+  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
+  assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 2, 'original receipt is queried by exact replay');
+  assert.ok(!h.notices.slice(notices).some(s => /已发布|原操作成功/.test(s)));
+});
+
+test('fully published same content is a read-only no-op with no new version', async () => {
+  const h = makeHarness(); await h.publisher.publish(h.context);
+  const calls = h.requests.length;
+  await h.restart().publish(h.context);
+  assert.equal(h.requests.length, calls + 1);
+  assert.equal(h.writes, 1);
+  assert.equal(h.remote.currentVersionNo, 1);
+});
+
+test('ACK followed by an old or missing publication snapshot retains pending and does not claim success', async () => {
+  for (const publishedContentHash of [hash('old'), undefined, null]) {
+    const h = makeHarness();
+    h.afterWrite = () => { h.remote.publishedContentHash = publishedContentHash; };
+    await h.publisher.publish(h.context);
+    assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].version, undefined);
+    assert.ok(!h.notices.some(s => s.includes('已发布到宙游文档中心')));
+  }
+});
+
+test('lost ACK followed by local edits settles the original request then publishes latest on the same document', async () => {
+  const h = makeHarness();
+  let once = true;
+  h.afterWrite = () => { if (once) { once = false; throw Error('lost ACK'); } };
+  await h.publisher.publish(h.context);
+  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+  assert.ok(h.restart().statusLabel(h.context).includes('待确认'));
+  h.raw += '继续修改\n';
+  await h.restart().publish(h.context);
+  const sent = h.requests.filter(r => r.action === 'sync_smart');
+  assert.deepEqual(sent[1], { action: pending.action, ...pending.payload });
+  assert.notEqual(sent[2].operationId, pending.operationId);
+  assert.equal(sent[2].documentId, 'doc-1');
+  assert.equal(h.writes, 2);
+  assert.equal(h.remote.currentVersionNo, 2);
+  assert.equal(h.remote.publishedContentHash, hash(publishBody(h.raw)));
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
 });
