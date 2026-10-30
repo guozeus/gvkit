@@ -23,6 +23,7 @@ import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoin
 import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
 import { registerArrange } from './arrangeView';
 import { DocumentReadAloud } from './readAloud';
+import { DocumentQuickSettings, QuickSettingsModal } from './quickSettings';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -169,6 +170,8 @@ export default class GvkitPlugin extends Plugin {
 	private safeMoves: SafeMoveManager | null = null;
 	private documentActions: DocumentActions | null = null;
 	private readAloud: DocumentReadAloud | null = null;
+	private quickSettings: DocumentQuickSettings | null = null;
+	private quickSettingsModal: QuickSettingsModal | null = null;
 	private publishSettings: PublishSettings | null = null;
 	private autoPublisher: ZhouyouAutoPublisher | null = null;
 	private publishWorkflow: PublishWorkflow | null = null;
@@ -185,6 +188,7 @@ export default class GvkitPlugin extends Plugin {
 		registerGvkitIcons();
 		registerArrange(this);
 		const readAloud = new DocumentReadAloud({
+			getPreferences: () => this.publishSettings?.getReadAloudPreferences() ?? { voiceURI: '', rate: 1 },
 			getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
 			getActiveView: () => this.app.workspace.getActiveViewOfType(MarkdownView),
 			setIcon,
@@ -362,6 +366,21 @@ export default class GvkitPlugin extends Plugin {
 			await settings.load();
 			if (this.publishLifecycleActive && this.gvkitSettingsTab?.containerEl.isConnected) this.gvkitSettingsTab.display();
 			if (!this.publishLifecycleActive) return;
+			const quickSettings = new DocumentQuickSettings({
+				getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
+				isMobile: Platform.isMobile,
+				openSettings: view => {
+					this.quickSettingsModal?.close();
+					const synth = view.containerEl.ownerDocument.defaultView?.speechSynthesis;
+					this.quickSettingsModal = new QuickSettingsModal(this.app, synth, settings);
+					this.quickSettingsModal.open();
+				},
+			});
+			this.quickSettings = quickSettings;
+			this.registerEvent(this.app.workspace.on('layout-change', () => quickSettings.refresh()));
+			this.registerEvent(this.app.workspace.on('file-open', () => quickSettings.refresh()));
+			this.registerEvent(this.app.workspace.on('active-leaf-change', () => quickSettings.refresh()));
+			this.app.workspace.onLayoutReady(() => quickSettings.refresh());
 			// One device-only SecretStorage provider, shared by the dialog and client.
 			// No runtime credential is inspected here; only the installed Obsidian app
 			// invokes this callback after an explicit user operation.
@@ -454,6 +473,10 @@ export default class GvkitPlugin extends Plugin {
 
 	onunload(): void {
 		this.publishLifecycleActive = false;
+		this.quickSettingsModal?.close();
+		this.quickSettingsModal = null;
+		this.quickSettings?.destroy();
+		this.quickSettings = null;
 		this.readAloud?.destroy();
 		this.readAloud = null;
 		this.autoPublisher?.stop();

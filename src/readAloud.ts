@@ -1,4 +1,5 @@
 import type { MarkdownView, WorkspaceLeaf } from 'obsidian';
+import type { ReadAloudPreferences } from './publishSettings';
 import { parser } from '@lezer/markdown';
 import { removeGvkitStyleMarkup } from './formatting';
 
@@ -52,6 +53,7 @@ export function speechChunks(text: string): string[] {
 }
 
 export interface ReadAloudHost {
+	getPreferences?(): ReadAloudPreferences;
 	getLeaves(): WorkspaceLeaf[];
 	getActiveView(): MarkdownView | null;
 	setIcon(button: HTMLElement, icon: string): void;
@@ -112,6 +114,8 @@ export class DocumentReadAloud {
 			const text = spokenMarkdown(entry.view.getViewData());
 			const chunks = speechChunks(text);
 			if (!chunks.length) { this.host.notify('当前文档没有可朗读的正文。'); return; }
+			const preferences = this.host.getPreferences?.() ?? { voiceURI: '', rate: 1 };
+			const voice = preferences.voiceURI ? synth.getVoices().find(value => value.voiceURI === preferences.voiceURI) : undefined;
 			const playback: Playback = { entry, file: entry.view.file, synth, utterance: null, timer: null };
 			this.playback = playback;
 			synth.cancel();
@@ -123,6 +127,8 @@ export class DocumentReadAloud {
 				if (chunk === undefined) { this.stop(); return; }
 				const utterance = new Utterance(chunk);
 				utterance.lang = /\p{Script=Han}/u.test(text) ? 'zh-CN' : 'en-US';
+				if (voice) { utterance.voice = voice; utterance.lang = voice.lang; }
+				utterance.rate = preferences.rate;
 				playback.utterance = utterance;
 				const clearTimer = () => {
 					if (playback.timer !== null) clearTimeout(playback.timer);

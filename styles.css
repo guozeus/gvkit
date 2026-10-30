@@ -269,3 +269,20 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-mobile .gvkit-arrange-detail.is-full { height: 100%; max-height: 100%; border-radius: 0; }
 .gvkit-arrange-mobile .gvkit-arrange-panel-grip { display: flex; align-items: center; justify-content: center; flex: 0 0 var(--gvkit-arrange-grip-height, 32px); cursor: ns-resize; touch-action: none; }
 .gvkit-arrange-mobile .gvkit-arrange-panel-grip::before { content: ''; display: block; width: var(--gvkit-arrange-grip-width, 36px); height: 4px; background: var(--text-faint); border-radius: 4px; }
+/* Only the native Markdown switcher marked by DocumentQuickSettings, on mobile. */
+.is-mobile .workspace-leaf-content[data-type="markdown"] .gvkit-hide-mode-toggle {
+	display: none !important;
+}
+
+.gvkit-quick-setting {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 20px 0 8px;
+}
+.gvkit-quick-setting > span:first-child { flex-shrink: 0; }
+.gvkit-quick-setting select { flex: 1; min-width: 0; max-width: 100%; font-size: 16px; }
+.gvkit-quick-setting input[type="range"] { flex: 1; min-width: 0; }
+.gvkit-quick-setting select,
+.gvkit-quick-setting input,
+.gvkit-quick-settings-action { touch-action: manipulation; }

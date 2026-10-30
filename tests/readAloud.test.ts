@@ -12,6 +12,8 @@ const { DocumentReadAloud, spokenMarkdown, speechChunks } = await import(
 class Utterance {
 	text: string;
 	lang = '';
+	rate = 1;
+	voice: unknown = null;
 	onstart: (() => void) | null = null;
 	onend: (() => void) | null = null;
 	onerror: (() => void) | null = null;
@@ -22,7 +24,9 @@ function harness(source = '# 你好\n这是当前文档。', path = '日志/当�
 	const win = new Window();
 	const spoken: Utterance[] = [], notices: string[] = [];
 	let cancels = 0, duringClick = false, startedDuringClick = false;
-	const synth = { cancel() { cancels++; }, speak(value: Utterance) {
+	let preferences = { voiceURI: '', rate: 1 };
+	let voices: Array<{voiceURI: string; lang: string}> = [];
+	const synth = { getVoices: () => voices, cancel() { cancels++; }, speak(value: Utterance) {
 		startedDuringClick = duringClick;
 		spoken.push(value);
 	} };
@@ -46,6 +50,7 @@ function harness(source = '# 你好\n这是当前文档。', path = '日志/当�
 	const leaf = { view } as WorkspaceLeaf;
 	let leaves = [leaf], active: MarkdownView | null = view;
 	const reader = new DocumentReadAloud({
+		getPreferences: () => ({ ...preferences }),
 		getLeaves: () => leaves,
 		getActiveView: () => active,
 		setIcon: (button, icon) => button.setAttribute('data-icon', icon),
@@ -56,6 +61,8 @@ function harness(source = '# 你好\n这是当前文档。', path = '日志/当�
 	return { reader, view, leaf, win, button, spoken, notices,
 		click() { duringClick = true; button.click(); duringClick = false; },
 		setSource(value: string) { source = value; },
+		setPreferences(value: typeof preferences) { preferences = value; },
+		setVoices(value: typeof voices) { voices = value; },
 		setActive(value: MarkdownView | null) { active = value; reader.refresh(); },
 		removeLeaf() { leaves = []; reader.refresh(); },
 		get cancels() { return cancels; }, get startedDuringClick() { return startedDuringClick; },
@@ -70,6 +77,33 @@ test('spoken copy keeps readable text and removes frontmatter and common markup'
 	assert.ok(source.includes('private-id'), 'original bytes remain untouched');
 	assert.equal(spokenMarkdown('---\n属性: 值\n...\n正文'), '正文');
 	assert.equal(spokenMarkdown('```js\nconst value = 1;\n```'), 'const value = 1;');
+});
+
+test('selected real voice and rate apply to every chunk, changes begin on the next tap', () => {
+	const h = harness('朗读长文。'.repeat(160));
+	try {
+		const first = { voiceURI: 'device-zh', lang: 'zh-TW' }, second = { voiceURI: 'device-en', lang: 'en-GB' };
+		h.setVoices([first, second]); h.setPreferences({ voiceURI: first.voiceURI, rate: 1.4 }); h.click();
+		assert.equal(h.startedDuringClick, true);
+		h.setPreferences({ voiceURI: second.voiceURI, rate: 0.7 });
+		h.spoken[0]!.onstart!(); h.spoken[0]!.onend!();
+		for (const value of h.spoken) {
+			assert.equal(value.voice, first); assert.equal(value.lang, 'zh-TW'); assert.equal(value.rate, 1.4);
+		}
+		h.click(); h.click();
+		assert.equal(h.spoken.at(-1)!.voice, second); assert.equal(h.spoken.at(-1)!.rate, 0.7);
+	} finally { h.cleanup(); }
+});
+
+test('missing saved voice does not block default one-tap speech, and late voices work next time', () => {
+	const h = harness();
+	try {
+		h.setPreferences({ voiceURI: 'late-voice', rate: 1.2 }); h.click();
+		assert.equal(h.spoken[0]!.voice, null); assert.equal(h.spoken[0]!.lang, 'zh-CN');
+		assert.equal(h.spoken[0]!.rate, 1.2); assert.equal(h.notices.length, 0);
+		h.click(); const voice = { voiceURI: 'late-voice', lang: 'zh-CN' }; h.setVoices([voice]); h.click();
+		assert.equal(h.spoken[1]!.voice, voice);
+	} finally { h.cleanup(); }
 });
 
 test('chunks retain the entire long document, including surrogate pairs', () => {

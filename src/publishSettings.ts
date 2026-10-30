@@ -28,6 +28,8 @@ export interface PublishDataStore {
 	saveData(data: Record<string, unknown>): Promise<void>;
 }
 
+export interface ReadAloudPreferences { voiceURI: string; rate: number }
+
 function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ?
 		{ ...(value as Record<string, unknown>) } : {};
@@ -72,6 +74,19 @@ export class PublishSettings {
 	}
 
 	isLoaded(): boolean { return this.loaded; }
+
+	getReadAloudPreferences(): ReadAloudPreferences {
+		const value = record(this.data.readAloud);
+		return {
+			voiceURI: typeof value.voiceURI === 'string' ? value.voiceURI : '',
+			rate: typeof value.rate === 'number' && Number.isFinite(value.rate) && value.rate >= 0.5 && value.rate <= 2 ? value.rate : 1,
+		};
+	}
+
+	setReadAloudPreferences(value: ReadAloudPreferences): Promise<void> {
+		const snapshot = { voiceURI: value.voiceURI, rate: value.rate };
+		return this.updateNonSecret(data => { data.readAloud = snapshot; });
+	}
 
 	getAutoPublishBindings(): Record<string, import('./zhouyouAutoPublish').AutoBinding> {
 		return JSON.parse(JSON.stringify(this.data.zhouyouAutoBindings ?? {}));
