@@ -22,6 +22,7 @@ import { DeviceZhouyouSecret } from './publishSecretSettings';
 import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
 import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
 import { registerArrange } from './arrangeView';
+import { DocumentReadAloud } from './readAloud';
 
 const CUSTOM_ICON_IDS = [
 	'gvkit-text-blue',
@@ -167,6 +168,7 @@ export default class GvkitPlugin extends Plugin {
 	private fileIds: FileIdManager | null = null;
 	private safeMoves: SafeMoveManager | null = null;
 	private documentActions: DocumentActions | null = null;
+	private readAloud: DocumentReadAloud | null = null;
 	private publishSettings: PublishSettings | null = null;
 	private autoPublisher: ZhouyouAutoPublisher | null = null;
 	private publishWorkflow: PublishWorkflow | null = null;
@@ -182,6 +184,17 @@ export default class GvkitPlugin extends Plugin {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 		registerArrange(this);
+		const readAloud = new DocumentReadAloud({
+			getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
+			getActiveView: () => this.app.workspace.getActiveViewOfType(MarkdownView),
+			setIcon,
+			notify: message => { new Notice(message); },
+		});
+		this.readAloud = readAloud;
+		this.registerEvent(this.app.workspace.on('layout-change', () => readAloud.refresh()));
+		this.registerEvent(this.app.workspace.on('file-open', () => readAloud.refresh()));
+		this.registerEvent(this.app.workspace.on('active-leaf-change', () => readAloud.refresh()));
+		this.app.workspace.onLayoutReady(() => readAloud.refresh());
 
 		this.fileIds = new FileIdManager(this.app);
 		this.registerEvent(this.app.vault.on('rename', (file, previousPath) => {
@@ -441,6 +454,8 @@ export default class GvkitPlugin extends Plugin {
 
 	onunload(): void {
 		this.publishLifecycleActive = false;
+		this.readAloud?.destroy();
+		this.readAloud = null;
 		this.autoPublisher?.stop();
 		this.autoPublisher = null;
 		this.publishDialog?.close();
