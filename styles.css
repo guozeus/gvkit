@@ -150,6 +150,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-title.is-overdue { color: var(--color-red); }
 .gvkit-arrange-row-date { flex: 0 0 auto; max-width: 27%; margin: 0 4px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); }
 .gvkit-arrange-row-date.is-overdue { color: var(--color-red); }
+.gvkit-arrange .gvkit-arrange-row-date { min-height: 0; height: 100%; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; font-weight: normal; cursor: pointer; touch-action: manipulation; }
 .gvkit-arrange-actions { display: flex; flex: 0 1 auto; min-width: 0; max-width: 48%; overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-actions::-webkit-scrollbar { display: none; }
 .gvkit-arrange .gvkit-arrange-icon, .gvkit-arrange-header .gvkit-arrange-icon { flex: 0 0 36px; width: 36px; min-height: 40px; padding: 8px; background: transparent; border: 0; box-shadow: none; color: var(--text-muted); touch-action: manipulation; }
@@ -173,6 +174,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-keyboard-backdrop { position: fixed; bottom: 0; pointer-events: none; z-index: 2; }
 .gvkit-arrange-keyboard-backdrop[hidden] { display: none; }
 .gvkit-arrange .gvkit-arrange-composer textarea { display: block; width: 100%; min-width: 0; box-sizing: border-box; height: 48px; min-height: 0; max-height: none; resize: none; margin: 0; font-size: 16px; line-height: 24px; padding: 12px 60px 12px 16px; border: 0; border-radius: 0; background: transparent; color: var(--text-normal); box-shadow: none; outline: none; }
+.gvkit-arrange .gvkit-arrange-composer:has(.gvkit-arrange-composer-date:not([hidden])) textarea { padding-right: 104px; }
+.gvkit-arrange .gvkit-arrange-composer-date { position: absolute; right: 52px; bottom: calc(4px + var(--gvkit-arrange-composer-inset)); height: 40px; width: 40px; padding: 8px; }
+.gvkit-arrange .gvkit-arrange-composer-date[hidden] { display: none; }
 .gvkit-arrange .gvkit-arrange-submit { position: absolute; bottom: calc(4px + var(--gvkit-arrange-composer-inset)); right: 8px; display: flex; align-items: center; justify-content: center; width: 40px; min-width: 40px; height: 40px; min-height: 40px; margin: 0; padding: calc((40px - var(--gvkit-arrange-submit-size, 24px)) / 2); border: 0; border-radius: 10px; background: var(--gvkit-arrange-submit-color, #2463b4); color: #fff; box-shadow: none; }
 .gvkit-arrange .gvkit-arrange-submit svg { flex-shrink: 0; width: var(--gvkit-arrange-submit-size, 24px); height: var(--gvkit-arrange-submit-size, 24px); }
 .gvkit-arrange .gvkit-arrange-submit[hidden] { display: none; }
@@ -186,6 +190,11 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange .gvkit-arrange-detail-date { flex: 0 1 150px; min-width: 0; height: var(--gvkit-arrange-toolbar-height, 44px); padding: 0; border: 0; box-shadow: none; background: transparent; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); cursor: pointer; }
 .gvkit-arrange-detail-date[hidden] { display: none; }
 .gvkit-arrange-detail-date .gvkit-arrange-detail-overdue { color: var(--text-error, #d93025); }
+.gvkit-arrange-calendar { width: 280px; max-width: 100%; margin: 8px 0; }
+.gvkit-arrange-calendar-header { display: flex; align-items: center; justify-content: space-between; }
+.gvkit-arrange-calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.gvkit-arrange-calendar-days > button { min-height: 32px; padding: 4px; box-shadow: none; border: 0; touch-action: manipulation; }
+.gvkit-arrange-calendar-days > button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
 .gvkit-arrange-detail-actions { display: flex; flex: 1 1 calc(var(--gvkit-arrange-detail-slot, 27px) * 3); min-width: min(calc(var(--gvkit-arrange-detail-slot, 27px) * 3), max(0px, calc(100% - var(--gvkit-arrange-detail-slot, 27px) * 2 - 54px))); overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-detail-actions > :first-child { margin-left: auto; }
 .gvkit-arrange-detail-actions::-webkit-scrollbar { display: none; }
@@ -210,6 +219,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-inline-body .gvkit-arrange-rendered-fragment > p { display: inline; margin: 0; }
 .gvkit-arrange-body { min-height: calc(var(--gvkit-arrange-body-rows, 3) * 1.6em); overflow-wrap: anywhere; font-size: var(--gvkit-arrange-body-font, 16px); line-height: 1.6; cursor: text; user-select: text; -webkit-user-select: text; }
 .gvkit-arrange .gvkit-arrange-inline-body[hidden], .gvkit-arrange-body[hidden], .gvkit-arrange-edit-error[hidden] { display: none; }
+/* CodeMirror's base theme uses display:flex !important on its editor root. */
+.gvkit-arrange .gvkit-arrange-inline-body[hidden] { display: none !important; }
 .gvkit-arrange-body-placeholder { color: var(--text-faint); }
 .gvkit-arrange .gvkit-arrange-body-copy { display: inline-flex; vertical-align: text-bottom; width: 1em; min-width: 1em; height: 1em; min-height: 0; margin: 0 0 0 1em; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--text-muted); font-size: var(--gvkit-arrange-body-font, 16px); line-height: 1; cursor: pointer; }
 .gvkit-arrange .gvkit-arrange-body-copy svg { width: 1em; height: 1em; }

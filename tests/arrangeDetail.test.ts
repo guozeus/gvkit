@@ -181,6 +181,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await store.complete(completedChild, false); await store.archive(completedChild); await view.reload();
 		}
 		assert.ok(view.list.querySelector(`[data-id="${parent}"].is-root-item`));
+		assert.equal(view.list.querySelector(`[data-id="${second}"].is-root-item`), null, 'root without children keeps ordinary appearance');
 		assert.equal(view.list.querySelector(`[data-id="${first}"].is-root-item`), null);
 		const beforeAppearance = { order: [...store.state.order], facts: store.facts(), items: structuredClone(store.items) };
 		for (const style of ['text', 'none', 'background']) {
@@ -197,9 +198,18 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		child.parent = parent;
 		await store.setDate(first, '2020-01-01'); await view.reload(); await view.select(first);
 		const overdueLabel = view.detail.querySelector('.gvkit-arrange-detail-date')!;
-		assert.equal(overdueLabel.querySelector('.gvkit-arrange-detail-overdue')?.textContent, '已逾期');
+		assert.equal(overdueLabel.querySelector('.gvkit-arrange-detail-overdue')?.textContent, '已逾期，2020年1月1号');
 		assert.match(overdueLabel.textContent!, /^已逾期，2020年1月1号$/);
 		assert.equal(overdueLabel.title, '2020-01-01');
+		// Exercise the real plugin CSS against CodeMirror's own important flex rule.
+		const css = window.document.createElement('style');
+		css.textContent = await readFile(join(process.cwd(), 'styles.css'), 'utf8');
+		window.document.head.append(css);
+		assert.equal(window.getComputedStyle(view.editing.body.dom).display, 'none', 'preview must not also display the hidden Markdown editor');
+		view.editing.preview.click();
+		assert.equal(window.getComputedStyle(view.editing.preview).display, 'none');
+		assert.notEqual(window.getComputedStyle(view.editing.body.dom).display, 'none', 'editor becomes the only visible body when editing');
+		css.remove();
 		await store.setDate(first, store.facts().day); await view.reload();
 		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-overdue'), null);
 		await store.setDate(first, null); await view.reload(); await view.select(null);

@@ -16,6 +16,7 @@ export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
 export const PIN_COLORS = { gold: '#bb8c18', purple: '#9860d6', blue: '#3084df' } as const;
+export const COMPLETION_SOUNDS = { chime: '轻扬（原音效）', bell: '清铃', bright: '悦音' } as const;
 export interface ArrangeState {
 	order: string[];
 	achievedDays: string[];
@@ -30,6 +31,7 @@ export interface ArrangeState {
 	bodyMinRows: number;
 	completedStyle: 'background' | 'text';
 	rootItemStyle: 'background' | 'text' | 'none';
+	completionSound: keyof typeof COMPLETION_SOUNDS;
 	rowActions: RowAction[];
 	detailActions: RowAction[];
 	swipeAction: RowAction | 'none';
@@ -70,7 +72,7 @@ export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background', rootItemStyle: 'background',
-		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2,
+		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2, completionSound: 'chime',
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent'],
 		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
@@ -167,6 +169,11 @@ export function matchesDateRange(item: ArrangeItem, range: { start: string; end:
 	return Boolean(day && day >= range.start && day <= range.end);
 }
 export function relativeDate(date: string, today: string, completed = false): string {
+	if (!completed && date < today) {
+		const days = (Date.parse(`${today}T12:00:00Z`) - Date.parse(`${date}T12:00:00Z`)) / 86400000;
+		const hint = days <= 7 ? rowDateLabel({ date, completedAt: null }, today) : relativeDate(date, today, true);
+		return `已逾期，${hint}`;
+	}
 	const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
 	const week = dateRange(today, 'week');
 	const relative = date === today ? '今天' : date === offsetDay(today, 1) ? '明天'
@@ -177,7 +184,7 @@ export function relativeDate(date: string, today: string, completed = false): st
 }
 
 /** A compact deadline hint, using the same calendar day as the detail and counts. */
-export function rowDateLabel(item: ArrangeItem, today: string): string {
+export function rowDateLabel(item: Pick<ArrangeItem, 'date' | 'completedAt'>, today: string): string {
 	const date = item.date;
 	if (!date || date > today || (item.completedAt && date < today)) return '';
 	if (date === today) return '今天';
@@ -193,7 +200,8 @@ export function rowDateLabel(item: ArrangeItem, today: string): string {
 
 export function todayFacts(items: ArrangeItem[], state: ArrangeState, now = new Date(), archivedCompletions: readonly string[] = []) {
 	const day = dayKey(now, state.timezone);
-	const due = items.filter(item => item.date === day);
+	const due = items.filter(item => item.date === day || (item.date && item.date < day
+		&& (!item.completedAt || dayKey(new Date(item.completedAt), state.timezone) === day)));
 	const x = items.filter(item => item.completedAt && dayKey(new Date(item.completedAt), state.timezone) === day).length
 		+ archivedCompletions.filter(value => dayKey(new Date(value), state.timezone) === day).length;
 	const remaining = due.filter(item => !item.completedAt).length;

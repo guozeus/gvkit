@@ -1,6 +1,6 @@
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -51,6 +51,8 @@ export class ArrangeStore {
 			}
 			if (fields.completedStyle === 'background' || fields.completedStyle === 'text') state.completedStyle = fields.completedStyle;
 			if (fields.rootItemStyle === 'background' || fields.rootItemStyle === 'text' || fields.rootItemStyle === 'none') state.rootItemStyle = fields.rootItemStyle;
+			if (typeof fields.completionSound === 'string' && Object.keys(COMPLETION_SOUNDS).includes(fields.completionSound))
+				state.completionSound = fields.completionSound as ArrangeState['completionSound'];
 			for (const key of ['rowActions', 'detailActions'] as const) {
 				const value = fields[key];
 				if (strings(value)) state[key] = value.filter((a): a is ArrangeState['rowActions'][number] => (ARRANGE_ACTIONS as readonly string[]).includes(a));
@@ -145,7 +147,7 @@ export class ArrangeStore {
 		});
 	}
 
-	create(title: string, parent: string | null): Promise<string> {
+	create(title: string, parent: string | null, date: string | null = null): Promise<string> {
 		return this.serial(async () => {
 			if (!title.trim()) throw Error('请填写事项');
 			await this.requireFolder(TODO);
@@ -155,7 +157,7 @@ export class ArrangeStore {
 			this.state.order = moveInOrder(this.state.order, this.items, id);
 			await this.saveState();
 			await this.app.vault.create(`${TODO}/${id}.md`, markdown({ gvid: id, gvkit_arrange: true,
-				title: title.trim(), parent, date: null, completed_at: null, pinned: false }, ''));
+				title: title.trim(), parent, date, completed_at: null, pinned: false }, ''));
 			await this.load();
 			return id;
 		});

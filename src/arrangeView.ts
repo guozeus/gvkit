@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
@@ -100,6 +100,8 @@ export class ArrangeView extends ItemView {
 	private area!: HTMLElement;
 	private input!: HTMLTextAreaElement;
 	private createButton!: HTMLButtonElement;
+	private createDateButton!: HTMLButtonElement;
+	private draftDate: string | null = null;
 	private keyboardBackdrop: HTMLElement | null = null;
 	private headline!: HTMLButtonElement;
 	private full = false;
@@ -115,6 +117,31 @@ export class ArrangeView extends ItemView {
 	private cancelResize: (() => void) | null = null;
 	private titleFocusScroll: { input: HTMLTextAreaElement; top: number } | null = null;
 	private bodyRender = 0;
+	private interactionLog: { time: string; event: string; detail: Record<string, unknown> }[] = [];
+	private trace(event: string, detail: Record<string, unknown> = {}): void {
+		this.interactionLog.push({ time: new Date().toISOString(), event, detail });
+		if (this.interactionLog.length > 120) this.interactionLog.shift();
+	}
+	private focusRole(target: EventTarget | null): string {
+		const el = target as HTMLElement | null;
+		if (el === this.input) return 'composer';
+		if (el === this.editing?.title) return 'title';
+		if (el && this.editing?.body.dom.contains(el)) return 'body';
+		return el?.closest?.('.gvkit-arrange-row') ? 'row' : 'other';
+	}
+	private async copyInteractionDiagnostics(): Promise<void> {
+		const doc = this.contentEl.ownerDocument, edit = this.editing;
+		const describe = (el: HTMLElement | undefined) => el ? {
+			hidden: el.hidden, display: doc.defaultView?.getComputedStyle(el).display, height: el.getBoundingClientRect().height,
+		} : null;
+		try {
+			await navigator.clipboard.writeText(JSON.stringify({ time: new Date().toISOString(),
+				ownerIsMainDocument: doc === document, focused: this.focusRole(doc.activeElement),
+				preview: describe(edit?.preview), editor: describe(edit?.body.dom), events: this.interactionLog,
+			}, null, 2));
+			new Notice('已复制交互诊断');
+		} catch { new Notice('复制失败，请重试'); }
+	}
 
 	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
 	getViewType(): string { return ARRANGE_VIEW; }
@@ -130,6 +157,12 @@ export class ArrangeView extends ItemView {
 		root.dataset.ignoreSwipe = 'true';
 		this.register(() => { delete root.dataset.ignoreSwipe; });
 		root.toggleClass('gvkit-arrange-mobile', Platform.isMobileApp);
+		for (const type of ['focusin', 'focusout'] as const) this.registerDomEvent(root, type, event => {
+			this.trace(type, { role: this.focusRole(event.target), next: this.focusRole(event.relatedTarget) });
+		}, true);
+		const ownerWindow = root.ownerDocument.defaultView ?? window;
+		this.registerDomEvent(ownerWindow, 'blur', () => this.trace('window.blur'));
+		this.registerDomEvent(ownerWindow, 'focus', () => this.trace('window.focus'));
 		if (Platform.isIosApp) this.guardSmallEditorZoom(root);
 		const header = root.createDiv('gvkit-arrange-header');
 		header.dataset.ignoreSwipe = 'true';
@@ -194,6 +227,10 @@ export class ArrangeView extends ItemView {
 		this.input = composer.createEl('textarea', { attr: { rows: '1', placeholder: '想到就记…', 'aria-label': '新增事项' } });
 		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
 		this.createButton.addClass('gvkit-arrange-submit');
+		this.createDateButton = iconButton(composer, '设置新事项日期', 'calendar', event => {
+			this.chooseDate(this.draftDate, async date => { this.draftDate = date; this.updateComposer(); return true; }, event);
+		});
+		this.createDateButton.addClass('gvkit-arrange-composer-date');
 		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
 		this.updateComposer();
 		this.applyComposerSettings();
@@ -230,11 +267,12 @@ export class ArrangeView extends ItemView {
 			if (file.path.startsWith('安排/历史/')) refresh();
 		}));
 		this.registerInterval(window.setInterval(() => this.paintLists(), 60_000));
-		this.registerDomEvent(document, 'visibilitychange', () => { if (document.hidden) void this.saveEdit(); else void this.reload(); });
+		this.registerDomEvent(root.ownerDocument, 'visibilitychange', () => { if (root.ownerDocument.hidden) void this.saveEdit(); else void this.reload(); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
 		const fit = () => {
-			const viewport = window.visualViewport;
+			const ownerWindow = root.ownerDocument.defaultView ?? window;
+			const viewport = ownerWindow.visualViewport;
 			const bounds = root.getBoundingClientRect();
 			const bottom = bounds.bottom;
 			const css = window.getComputedStyle(root);
@@ -249,8 +287,8 @@ export class ArrangeView extends ItemView {
 				this.list.style.paddingLeft = css.paddingLeft; this.list.style.paddingRight = css.paddingRight;
 			}
 			root.classList.toggle('gvkit-arrange-keyboard-open', keyboard > 0);
-			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : window.innerHeight,
-				keyboard > 0 ? window.innerHeight - keyboard : Infinity);
+			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : ownerWindow.innerHeight,
+				keyboard > 0 ? ownerWindow.innerHeight - keyboard : Infinity);
 			const overlap = Math.max(0, bottom - visibleBottom);
 			if (keyboard > 0 || overlap > 0) {
 				// Explicit zero must override the host CSS inset after it has resized.
@@ -259,7 +297,7 @@ export class ArrangeView extends ItemView {
 			// First keyboard opening can scroll the title using the old panel geometry.
 			// Restore the pre-focus position after fitting, without changing the caret.
 			const anchor = this.titleFocusScroll;
-			if (anchor && document.activeElement === anchor.input && this.editing?.title === anchor.input)
+			if (anchor && root.ownerDocument.activeElement === anchor.input && this.editing?.title === anchor.input)
 				this.detailScroll.scrollTop = anchor.top;
 			// Paint behind native keyboard corners, outside the host's clipped pane.
 			// This is decoration only: it never changes keyboard/composer geometry.
@@ -272,24 +310,33 @@ export class ArrangeView extends ItemView {
 			}
 		};
 		if (Platform.isIosApp) this.registerEvent(this.app.workspace.on('active-leaf-change', fit));
-		if (window.visualViewport) {
-			const viewport = window.visualViewport;
+		if (ownerWindow.visualViewport) {
 			const observer = new ResizeObserver(fit);
 			// Padding changes the content box; watch the host-controlled border box
 			// so our own compensation does not trigger a resize feedback loop.
 			observer.observe(root, { box: 'border-box' });
 			const resize = () => fit(), scroll = () => fit();
-			viewport.addEventListener('resize', resize);
-			viewport.addEventListener('scroll', scroll);
+			let detachViewport = () => {};
+			const bindViewport = () => {
+				detachViewport();
+				const viewport = root.ownerDocument.defaultView?.visualViewport;
+				viewport?.addEventListener('resize', resize);
+				viewport?.addEventListener('scroll', scroll);
+				detachViewport = () => { viewport?.removeEventListener('resize', resize); viewport?.removeEventListener('scroll', scroll); };
+				fit();
+			};
+			if (root.onWindowMigrated) this.register(root.onWindowMigrated(() => {
+				this.editing?.body.syncRoot();
+				bindViewport();
+			}));
 			this.register(() => {
 				observer.disconnect();
-				viewport.removeEventListener('resize', resize);
-				viewport.removeEventListener('scroll', scroll);
+				detachViewport();
 				root.style.paddingBottom = '';
 				root.classList.remove('gvkit-arrange-keyboard-open');
 				root.style.removeProperty('--gvkit-arrange-keyboard-gap');
 			});
-			fit();
+			bindViewport();
 		}
 		await this.reload();
 	}
@@ -399,6 +446,10 @@ export class ArrangeView extends ItemView {
 		this.contentEl.style.setProperty('--gvkit-arrange-composer-growth', `${Math.max(0, height - minimum)}px`);
 		const empty = !this.input.value.trim();
 		this.createButton.hidden = empty;
+		this.createDateButton.hidden = empty;
+		this.createDateButton.disabled = this.busy || Boolean(this.choosingParent);
+		this.createDateButton.toggleClass('is-active', Boolean(this.draftDate));
+		this.createDateButton.title = this.draftDate ? `新事项日期：${this.draftDate}` : '设置新事项日期';
 		this.input.disabled = Boolean(this.choosingParent);
 		this.createButton.disabled = this.busy || empty || Boolean(this.choosingParent);
 	}
@@ -447,7 +498,7 @@ export class ArrangeView extends ItemView {
 			items = [...items, ...this.store.items.filter(item => item.completedAt)];
 		} else if (!this.searchOpen) {
 			if (this.filter === 'today') items = [
-				...items.filter(item => item.date === facts.day),
+				...items.filter(item => item.date && item.date <= facts.day),
 				...this.store.items.filter(item => item.completedAt && dayKey(new Date(item.completedAt), this.store.state.timezone) === facts.day)
 					.sort((a, b) => Date.parse(a.completedAt!) - Date.parse(b.completedAt!)),
 			];
@@ -564,7 +615,7 @@ export class ArrangeView extends ItemView {
 		row.dataset.id = item.id;
 		row.toggleClass('is-selected', item.id === this.selected);
 		row.toggleClass('is-pinned', item.pinned);
-		row.toggleClass('is-root-item', item.parent === null);
+		row.toggleClass('is-root-item', item.parent === null && this.store.items.some(child => child.parent === item.id));
 		row.toggleClass('is-development-project', Boolean(item.developmentProject));
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
@@ -596,7 +647,8 @@ export class ArrangeView extends ItemView {
 		}
 		const dateText = rowDateLabel(item, this.today);
 		if (dateText) {
-			const hint = row.createSpan({ cls: 'gvkit-arrange-row-date', text: dateText, attr: { title: item.date! } });
+			const hint = row.createEl('button', { cls: 'gvkit-arrange-row-date', text: dateText, attr: { type: 'button', title: item.date!, 'aria-label': `设置日期：${item.date}` } });
+			hint.onclick = event => { event.stopPropagation(); this.dateMenu(item, event); };
 			hint.toggleClass('is-overdue', item.date! < this.today);
 		}
 		const actionArea = row.createDiv('gvkit-arrange-actions');
@@ -617,8 +669,11 @@ export class ArrangeView extends ItemView {
 		}, true);
 		label.addEventListener('contextmenu', event => event.preventDefault());
 		const start = (x: number, y: number, touch: boolean) => {
+			const doc = row.ownerDocument, win = doc.defaultView ?? window;
 			this.cancelReorder?.();
+			this.trace('drag.press', { scope: row.parentElement === this.list ? 'main' : 'children', touch, ownerIsMainDocument: doc === document });
 			let dragging = false, moved = false;
+			let moves = 0;
 			let target: HTMLElement | null = null;
 			let after = false;
 			let topDrop = false;
@@ -627,26 +682,28 @@ export class ArrangeView extends ItemView {
 			const beginDrag = () => {
 				if (this.busy || item.pinned || item.completedAt) return;
 				dragging = true; row.addClass('is-dragging');
+				this.trace('drag.begin');
 				suppressClickUntil = Infinity;
 			};
-			const timer = window.setTimeout(() => { if (!moved) beginDrag(); }, 380);
+			const timer = win.setTimeout(() => { if (!moved) beginDrag(); }, 380);
 			const cleanup = () => {
-				window.clearTimeout(timer);
-				document.removeEventListener('touchmove', touchMove); document.removeEventListener('touchend', touchEnd);
-				document.removeEventListener('touchcancel', cancel); document.removeEventListener('touchstart', extraTouch);
-				document.removeEventListener('pointermove', mouseMove); document.removeEventListener('pointerup', mouseEnd);
-				document.removeEventListener('pointercancel', cancel); window.removeEventListener('blur', cancel);
+				win.clearTimeout(timer);
+				doc.removeEventListener('touchmove', touchMove); doc.removeEventListener('touchend', touchEnd);
+				doc.removeEventListener('touchcancel', cancel); doc.removeEventListener('touchstart', extraTouch);
+				doc.removeEventListener('pointermove', mouseMove); doc.removeEventListener('pointerup', mouseEnd);
+				doc.removeEventListener('pointercancel', cancel); win.removeEventListener('blur', cancel);
 				row.removeClass('is-dragging'); row.style.removeProperty('transform'); target?.removeClass('is-drop-target');
 				if (dragging || moved) suppressClickUntil = Date.now() + 500;
 				if (this.cancelReorder === cancel) this.cancelReorder = null;
 			};
-			const cancel = () => cleanup();
+			const cancel = (event?: Event) => { this.trace('drag.cancel', { cause: event?.type ?? 'repaint', moves }); cleanup(); };
 			const move = (clientX: number, clientY: number, event: Event) => {
+				if (++moves === 1) this.trace('drag.move', { dx: clientX - x, dy: clientY - y });
 				lastX = clientX; lastY = clientY;
 				if (!dragging) {
 					const dx = clientX - x, dy = clientY - y;
 					if (Math.hypot(dx, dy) > 8) {
-						moved = true; window.clearTimeout(timer);
+						moved = true; win.clearTimeout(timer);
 						// Vertical mouse movement starts sorting; horizontal swipes and touch keep their behavior.
 						if (!touch && !Platform.isMobileApp && Math.abs(dy) > Math.abs(dx) / 1.5) beginDrag();
 						axis ??= dx < -Math.abs(dy) * 1.5 ? 'left' : 'other';
@@ -670,7 +727,7 @@ export class ArrangeView extends ItemView {
 					target = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed):not(.is-pinned):not(.is-dragging)');
 					after = false;
 				} else {
-					const hit = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
+					const hit = doc.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
 					target = hit && hit !== row && hit.parentElement === container && !hit.classList.contains('is-completed') ? hit : null;
 					after = Boolean(target && clientY > target.getBoundingClientRect().top + target.getBoundingClientRect().height / 2);
 				}
@@ -690,10 +747,11 @@ export class ArrangeView extends ItemView {
 				const key = this.store.state.swipeAction;
 				const swipe = !dragging && axis === 'left' && x - lastX >= 56 && x - lastX > Math.abs(lastY - y) * 1.5;
 				if (dragging || swipe) event.preventDefault();
+				this.trace('drag.release', { dragging, moves, target: Boolean(targetId), topDrop, swipe });
 				cleanup();
 				if (dragging && (topDrop || targetId)) void this.run(() => this.store.move(item.id, topDrop ? undefined : targetId, after));
 				else if (swipe && key !== 'none' && !this.busy) this.action(key, item,
-					new MouseEvent('click', { clientX: lastX, clientY: lastY, view: window }));
+					new win.MouseEvent('click', { clientX: lastX, clientY: lastY, view: win }));
 			};
 			const extraTouch = (e: TouchEvent) => { if (e.touches.length !== 1) cancel(); };
 			const touchMove = (e: TouchEvent) => { const p = e.touches[0]; if (p && e.touches.length === 1) move(p.clientX, p.clientY, e); else cancel(); };
@@ -701,13 +759,13 @@ export class ArrangeView extends ItemView {
 			const mouseMove = (e: PointerEvent) => move(e.clientX, e.clientY, e);
 			const mouseEnd = (e: PointerEvent) => { lastX = e.clientX; lastY = e.clientY; end(e); };
 			if (touch) {
-				document.addEventListener('touchmove', touchMove, { passive: false });
-				document.addEventListener('touchend', touchEnd, { passive: false });
-				document.addEventListener('touchcancel', cancel); document.addEventListener('touchstart', extraTouch);
+				doc.addEventListener('touchmove', touchMove, { passive: false });
+				doc.addEventListener('touchend', touchEnd, { passive: false });
+				doc.addEventListener('touchcancel', cancel); doc.addEventListener('touchstart', extraTouch);
 			} else {
-				document.addEventListener('pointermove', mouseMove); document.addEventListener('pointerup', mouseEnd); document.addEventListener('pointercancel', cancel);
+				doc.addEventListener('pointermove', mouseMove); doc.addEventListener('pointerup', mouseEnd); doc.addEventListener('pointercancel', cancel);
 			}
-			window.addEventListener('blur', cancel);
+			win.addEventListener('blur', cancel);
 			this.cancelReorder = cancel;
 		};
 		const onBody = (target: EventTarget | null) => target === row || label.contains(target as Node);
@@ -840,18 +898,45 @@ export class ArrangeView extends ItemView {
 		modal.open();
 	}
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
+		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event);
+	}
+	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, event: MouseEvent): void {
 		const day = todayFacts(this.store.items, this.store.state).day;
 		const menu = new Menu();
-		if (item.date) menu.addItem(entry => entry.setTitle(`当前日期：${item.date}`).setDisabled(true));
+		if (current) menu.addItem(entry => entry.setTitle(`当前日期：${current}`).setDisabled(true));
 		for (const [label, date] of [['清除日期', null], ['今天', day], ['明天', offsetDay(day, 1)]] as const)
-			menu.addItem(entry => entry.setTitle(label).onClick(() => { void this.run(() => this.store.setDate(item.id, date)); }));
+			menu.addItem(entry => entry.setTitle(label).onClick(() => { void save(date); }));
 		menu.addItem(entry => entry.setTitle('选择日期…').setIcon('calendar').onClick(() => {
 			const modal = new Modal(this.app);
 			modal.setTitle('选择日期');
-			const input = modal.contentEl.createEl('input', { type: 'date', value: item.date ?? day, attr: { 'aria-label': '必做日期' } });
+			const input = modal.contentEl.createEl('input', { type: 'date', value: current ?? day, attr: { 'aria-label': '必做日期' } });
+			if (!Platform.isMobileApp) {
+				let month = input.value.slice(0, 7);
+				const calendar = modal.contentEl.createDiv('gvkit-arrange-calendar');
+				const paint = () => {
+					calendar.empty();
+					const header = calendar.createDiv('gvkit-arrange-calendar-header');
+					const shift = (direction: -1 | 1) => { month = shiftPeriod(`${month}-01`, 'month', direction).slice(0, 7); paint(); };
+					iconButton(header, '上个月', 'chevron-left', () => shift(-1));
+					header.createSpan({ text: month.replace('-', '年') + '月', attr: { 'aria-live': 'polite' } });
+					iconButton(header, '下个月', 'chevron-right', () => shift(1));
+					const grid = calendar.createDiv('gvkit-arrange-calendar-days');
+					for (const name of '一二三四五六日') grid.createSpan({ text: name });
+					const start = new Date(`${month}-01T12:00:00Z`);
+					for (let i = 0; i < (start.getUTCDay() + 6) % 7; i++) grid.createSpan();
+					const count = Number(dateRange(`${month}-01`, 'month').end.slice(8));
+					for (let n = 1; n <= count; n++) {
+						const date = `${month}-${String(n).padStart(2, '0')}`;
+						const button = grid.createEl('button', { text: String(n), attr: { type: 'button', 'aria-label': date, 'aria-pressed': String(input.value === date) } });
+						button.onclick = () => { input.value = date; paint(); };
+					}
+				};
+				input.onchange = () => { if (input.value) { month = input.value.slice(0, 7); paint(); } };
+				paint();
+			}
 			new Setting(modal.contentEl).addButton(button => button.setButtonText('取消').onClick(() => modal.close()))
 				.addButton(button => button.setButtonText('完成').setCta().onClick(async () => {
-					if (input.value && await this.run(() => this.store.setDate(item.id, input.value))) modal.close();
+					if (input.value && await save(input.value)) modal.close();
 				}));
 			modal.open();
 		}));
@@ -876,7 +961,7 @@ export class ArrangeView extends ItemView {
 			if (item) {
 				const done = !item.completedAt;
 				const changed = await this.store.complete(id, done);
-				if (changed && done && !this.closed) this.feedback.play();
+				if (changed && done && !this.closed) this.feedback.play(this.store.state.completionSound);
 			}
 		});
 	}
@@ -892,9 +977,7 @@ export class ArrangeView extends ItemView {
 			const overdue = text.indexOf('已逾期');
 			label.empty();
 			if (overdue >= 0) {
-				label.append(document.createTextNode(text.slice(0, overdue)));
-				label.createSpan({ cls: 'gvkit-arrange-detail-overdue', text: '已逾期' });
-				label.append(document.createTextNode(text.slice(overdue + 3)));
+				label.createSpan({ cls: 'gvkit-arrange-detail-overdue', text });
 			} else label.textContent = text;
 			label.title = item.date ?? '';
 		}
@@ -910,6 +993,7 @@ export class ArrangeView extends ItemView {
 		this.paintDetailActions();
 	}
 	private paintDetail(): void {
+		this.trace('detail.render', { focused: this.focusRole(this.contentEl.ownerDocument.activeElement), keepingEditor: this.keepEditor() });
 		if (this.choosingParent) { this.detail.hidden = true; return; }
 		const item = this.store.items.find(item => item.id === this.selected);
 		this.editing?.body.destroy();
@@ -1125,7 +1209,7 @@ export class ArrangeView extends ItemView {
 	private keepEditor(): boolean {
 		const edit = this.editing;
 		return Boolean(edit && (edit.title.value !== edit.savedTitle || edit.body.value !== edit.savedBody
-			|| edit.composing || document.activeElement === edit.title || edit.body.focused));
+			|| edit.composing || edit.title.ownerDocument.activeElement === edit.title || edit.body.focused));
 	}
 	private renderBody(): void {
 		const render = ++this.bodyRender;
@@ -1185,8 +1269,9 @@ export class ArrangeView extends ItemView {
 		if (!draft.trim()) return;
 		const parent = this.selected;
 		let id: string | undefined;
-		if (await this.run(async () => { id = await this.store.create(draft, parent); })) {
-			if (this.input.value === draft) this.input.value = '';
+		const date = this.draftDate;
+		if (await this.run(async () => { id = await this.store.create(draft, parent, date); })) {
+			if (this.input.value === draft) { this.input.value = ''; this.draftDate = null; }
 			this.updateComposer();
 			if (id) this.reveal(id);
 		}
@@ -1202,6 +1287,7 @@ export class ArrangeView extends ItemView {
 			catch { new Notice('无法复制，请使用命令面板“打开自御安排”'); }
 		}));
 		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { void this.reload(); }));
+		menu.addItem(item => item.setTitle('复制交互诊断').setIcon('clipboard-list').onClick(() => { void this.copyInteractionDiagnostics(); }));
 		menu.showAtMouseEvent(event);
 	}
 	private settings(): void {
@@ -1284,9 +1370,12 @@ export class ArrangeView extends ItemView {
 		new Setting(modal.contentEl).setName('已完成事项外观')
 			.addDropdown(dropdown => dropdown.addOptions({ background: '淡蓝底板、正常文字', text: '原底板、蓝色文字' })
 				.setValue(this.store.state.completedStyle).onChange(value => configure({ completedStyle: value as ArrangeState['completedStyle'] })));
-		new Setting(modal.contentEl).setName('无上级事项外观').setDesc('仅应用于真实上级为空的事项；不改变排序或钉住位置，已完成外观优先。')
+		new Setting(modal.contentEl).setName('无上级事项外观').setDesc('仅应用于无上级且有下级的事项；不改变排序或钉住位置，已完成外观优先。')
 			.addDropdown(dropdown => dropdown.addOptions({ background: '淡紫底板（默认）', text: '紫色文字', none: '普通样式' })
 				.setValue(this.store.state.rootItemStyle).onChange(value => configure({ rootItemStyle: value as ArrangeState['rootItemStyle'] })));
+		new Setting(modal.contentEl).setName('完成音效')
+			.addDropdown(dropdown => dropdown.addOptions(COMPLETION_SOUNDS)
+				.setValue(this.store.state.completionSound).onChange(value => configure({ completionSound: value as ArrangeState['completionSound'] })));
 		new Setting(modal.contentEl).setName('事项详情显示已完成下级')
 			.addToggle(toggle => toggle.setValue(this.store.state.showCompletedChildren).onChange(value => configure({ showCompletedChildren: value })));
 		new Setting(modal.contentEl).setName('事项左滑操作')

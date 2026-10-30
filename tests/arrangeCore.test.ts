@@ -113,9 +113,33 @@ test('date label uses the saved day boundary, relative weekdays and cross-year d
 	assert.equal(relativeDate('2026-10-30', '2026-10-25'), '下周五，10月30号');
 	assert.equal(relativeDate('2026-10-30', '2026-10-26'), '本周五，10月30号');
 	assert.equal(relativeDate('2026-10-25', '2026-10-25'), '今天，10月25号');
-	assert.equal(relativeDate('2026-10-24', '2026-10-25'), '已逾期，10月24号');
+	assert.equal(relativeDate('2026-10-24', '2026-10-25'), '已逾期，昨天');
 	assert.equal(relativeDate('2026-10-24', '2026-10-25', true), '10月24号');
 	assert.equal(relativeDate('2027-06-01', '2026-10-25'), '2027年6月1号');
+});
+
+test('today includes overdue obligations without shrinking the denominator when completed today', () => {
+	const state = defaultArrangeState(), now = new Date('2026-10-30T02:00:00Z');
+	const items = [item('today', { date: '2026-10-30' }), item('late', { date: '2026-10-29' }),
+		item('doneBefore', { date: '2026-10-28', completedAt: '2026-10-29T02:00:00Z' }),
+		item('future', { date: '2026-11-01' }), item('no-date')];
+	assert.deepEqual(todayFacts(items, state, now), { day: '2026-10-30', x: 0, y: 2, remaining: 2, achieved: false, color: 'red' });
+	items[1]!.completedAt = now.toISOString();
+	assert.equal(todayFacts(items, state, now).y, 2);
+	assert.equal(todayFacts(items, state, now).remaining, 1);
+	assert.equal(todayFacts(items, state, now).x, 1);
+	assert.equal(todayFacts(items, state, new Date('2026-10-30T16:01:00Z')).y, 1, 'next local day only unfinished deadlines carry over');
+});
+
+test('overdue details use compact red-label content through seven days, then absolute date', () => {
+	assert.equal(relativeDate('2026-10-29', '2026-10-30'), '已逾期，昨天');
+	assert.equal(relativeDate('2026-10-28', '2026-10-30'), '已逾期，前天');
+	assert.equal(relativeDate('2026-10-25', '2026-10-30'), '已逾期，上周日');
+	assert.equal(relativeDate('2026-10-23', '2026-10-30'), '已逾期，上周五');
+	assert.equal(relativeDate('2026-10-22', '2026-10-30'), '已逾期，10月22号');
+	assert.equal(relativeDate('2025-12-31', '2026-01-01'), '已逾期，昨天');
+	assert.equal(relativeDate('2025-12-31', '2026-01-09'), '已逾期，2025年12月31号');
+	assert.equal(relativeDate('2026-10-29', '2026-10-30', true), '10月29号');
 });
 
 test('row deadline hints use the existing date, hide future/completed overdue dates and cross calendar boundaries', () => {

@@ -1,3 +1,5 @@
+import type { ArrangeState } from './arrangeCore';
+
 /** Short, local completion feedback. No media download or native bridge. */
 export class ArrangeFeedback {
 	private context: AudioContext | null = null;
@@ -15,14 +17,16 @@ export class ArrangeFeedback {
 	}
 
 	/** Only after a real, successful transition to completed. */
-	play(): void {
+	play(sound: ArrangeState['completionSound'] = 'chime'): void {
 		try { navigator.vibrate?.(18); } catch { /* Unsupported or denied. */ }
 		const context = this.context;
 		void this.ready.then(() => {
 			if (!context || this.context !== context || context.state !== 'running') return;
 			try {
 				// A quiet ascending chime with a short attack and smooth decay.
-				for (const [frequency, delay] of [[880, 0], [1320, 0.045]] as const) {
+				const notes: [number, number][] = sound === 'bell' ? [[1046.5, 0], [1568, 0.06]]
+					: sound === 'bright' ? [[784, 0], [1046.5, 0.045], [1568, 0.09]] : [[880, 0], [1320, 0.045]];
+				for (const [frequency, delay] of notes) {
 					const tone = context.createOscillator(), volume = context.createGain();
 					const start = context.currentTime + delay;
 					tone.type = 'sine'; tone.frequency.value = frequency;

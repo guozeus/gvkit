@@ -2,6 +2,25 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ArrangeFeedback } from '../src/arrangeFeedback.ts';
 
+test('completion sound choices keep the original chime and produce distinct local notes', async () => {
+	const original = Object.getOwnPropertyDescriptor(globalThis, 'window');
+	const tones: number[] = [];
+	class Audio {
+		state = 'running'; currentTime = 0; destination = {};
+		createOscillator() { return { frequency: { set value(n: number) { tones.push(n); } }, connect() {}, disconnect() {}, start() {}, stop() {} }; }
+		createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
+		async close() {}
+	}
+	try {
+		Object.defineProperty(globalThis, 'window', { configurable: true, value: { AudioContext: Audio } });
+		const feedback = new ArrangeFeedback(); feedback.prepare();
+		feedback.play(); await Promise.resolve(); assert.deepEqual(tones.splice(0), [880, 1320]);
+		feedback.play('bell'); await Promise.resolve(); assert.deepEqual(tones.splice(0), [1046.5, 1568]);
+		feedback.play('bright'); await Promise.resolve(); assert.deepEqual(tones.splice(0), [784, 1046.5, 1568]);
+		feedback.close();
+	} finally { if (original) Object.defineProperty(globalThis, 'window', original); else Reflect.deleteProperty(globalThis, 'window'); }
+});
+
 test('feedback unlocks in the gesture and waits for audio readiness; cleanup cancels late sound', async () => {
 	const originals = new Map(['window', 'navigator'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	const vibrations: number[] = [], tones: any[] = [];

@@ -217,6 +217,7 @@ export class ArrangeBodyEditor {
 		if (hint) hint.textContent = value;
 	}
 	get focused(): boolean { return this.editor.hasFocus; }
+	syncRoot(): void { this.editor.setRoot(this.dom.getRootNode() as Document | ShadowRoot); }
 	focus(offset = 0): void {
 		let anchor = Math.max(0, Math.min(offset, this.editor.state.doc.length)), previous: number;
 		// Programmatic opening must obey the same hidden syntax boundaries as
