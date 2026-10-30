@@ -23,6 +23,7 @@ import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoin
 import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
 import { registerArrange } from './arrangeView';
 import { DocumentReadAloud } from './readAloud';
+import { ReadAloudEmbeds } from './readAloudEmbeds';
 import { DocumentQuickSettings, QuickSettingsModal } from './quickSettings';
 
 const CUSTOM_ICON_IDS = [
@@ -187,7 +188,22 @@ export default class GvkitPlugin extends Plugin {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 		registerArrange(this);
+		const embeds = new ReadAloudEmbeds(this.app);
+		this.register(() => embeds.destroy());
+		this.registerEvent(this.app.metadataCache.on('changed', (file, data, cache) => {
+			embeds.changed(file, data, cache);
+			this.readAloud?.refresh();
+		}));
+		this.registerEvent(this.app.vault.on('modify', file => {
+			if (file instanceof TFile) embeds.invalidate(file);
+		}));
+		this.registerEvent(this.app.vault.on('delete', file => {
+			if (file instanceof TFile) embeds.invalidate(file);
+		}));
+		this.registerEvent(this.app.workspace.on('editor-change', () => this.readAloud?.refresh()));
 		const readAloud = new DocumentReadAloud({
+			prepareText: view => embeds.prepare(view.getViewData(), view.file!.path),
+			getText: view => embeds.resolve(view.getViewData(), view.file!.path),
 			getPreferences: () => this.publishSettings?.getReadAloudPreferences() ?? { voiceURI: '', rate: 1 },
 			getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
 			getActiveView: () => this.app.workspace.getActiveViewOfType(MarkdownView),

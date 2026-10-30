@@ -285,15 +285,16 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 	display: none !important;
 }
 
-.gvkit-quick-setting {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	margin: 20px 0 8px;
-}
-.gvkit-quick-setting > span:first-child { flex-shrink: 0; }
-.gvkit-quick-setting select { flex: 1; min-width: 0; max-width: 100%; font-size: 16px; }
-.gvkit-quick-setting input[type="range"] { flex: 1; min-width: 0; }
+.modal.gvkit-quick-settings-modal { width: min(480px, 100%); height: auto; min-height: 0; }
+.is-phone .modal.gvkit-quick-settings-modal { height: auto; min-height: 0; }
+.gvkit-quick-settings-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.gvkit-quick-setting { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.gvkit-quick-setting > span:first-child { width: 100%; }
+.gvkit-quick-setting select { width: 100%; min-width: 0; max-width: 100%; height: 44px; font-size: 16px; }
+.gvkit-quick-setting input[type="range"] { flex: 1; min-width: 0; width: 0; min-height: 44px; margin: 0; background: transparent; }
+.gvkit-quick-setting input[type="range"]::-webkit-slider-runnable-track { background: var(--slider-track-background); border-radius: 3px; }
+.gvkit-quick-settings p { margin: 8px 0 0; }
+.gvkit-quick-settings p:empty { display: none; }
 .gvkit-quick-setting select,
 .gvkit-quick-setting input,
 .gvkit-quick-settings-action { touch-action: manipulation; }

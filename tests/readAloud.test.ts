@@ -20,7 +20,7 @@ class Utterance {
 	constructor(text: string) { this.text = text; }
 }
 
-function harness(source = '# 你好\n这是当前文档。', path = '日志/当前.md') {
+function harness(source = '# 你好\n这是当前文档。', path = '日志/当前.md', getText?: () => { text: string; missing: number; preparing: boolean }) {
 	const win = new Window();
 	const spoken: Utterance[] = [], notices: string[] = [];
 	let cancels = 0, duringClick = false, startedDuringClick = false;
@@ -50,6 +50,7 @@ function harness(source = '# 你好\n这是当前文档。', path = '日志/当�
 	const leaf = { view } as WorkspaceLeaf;
 	let leaves = [leaf], active: MarkdownView | null = view;
 	const reader = new DocumentReadAloud({
+		getText,
 		getPreferences: () => ({ ...preferences }),
 		getLeaves: () => leaves,
 		getActiveView: () => active,
@@ -226,5 +227,23 @@ test('refresh creates a single action even in log notes excluded from publishing
 		h.click(); assert.equal(h.spoken.length, 1);
 		h.reader.destroy(); h.reader.refresh();
 		assert.equal(h.view.containerEl.querySelectorAll('button').length, 0);
+	} finally { h.cleanup(); }
+});
+
+test('resolved mixed body starts in the same tap; repeated reading obtains the current source body', () => {
+	let body = '手写甲。\n嵌入正文甲。\n手写乙。\n嵌入正文乙。';
+	const h = harness('![[daily#^abc123]]', 'current.md', () => ({ text: body, missing: 0, preparing: false }));
+	try {
+		h.click(); assert.equal(h.startedDuringClick, true); assert.equal(h.spoken[0]!.text, body);
+		h.click(); body = '已更新嵌入原文。'; h.click();
+		assert.equal(h.startedDuringClick, true); assert.equal(h.spoken.at(-1)!.text, body);
+	} finally { h.cleanup(); }
+});
+
+test('unready embed gives honest notice; unresolved syntax can never become spoken path or id', () => {
+	const h = harness('![[daily#^abc123]]', 'current.md', () => ({ text: '', missing: 1, preparing: true }));
+	try {
+		h.click(); assert.equal(h.spoken.length, 0); assert.match(h.notices[0]!, /载入嵌入/);
+		assert.equal(spokenMarkdown('前![[daily#^abc123]]后'), '前后');
 	} finally { h.cleanup(); }
 });

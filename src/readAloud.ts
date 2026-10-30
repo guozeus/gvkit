@@ -11,7 +11,7 @@ export function spokenMarkdown(source: string): string {
 		const end = lines.findIndex((line, index) => index > 0 && (line.trim() === '---' || line.trim() === '...'));
 		if (end > 0) text = lines.slice(end + 1).join('\n');
 	}
-	text = text.replace(/!?\[\[([^\]\n]+)\]\]/g, (_match, target: string) => {
+	text = text.replace(/!\[\[[^\]\n]+\]\]/g, '').replace(/\[\[([^\]\n]+)\]\]/g, (_match, target: string) => {
 		const parts = target.split('|');
 		return parts[parts.length - 1] ?? '';
 	}).replace(/%%[^]*?%%/g, '').replace(/\[([ xX])\](?=\s)/g, '');
@@ -53,6 +53,8 @@ export function speechChunks(text: string): string[] {
 }
 
 export interface ReadAloudHost {
+	prepareText?(view: MarkdownView): void;
+	getText?(view: MarkdownView): { text: string; missing: number; preparing: boolean };
 	getPreferences?(): ReadAloudPreferences;
 	getLeaves(): WorkspaceLeaf[];
 	getActiveView(): MarkdownView | null;
@@ -91,7 +93,9 @@ export class DocumentReadAloud {
 			this.host.getActiveView() !== this.playback.entry.view)) this.stop();
 		for (const leaf of leaves) {
 			const view = leaf.view as MarkdownView;
-			if (view.getViewType() !== 'markdown' || view.file?.extension !== 'md' || this.entries.has(leaf)) continue;
+			if (view.getViewType() !== 'markdown' || view.file?.extension !== 'md') continue;
+			this.host.prepareText?.(view);
+			if (this.entries.has(leaf)) continue;
 			const button = view.addAction('volume-2', '朗读当前文档', () => this.toggle(leaf));
 			button.classList.add('gvkit-read-aloud');
 			button.setAttribute('aria-pressed', 'false');
@@ -111,7 +115,10 @@ export class DocumentReadAloud {
 		if (!synth || !Utterance) { this.host.notify('当前设备未提供朗读能力。'); return; }
 		try {
 			// getViewData includes current editor changes and works in reading mode.
-			const text = spokenMarkdown(entry.view.getViewData());
+			const resolved = this.host.getText?.(entry.view);
+			if (resolved?.preparing) { this.host.notify('正在载入嵌入正文，请稍后再点朗读。'); return; }
+			if (resolved?.missing) this.host.notify('有 ' + resolved.missing + ' 处嵌入未找到正文，将读出缺失提示。');
+			const text = spokenMarkdown(resolved?.text ?? entry.view.getViewData());
 			const chunks = speechChunks(text);
 			if (!chunks.length) { this.host.notify('当前文档没有可朗读的正文。'); return; }
 			const preferences = this.host.getPreferences?.() ?? { voiceURI: '', rate: 1 };

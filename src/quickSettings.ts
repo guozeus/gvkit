@@ -12,14 +12,12 @@ export function renderQuickSettings(root: HTMLElement, synth: SpeechSynthesis | 
 	root.classList.add('gvkit-quick-settings');
 	let choice = store.getReadAloudPreferences();
 	let revision = 0, closed = false;
-	const intro = doc.createElement('p');
-	intro.textContent = '自动保存，下次朗读生效。';
-	root.append(intro);
+	const controls = doc.createElement('div'); controls.className = 'gvkit-quick-settings-controls'; root.append(controls);
 	const row = (title: string) => {
 		const label = doc.createElement('label');
 		label.className = 'gvkit-quick-setting';
 		const name = doc.createElement('span'); name.textContent = title;
-		label.append(name); root.append(label); return label;
+		label.append(name); controls.append(label); return label;
 	};
 	const voice = doc.createElement('select');
 	voice.setAttribute('aria-label', '朗读音色'); row('朗读音色').append(voice);
@@ -39,14 +37,18 @@ export function renderQuickSettings(root: HTMLElement, synth: SpeechSynthesis | 
 			const option = doc.createElement('option'); option.value = value; option.textContent = title; voice.append(option);
 		};
 		add('', '自动（沿用默认朗读）');
-		const voices = synth?.getVoices() ?? [];
+		const available = synth?.getVoices() ?? [];
+		const voices = available.filter(item => /^zh(?:[-_]|$)/i.test(item.lang));
 		for (const item of voices) add(item.voiceURI, item.name + ' · ' + item.lang);
-		const missing = choice.voiceURI && !voices.some(item => item.voiceURI === choice.voiceURI);
-		voice.value = missing ? '' : choice.voiceURI;
+		const selected = available.find(item => item.voiceURI === choice.voiceURI);
+		const missing = choice.voiceURI && !selected;
+		voice.value = voices.some(item => item.voiceURI === choice.voiceURI) ? choice.voiceURI : '';
 		voiceStatus.textContent = !synth ? '当前设备未提供朗读能力。' : missing
 			? '已保存的音色当前不可用，暂用自动音色；声库更新后会重新匹配。'
-			: !voices.length ? '系统尚未返回音色列表，仍可用默认音色朗读。稍后自动更新，也可重新打开。'
-			: '仅列出当前设备提供的音色。';
+			: selected && !voices.includes(selected) ? '已保存的其他语言音色继续保留；可改选中文音色。'
+			: !available.length ? '系统尚未返回音色列表，仍可用默认音色朗读。'
+			: !voices.length ? '设备暂无中文音色，可使用自动朗读。' : '';
+		voiceStatus.hidden = !voiceStatus.textContent;
 	};
 	const save = () => {
 		const current = ++revision;
@@ -70,6 +72,7 @@ export class QuickSettingsModal extends Modal {
 	private cleanup: (() => void) | null = null;
 	constructor(app: App, private synth: SpeechSynthesis | undefined, private store: SpeechPreferencesStore) { super(app); }
 	onOpen(): void {
+		this.modalEl.classList.add('gvkit-quick-settings-modal');
 		this.setTitle('GVKit 快捷设置');
 		this.cleanup = renderQuickSettings(this.contentEl, this.synth, this.store);
 	}
@@ -106,6 +109,10 @@ export class DocumentQuickSettings {
 				button.classList.add('gvkit-quick-settings-action');
 				entry = { view, button, modeButton: null }; this.entries.set(leaf, entry);
 			}
+			// Obsidian addAction prepends. Move this button itself to the actual right edge,
+			// including after the native more-options button, without replacing any action.
+			const actions = entry.button.parentElement;
+			if (actions && actions.lastElementChild !== entry.button) actions.append(entry.button);
 			// Native MarkdownView's dedicated switcher, verified against Obsidian 1.14.5.
 			// No icon-name / translated-label matching and no other view actions touched.
 			const modeButton = (view as MarkdownView & { modeButtonEl?: HTMLElement }).modeButtonEl;
