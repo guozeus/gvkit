@@ -565,15 +565,37 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			assert.equal(view.searchDate.grain, grain); assert.ok(view.dateBar.textContent.includes('—'));
 		}
 		view.toggleSearch();
+		// Pending descendants block both checkbox surfaces, even when hidden as a project.
+		view.setFilter('all');
+		const guardedOrder = [...store.state.order], guardedFacts = store.facts();
+		await store.toggleDevelopmentProject(family); await view.reload();
+		assert.equal(view.list.querySelector(`[data-id="${children[0]}"]`), null);
+		view.list.querySelector(`[data-id="${family}"] input`).click(); await settle();
+		assert.equal(window.notices.at(-1), '需先完成所有下级事项');
+		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
+		assert.deepEqual(store.state.order, guardedOrder); assert.deepEqual(store.facts(), guardedFacts);
+		await store.toggleDevelopmentProject(family); await view.reload();
 		// Complete in detail flushes both fields, keeps the panel and children, and can undo.
 		await view.select(family);
 		view.editing.title.value = '详情勾选前的标题'; view.editing.body.value = '保存中的正文\n下一行';
 		view.detail.querySelector('.gvkit-arrange-detail-title-row input').click(); await settle();
+		assert.equal(window.notices.at(-1), '需先完成所有下级事项');
+		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-title-row input').checked, false);
+		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
+		await store.complete(descendant, true);
+		await store.complete(children[0], true); await store.complete(children[1], true); await store.complete(children[3], true);
+		// Undoing a grandchild beneath a completed child must still prevent parent completion.
+		await store.complete(descendant, false);
+		await view.toggleComplete(family);
+		assert.equal(window.notices.at(-1), '需先完成所有下级事项');
+		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
+		await store.complete(descendant, true);
+		await view.toggleComplete(family);
 		assert.equal(view.selected, family); assert.equal(view.detail.hidden, false);
 		assert.ok(view.detail.querySelector('.gvkit-arrange-detail-title-row.is-completed'));
 		await fresh.load();
 		assert.equal(fresh.items.find((x: any) => x.id === family).body, '保存中的正文\n下一行');
-		assert.equal(fresh.items.find((x: any) => x.id === children[0]).completedAt, null);
+		assert.ok(fresh.items.find((x: any) => x.id === children[0]).completedAt);
 		view.detail.querySelector('.gvkit-arrange-detail-title-row input').click(); await settle();
 		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
 		assert.equal(view.editing.title.value, '详情勾选前的标题');

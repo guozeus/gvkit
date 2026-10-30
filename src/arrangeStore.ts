@@ -183,6 +183,16 @@ export class ArrangeStore {
 			await this.requireFolder(folder);
 			const item = this.items.find(item => item.id === id);
 			if (!item || Boolean(item.completedAt) === done) return false;
+			if (done) {
+				const parents = [id], visited = new Set(parents);
+				for (const parent of parents) {
+					for (const child of this.items.filter(value => value.parent === parent)) {
+						if (visited.has(child.id)) continue;
+						if (!child.completedAt) throw Error('需先完成所有下级事项');
+						visited.add(child.id); parents.push(child.id);
+					}
+				}
+			}
 			const destination = `${folder}/${this.file(id).name}`;
 			if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
 			await this.patch(id, { completed_at: done ? new Date().toISOString() : null, pinned: false });

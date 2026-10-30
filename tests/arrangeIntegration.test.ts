@@ -128,11 +128,17 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await store.configure({ checkboxScale: 80, rowRightGap: 2, pinColor: 'gold' });
 		await store.setDate(parent, '2026-10-24');
 		assert.equal(store.items.find((x: any) => x.id === child1).date, null);
+		const beforeBlocked = new Map(await Promise.all(vault.getMarkdownFiles().map(async (file: any) => [file.path, await vault.read(file)])));
+		const blockedFacts = store.facts();
+		await assert.rejects(store.complete(parent, true), /^Error: 需先完成所有下级事项$/);
+		assert.deepEqual(new Map(await Promise.all(vault.getMarkdownFiles().map(async (file: any) => [file.path, await vault.read(file)]))), beforeBlocked, 'blocked completion writes no Markdown, moves no file, and preserves order/settings');
+		assert.deepEqual(store.facts(), blockedFacts, 'blocked completion changes no statistics');
+		await store.complete(child1, true); await store.complete(child2, true);
 		await store.complete(parent, true);
 		assert.ok(store.items.find((x: any) => x.id === parent).path.startsWith('安排/已完成/'));
-		assert.equal(store.items.find((x: any) => x.id === child1).completedAt, null);
-		assert.ok(store.state.order.includes(child1));
+		assert.ok(store.items.find((x: any) => x.id === child1).completedAt);
 		await store.complete(parent, false);
+		await store.complete(child1, false); await store.complete(child2, false);
 		const fresh = new ArrangeStore(app); await fresh.load();
 		assert.deepEqual(fresh.state.order, store.state.order);
 		assert.equal(fresh.items.find((x: any) => x.id === child1).body, '## 正文\n[[保留链接]]\n');
@@ -248,7 +254,10 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await store.setParent(activeChild, archivedParent); // unchanged original reference
 		await store.move(activeChild); await store.togglePin(activeChild); await store.togglePin(activeChild);
 		const grandchild = await store.create('新增下级', activeChild);
+		await assert.rejects(store.complete(activeChild, true), /需先完成所有下级事项/);
+		await store.complete(grandchild, true);
 		await store.complete(activeChild, true); await store.complete(activeChild, false);
+		await store.complete(grandchild, false);
 		assert.equal(store.items.find((x: any) => x.id === grandchild).parent, activeChild);
 		await store.setParent(activeChild, null); await store.setParent(activeChild, child1);
 		const completed = await store.create('今天完成后归档', null);
