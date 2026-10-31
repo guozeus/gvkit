@@ -298,3 +298,25 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-quick-setting select,
 .gvkit-quick-setting input,
 .gvkit-quick-settings-action { touch-action: manipulation; }
+
+/* GVKit website-like Index view only; existing Markdown and Arrange styling remain unchanged. */
+.gvkit-index-view { display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: hidden; }
+.gvkit-index-toolbar { display: flex; gap: 8px; padding: 10px 12px; flex-wrap: wrap; border-bottom: 1px solid var(--background-modifier-border); }
+.gvkit-index-toolbar button { min-height: 36px; padding: 4px 12px; border-radius: var(--radius-m, 8px); }
+.gvkit-index-heading { margin: 16px 20px 4px; }
+.gvkit-index-scroll { overflow-y: auto; overscroll-behavior: contain; flex: 1; min-height: 0; padding: 8px clamp(14px, 4vw, 52px) 32px; }
+.gvkit-index-manual { max-width: 900px; margin-inline: auto; }
+.gvkit-index-auto { max-width: 1100px; margin-inline: auto; }
+.gvkit-index-auto > ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 12px; padding: 0; list-style: none; }
+.gvkit-index-auto > ul > li { list-style: none; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); border-radius: var(--radius-l, 12px); padding: 12px 14px; }
+.gvkit-index-auto > ul > li > a { display: inline-block; font-weight: 600; text-decoration: none; min-height: 26px; }
+.gvkit-index-auto ul ul { margin-top: 8px; padding-left: 18px; font-size: var(--font-ui-small); }
+.gvkit-index-auto ul ul li { margin: 6px 0; }
+.gvkit-index-auto a { overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .gvkit-index-toolbar { gap: 5px; padding: 6px; }
+  .gvkit-index-toolbar button { min-height: 38px; padding: 4px 8px; }
+  .gvkit-index-heading { margin: 12px 14px 2px; }
+  .gvkit-index-scroll { padding-inline: 14px; }
+  .gvkit-index-auto > ul { grid-template-columns: 1fr; }
+}
