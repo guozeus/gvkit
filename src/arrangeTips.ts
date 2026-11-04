@@ -8,7 +8,6 @@ export class ArrangeTips {
 	private viewport: HTMLElement;
 	private text: HTMLElement;
 	private all: HTMLElement;
-	private chevron: HTMLElement;
 	private lines: string[] = [];
 	private animations: Animation[] = [];
 	private playing = false;
@@ -20,23 +19,22 @@ export class ArrangeTips {
 		this.el = doc.createElement('div'); this.el.className = 'gvkit-arrange-tips'; parent.append(this.el);
 		this.button = doc.createElement('button'); this.button.type = 'button';
 		this.button.className = 'gvkit-arrange-tips-toggle'; this.button.setAttribute('aria-expanded', 'false');
-		const label = doc.createElement('span'); label.className = 'gvkit-arrange-tips-label'; label.textContent = 'Tips';
+		this.button.setAttribute('aria-label', '展开或收起置顶提醒');
 		this.viewport = doc.createElement('span'); this.viewport.className = 'gvkit-arrange-tips-viewport';
 		this.text = doc.createElement('span'); this.text.className = 'gvkit-arrange-tips-text'; this.viewport.append(this.text);
-		this.chevron = doc.createElement('span'); this.chevron.className = 'gvkit-arrange-tips-chevron'; this.chevron.textContent = '⌄';
-		this.chevron.setAttribute('aria-hidden', 'true');
-		this.button.append(label, this.viewport, this.chevron); this.el.append(this.button);
+		this.button.append(this.viewport); this.el.append(this.button);
 		this.all = doc.createElement('div'); this.all.className = 'gvkit-arrange-tips-all'; this.all.hidden = true; this.el.append(this.all);
 		this.button.onclick = () => {
 			this.all.hidden = !this.all.hidden;
 			this.button.setAttribute('aria-expanded', String(!this.all.hidden));
-			this.chevron.textContent = this.all.hidden ? '⌄' : '⌃';
 		};
 	}
 	update(state: ArrangeState): void {
 		this.speed = state.tipsScrollSpeed; this.interval = state.tipsInterval;
+		this.el.style.setProperty('--gvkit-tips-text', state.tipsTextColor);
+		this.el.style.setProperty('--gvkit-tips-background', state.tipsBackgroundColor);
 		const lines = state.tips.split('\n').map(line => line.trim()).filter(Boolean);
-		if (JSON.stringify(lines) === JSON.stringify(this.lines) && this.text.textContent) return;
+		if (JSON.stringify(lines) === JSON.stringify(this.lines) && this.all.childNodes.length) return;
 		this.lines = lines;
 		if (!lines.length) for (const animation of this.animations) animation.cancel();
 		this.all.replaceChildren();
@@ -48,7 +46,7 @@ export class ArrangeTips {
 		if (!this.playing) this.idle();
 	}
 	private idle(): void {
-		this.text.textContent = this.lines[0] ?? '在快捷设置中添加置顶提醒';
+		this.text.textContent = '';
 		this.button.title = '点击展开或收起全部置顶提醒';
 		delete this.el.dataset.playing;
 	}
@@ -118,6 +116,12 @@ export function renderArrangeTipsSettings(root: HTMLElement, store: ArrangeStore
 			if (!input.value.trim() || !Number.isFinite(value) || value <= 0) { status.textContent = '请输入大于0的数值。'; return; }
 			save({ [key]: value });
 		});
+	}
+	for (const [key, title] of [['tipsTextColor', '提醒文字颜色'], ['tipsBackgroundColor', '提醒底板颜色']] as const) {
+		const label = doc.createElement('label'); label.textContent = title;
+		const input = doc.createElement('input'); input.type = 'color'; input.value = store.state[key];
+		input.setAttribute('aria-label', title); label.append(input); section.append(label);
+		input.addEventListener('change', () => save({ [key]: input.value }));
 	}
 	section.append(status);
 }

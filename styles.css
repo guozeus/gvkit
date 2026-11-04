@@ -133,13 +133,13 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-today[data-selection-color="gold"] { --gvkit-selection: #bb8c18; }
 .gvkit-arrange-header .gvkit-arrange-today[aria-pressed="true"] { outline: 2px solid var(--gvkit-selection); outline-offset: -2px; background: color-mix(in srgb, var(--gvkit-selection) 18%, var(--background-primary)); }
 .gvkit-arrange-area { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
-.gvkit-arrange-tips { flex: 0 0 auto; min-width: 0; position: relative; z-index: 4; color: var(--text-muted); background: var(--background-primary); border-bottom: 1px solid var(--background-modifier-border); }
-.gvkit-arrange .gvkit-arrange-tips-toggle { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 0; box-shadow: none; background: color-mix(in srgb, var(--color-blue) 5%, var(--background-primary)); color: var(--text-normal); text-align: left; font-size: 13px; font-weight: 400; }
-.gvkit-arrange-tips-label { flex: 0 0 auto; color: var(--text-muted); font-size: 10px; letter-spacing: .04em; }
+.view-content.gvkit-arrange { padding-top: 0; }
+.gvkit-arrange-tips { flex: 0 0 auto; min-width: 0; position: relative; z-index: 4; margin: 4px 0 8px; background: #fff; }
+.gvkit-arrange .gvkit-arrange-tips-toggle { display: flex; align-items: center; width: 100%; height: 30px; min-height: 30px; padding: 0 10px; border: 0; border-radius: 4px; box-shadow: none; background: #fff; color: var(--gvkit-tips-text, #ffd76a); text-align: left; font-size: 13px; font-weight: 400; }
+.gvkit-arrange-tips[data-playing] .gvkit-arrange-tips-toggle, .gvkit-arrange-tips-all { background: var(--gvkit-tips-background, #6b3a91); color: var(--gvkit-tips-text, #ffd76a); }
 .gvkit-arrange-tips-viewport { display: block; flex: 1; min-width: 0; height: 22px; line-height: 22px; overflow: hidden; }
 .gvkit-arrange-tips-text { display: block; width: max-content; white-space: nowrap; }
-.gvkit-arrange-tips-chevron { flex: 0 0 auto; color: var(--text-muted); }
-.gvkit-arrange-tips-all { max-height: min(30vh, 240px); overflow: auto; overscroll-behavior: contain; padding: 8px 14px; background: var(--background-primary); border-top: 1px solid var(--background-modifier-border); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.gvkit-arrange-tips-all { max-height: min(30vh, 240px); overflow: auto; overscroll-behavior: contain; padding: 8px 14px; border-radius: 4px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .gvkit-arrange-tips-all[hidden] { display: none; }
 .gvkit-arrange-tips-all p { margin: 4px 0 8px; }
 .gvkit-tips-settings { border-top: 1px solid var(--background-modifier-border); margin-top: 12px; padding-top: 4px; }
@@ -148,6 +148,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-tips-settings textarea { display: block; width: 100%; min-height: 88px; resize: vertical; font-size: 16px; }
 .gvkit-tips-settings label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; font-size: 13px; }
 .gvkit-tips-settings input[type="number"] { width: 88px; font-size: 16px; }
+.gvkit-tips-settings input[type="color"] { width: 44px; height: 30px; padding: 2px; touch-action: manipulation; }
 .gvkit-arrange-list { flex: 1; min-width: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: 24px; }
 .gvkit-arrange-row { display: flex; position: relative; align-items: center; min-width: 0; height: var(--gvkit-arrange-row-height, 44px); padding: 0 2px 0 6px; gap: 0; border-bottom: 1px solid color-mix(in srgb, var(--background-modifier-border) 50%, transparent); }
 .gvkit-arrange-row > input[type="checkbox"] { flex: 0 0 var(--gvkit-arrange-checkbox, 22px); width: var(--gvkit-arrange-checkbox, 22px); height: var(--gvkit-arrange-checkbox, 22px); margin: 0 var(--gvkit-arrange-check-gap, 9px) 0 5px; }

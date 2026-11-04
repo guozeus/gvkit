@@ -35,6 +35,10 @@ export class ArrangeStore {
 			state.order = fields.order;
 			state.achievedDays = fields.achievedDays;
 			if (typeof fields.tips === 'string') state.tips = fields.tips;
+			for (const key of ['tipsTextColor', 'tipsBackgroundColor'] as const) {
+				const value = fields[key];
+				if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) state[key] = value;
+			}
 			for (const key of ['tipsScrollSpeed', 'tipsInterval'] as const) {
 				const value = fields[key];
 				if (typeof value === 'number' && Number.isFinite(value) && value > 0) state[key] = value;
