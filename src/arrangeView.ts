@@ -4,6 +4,7 @@ import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
 import { renderGvkitStyles } from './readingView';
+import { ArrangeTips, renderArrangeTipsSettings } from './arrangeTips';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -105,6 +106,7 @@ export class ArrangeView extends ItemView {
 	private draftDate: string | null = null;
 	private keyboardBackdrop: HTMLElement | null = null;
 	private headline!: HTMLButtonElement;
+	private tips!: ArrangeTips;
 	private full = false;
 	private busy = false;
 	private closed = false;
@@ -173,6 +175,7 @@ export class ArrangeView extends ItemView {
 			const menu = new Menu();
 			for (const [value, label] of [['all', '全部'], ['roots', '无上级'], ['leaves', '无下级']] as const) {
 				menu.addItem(entry => entry.setTitle(`${this.hierarchyFilter === value ? '✓ ' : ''}${label}`).onClick(() => {
+					this.tips.start();
 					this.hierarchyFilter = value; this.paintLists(); this.list.scrollTop = 0;
 				}));
 			}
@@ -197,6 +200,12 @@ export class ArrangeView extends ItemView {
 			this.register(() => this.restoreHeader?.());
 			syncHeader();
 		}
+		this.tips = new ArrangeTips(root);
+		for (const surface of [root, header]) {
+			for (const type of ['click', 'input', 'change', 'contextmenu'] as const)
+				this.registerDomEvent(surface, type, () => this.tips.start(), true);
+		}
+		this.registerDomEvent(root, 'keydown', event => { if (['Escape', 'Enter', 'Tab'].includes(event.key)) this.tips.start(); }, true);
 		this.parentBar = root.createDiv('gvkit-arrange-parent-picker');
 		this.parentBar.hidden = true;
 		this.parentBar.createSpan({ text: '选择上一级事项' });
@@ -357,6 +366,7 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.tips.destroy();
 		this.feedback.close();
 		this.titleFocusScroll = null;
 		delete this.contentEl.dataset.ignoreSwipe;
@@ -416,6 +426,7 @@ export class ArrangeView extends ItemView {
 		this.register(() => { if (timer !== null) window.clearTimeout(timer); restore(); });
 	}
 	private applyComposerSettings(): void {
+		this.tips?.update(this.store.state);
 		const state = this.store.state;
 		for (const [name, value] of Object.entries({
 			'list-font': state.listFontSize, 'row-height': state.rowHeight,
@@ -696,7 +707,7 @@ export class ArrangeView extends ItemView {
 			let lastX = x, lastY = y;
 			const beginDrag = () => {
 				if (this.busy || item.pinned || item.completedAt) return;
-				dragging = true; row.addClass('is-dragging');
+				dragging = true; row.addClass('is-dragging'); this.tips.start();
 				this.trace('drag.begin');
 				suppressClickUntil = Infinity;
 			};
@@ -803,6 +814,7 @@ export class ArrangeView extends ItemView {
 			divider.addClass('is-resizing');
 			const move = (e: PointerEvent) => {
 				if (e.pointerId !== event.pointerId) return;
+				this.tips.start();
 				const bounds = this.area.getBoundingClientRect();
 				const minimum = Math.min(240, bounds.width * .3);
 				const width = Math.max(minimum, Math.min(bounds.width - minimum, bounds.right - e.clientX));
@@ -868,6 +880,8 @@ export class ArrangeView extends ItemView {
 	}
 	private itemMenu(item: ArrangeItem, event: MouseEvent): void {
 		const modal = new Modal(this.app);
+		modal.contentEl.addEventListener('click', () => this.tips.start(), true);
+		modal.contentEl.addEventListener('input', () => this.tips.start(), true);
 		modal.setTitle('事项操作');
 		modal.contentEl.addClass('gvkit-arrange-item-menu');
 		const headings = modal.contentEl.createDiv('gvkit-arrange-menu-headings');
@@ -939,6 +953,8 @@ export class ArrangeView extends ItemView {
 		};
 		const calendar = () => {
 			const modal = new Modal(this.app);
+			modal.contentEl.addEventListener('click', () => this.tips.start(), true);
+			modal.contentEl.addEventListener('input', () => this.tips.start(), true);
 			modal.setTitle('选择日期');
 			let selectedDate = current ?? day;
 			{
@@ -1158,7 +1174,7 @@ export class ArrangeView extends ItemView {
 				&& this.store.state.pullDownClose && !editing() && !this.busy;
 			if (distance > 8) { event.preventDefault(); suppressClickUntil = Date.now() + 500; }
 			reset();
-			if (close) void this.select(null);
+			if (close) { this.tips.start(); void this.select(null); }
 		}, { passive: false });
 		scroller.addEventListener('touchcancel', reset);
 	}
@@ -1178,6 +1194,7 @@ export class ArrangeView extends ItemView {
 			const move = (e: PointerEvent) => {
 				if (e.pointerId !== event.pointerId) return;
 				moved = true;
+				this.tips.start();
 				height = Math.min(available, Math.max(0, startHeight + startY - e.clientY));
 				this.detail.style.height = `${height}px`;
 			};
@@ -1329,25 +1346,29 @@ export class ArrangeView extends ItemView {
 	private headerMenu(event: MouseEvent): void {
 		const facts = todayFacts(this.store.items, this.store.state);
 		const menu = new Menu();
-		menu.addItem(item => item.setTitle(facts.achieved ? '撤销今天基础特产投入达标' : '确认今天基础特产投入已达标').setIcon('sun').onClick(() => { void this.run(() => this.store.setAchieved(facts.day, !facts.achieved)); }));
-		menu.addItem(item => item.setTitle('检查逾期事项').setIcon('calendar-clock').onClick(() => this.setFilter('overdue')));
-		menu.addItem(item => item.setTitle('安排界面设置').setIcon('settings').onClick(() => this.settings()));
+		menu.addItem(item => item.setTitle(facts.achieved ? '撤销今天基础特产投入达标' : '确认今天基础特产投入已达标').setIcon('sun').onClick(() => { this.tips.start(); void this.run(() => this.store.setAchieved(facts.day, !facts.achieved)); }));
+		menu.addItem(item => item.setTitle('检查逾期事项').setIcon('calendar-clock').onClick(() => { this.tips.start(); this.setFilter('overdue'); }));
+		menu.addItem(item => item.setTitle('安排界面设置').setIcon('settings').onClick(() => { this.tips.start(); this.settings(); }));
 		menu.addItem(item => item.setTitle('复制手机快捷入口').setIcon('link').onClick(async () => {
+			this.tips.start();
 			try { await navigator.clipboard.writeText(`obsidian://gvkit-arrange?vault=${encodeURIComponent(this.app.vault.getName())}`); new Notice('已复制。iPhone 快捷指令使用“打开 URL”，再添加到主屏幕。'); }
 			catch { new Notice('无法复制，请使用命令面板“打开自御安排”'); }
 		}));
-		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { void this.reload(); }));
-		menu.addItem(item => item.setTitle('复制交互诊断').setIcon('clipboard-list').onClick(() => { void this.copyInteractionDiagnostics(); }));
+		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { this.tips.start(); void this.reload(); }));
+		menu.addItem(item => item.setTitle('复制交互诊断').setIcon('clipboard-list').onClick(() => { this.tips.start(); void this.copyInteractionDiagnostics(); }));
 		menu.showAtMouseEvent(event);
 	}
 	private settings(): void {
-		const modal = new Modal(this.app); modal.setTitle('安排界面设置');
+		const modal = new Modal(this.app);
+		modal.contentEl.addEventListener('click', () => this.tips.start(), true);
+		modal.contentEl.addEventListener('input', () => this.tips.start(), true); modal.setTitle('安排界面设置');
 		modal.contentEl.createEl('p', { text: '设置自动保存在 settings/gvkit/arrange.md，随同一 Vault 的文件同步到其他设备。请确保同步包含 settings 目录。完成时播放轻音；触觉反馈取决于设备支持与系统设置，不支持震动的平台仅播放音效。' });
 		modal.contentEl.dataset.ignoreSwipe = 'true';
 		let rowActions = [...this.store.state.rowActions];
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));
 		};
+		renderArrangeTipsSettings(modal.contentEl, this.store, () => this.tips.update(this.store.state));
 		const names: Record<keyof typeof ARRANGE_NUMBER_SETTINGS | keyof typeof ARRANGE_FREE_SIZES, string> = {
 			listFontSize: '列表标题字号', rowHeight: '事项行高', gripHeight: '顶部抓取触摸带高度',
 			gripWidth: '可见拖动横条宽度', toolbarHeight: '详情操作栏高度', parentFontSize: '上级导航文字字号',

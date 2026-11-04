@@ -48,6 +48,12 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(store.state.detailShadow, 24);
 		assert.equal(store.state.bodyPlaceholder, '记录正文、链接、思路…');
 		assert.equal(store.state.dateHintColor, 'vivid', 'existing settings without a color use the new vivid default');
+		assert.equal(store.state.tips, ''); assert.equal(store.state.tipsInterval, 3); assert.equal(store.state.tipsScrollSpeed, 45);
+		await store.configure({ tips: '先做重要的事\n记得休息', tipsInterval: 4.5, tipsScrollSpeed: 38 });
+		const tipsReload = new ArrangeStore(app); await tipsReload.load();
+		assert.equal(tipsReload.state.tips, '先做重要的事\n记得休息');
+		assert.equal(tipsReload.state.tipsInterval, 4.5); assert.equal(tipsReload.state.tipsScrollSpeed, 38);
+		assert.equal(tipsReload.state.dateHintColor, 'vivid');
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);
 		const child2 = await store.create('第二项', parent);

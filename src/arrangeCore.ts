@@ -21,6 +21,9 @@ export interface ArrangeState {
 	order: string[];
 	achievedDays: string[];
 	timezone: string;
+	tips: string;
+	tipsScrollSpeed: number;
+	tipsInterval: number;
 	fullscreenThreshold: number;
 	keyboardGap: number;
 	submitArrowSize: number;
@@ -70,6 +73,7 @@ export const ARRANGE_FREE_SIZES = {
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
+		tips: '', tipsScrollSpeed: 45, tipsInterval: 3,
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background', rootItemStyle: 'background',
 		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2, completionSound: 'chime',

@@ -34,6 +34,11 @@ export class ArrangeStore {
 			if (!strings(fields.order) || !strings(fields.achievedDays)) throw Error('安排顺序格式不正确');
 			state.order = fields.order;
 			state.achievedDays = fields.achievedDays;
+			if (typeof fields.tips === 'string') state.tips = fields.tips;
+			for (const key of ['tipsScrollSpeed', 'tipsInterval'] as const) {
+				const value = fields[key];
+				if (typeof value === 'number' && Number.isFinite(value) && value > 0) state[key] = value;
+			}
 			if (typeof fields.timezone === 'string') { new Intl.DateTimeFormat('en', { timeZone: fields.timezone }); state.timezone = fields.timezone; }
 			if (typeof fields.fullscreenThreshold === 'number') state.fullscreenThreshold = Math.max(55, Math.min(95, fields.fullscreenThreshold));
 			if (typeof fields.keyboardGap === 'number' && Number.isFinite(fields.keyboardGap))

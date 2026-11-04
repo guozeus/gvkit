@@ -1,5 +1,7 @@
 import { Modal, type App, type MarkdownView, type WorkspaceLeaf } from 'obsidian';
 import type { ReadAloudPreferences } from './publishSettings';
+import { ArrangeStore } from './arrangeStore';
+import { renderArrangeTipsSettings } from './arrangeTips';
 
 export interface SpeechPreferencesStore {
 	getReadAloudPreferences(): ReadAloudPreferences;
@@ -94,13 +96,19 @@ export function renderQuickSettings(root: HTMLElement, synth: SpeechSynthesis | 
 
 export class QuickSettingsModal extends Modal {
 	private cleanup: (() => void) | null = null;
+	private closed = false;
 	constructor(app: App, private synth: SpeechSynthesis | undefined, private store: SpeechPreferencesStore) { super(app); }
 	onOpen(): void {
+		this.closed = false;
 		this.modalEl.classList.add('gvkit-quick-settings-modal');
 		this.setTitle('GVKit 快捷设置');
 		this.cleanup = renderQuickSettings(this.contentEl, this.synth, this.store);
+		const arrange = new ArrangeStore(this.app);
+		void arrange.load().then(() => { if (!this.closed) renderArrangeTipsSettings(this.contentEl, arrange); }).catch(() => {
+			if (!this.closed) this.contentEl.createEl('p', { text: '置顶提醒配置暂时无法读取，请关闭后重试。' });
+		});
 	}
-	onClose(): void { this.cleanup?.(); this.cleanup = null; this.contentEl.replaceChildren(); }
+	onClose(): void { this.closed = true; this.cleanup?.(); this.cleanup = null; this.contentEl.replaceChildren(); }
 }
 
 interface Entry { view: MarkdownView; button: HTMLElement; modeButton: HTMLElement | null }

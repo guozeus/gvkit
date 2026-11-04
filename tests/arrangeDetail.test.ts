@@ -14,7 +14,7 @@ export class ItemView {
  constructor(leaf) { Object.assign(this, leaf); this.disposers=[]; }
  register(fn) { this.disposers.push(fn); } registerEvent() {}
  registerInterval(id) { this.register(()=>window.clearInterval(id)); }
- registerDomEvent(el,type,fn) { el.addEventListener(type,fn); this.register(()=>el.removeEventListener(type,fn)); }
+ registerDomEvent(el,type,fn,options) { el.addEventListener(type,fn,options); this.register(()=>el.removeEventListener(type,fn,options)); }
 }
 export const Platform={isMobileApp:true,isIosApp:false};
 export class Modal {

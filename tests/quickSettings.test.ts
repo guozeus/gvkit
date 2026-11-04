@@ -8,7 +8,7 @@ import { PublishSettings } from '../src/publishSettings.ts';
 const bundle = await build({ entryPoints: ['src/quickSettings.ts'], bundle: true, platform: 'node', format: 'esm', write: false,
 	plugins: [{ name: 'obsidian-adapter', setup(b) {
 		b.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'test' }));
-		b.onLoad({ filter: /.*/, namespace: 'test' }, () => ({ contents: 'export class Modal {}' }));
+		b.onLoad({ filter: /.*/, namespace: 'test' }, () => ({ contents: 'export class Modal {} export class TFile {} export class TFolder {} export const getFrontMatterInfo=()=>({}); export const parseYaml=JSON.parse; export const stringifyYaml=JSON.stringify;'  }));
 	} }],
 });
 const { renderQuickSettings, DocumentQuickSettings } = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles![0]!.contents).toString('base64'));
