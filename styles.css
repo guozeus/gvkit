@@ -278,6 +278,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-scope { display: flex; align-items: center; justify-content: space-between; padding-left: 12px; }
 .gvkit-arrange-mobile .gvkit-arrange-detail { position: absolute; bottom: 0; left: 0; right: 0; max-height: 100%; height: calc(48% + var(--gvkit-arrange-composer-growth, 0px) * .48); border: 1px solid var(--background-modifier-border); border-bottom: 0; border-radius: 16px 16px 0 0; box-shadow: var(--gvkit-arrange-detail-shadow, 0 -7px 24px #0003); z-index: 2; }
 .gvkit-arrange-mobile .gvkit-arrange-detail.is-full { height: 100%; max-height: 100%; border-radius: 0; }
+/* Temporarily use all space above the composer; leave the user's panel size intact. */
+.gvkit-arrange-mobile.gvkit-arrange-composer-keyboard .gvkit-arrange-detail { height: 100% !important; max-height: 100% !important; border-radius: 0; }
 .gvkit-arrange-mobile .gvkit-arrange-panel-grip { display: flex; align-items: center; justify-content: center; flex: 0 0 var(--gvkit-arrange-grip-height, 32px); cursor: ns-resize; touch-action: none; }
 .gvkit-arrange-mobile .gvkit-arrange-panel-grip::before { content: ''; display: block; width: var(--gvkit-arrange-grip-width, 36px); height: 4px; background: var(--text-faint); border-radius: 4px; }
 /* Only the native Markdown switcher marked by DocumentQuickSettings, on mobile. */

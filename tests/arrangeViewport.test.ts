@@ -45,7 +45,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	meta.name = 'viewport'; meta.content = 'width=device-width, initial-scale=1, maximum-scale=5';
 	window.document.head.append(meta);
 	const originalViewport = meta.content;
-	const saved = new Map(['window', 'document', 'ResizeObserver', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const saved = new Map(['window', 'document', 'ResizeObserver', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'NodeFilter', 'Text', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let notifyResize = () => {};
 	let disconnected = false;
 	let observedBox = '';
@@ -70,7 +70,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	};
 	proto.createDiv = function (options: unknown) { return this.createEl('div', options); };
 	proto.createSpan = function (options: unknown) { return this.createEl('span', options); };
-	for (const key of ['MutationObserver', 'Node', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
+	for (const key of ['MutationObserver', 'Node', 'NodeFilter', 'Text', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
 	Object.assign(globalThis, { requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), getComputedStyle: window.getComputedStyle.bind(window) });
 	Object.assign(globalThis, { window, document: window.document, ResizeObserver: class {
 		callback: () => void;
@@ -161,6 +161,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		viewport.dispatchEvent(new window.Event('scroll'));
 		assert.equal(root.style.paddingBottom, '378px', 'before host shrink the keyboard still needs avoidance');
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), true);
+		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), true, 'focused composer expands mobile detail while keyboard occupies space');
 		const backdrop = window.document.querySelector<HTMLElement>('.gvkit-arrange-keyboard-backdrop')!;
 		assert.equal(backdrop.hidden, false);
 		assert.equal(backdrop.style.top, '577px');
@@ -185,6 +186,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		assert.equal(root.style.getPropertyPriority('padding-bottom'), '');
 		assert.equal(window.getComputedStyle(root).paddingBottom, '34px', 'keyboard close restores the original idle CSS');
 		assert.equal(root.classList.contains('gvkit-arrange-keyboard-open'), false);
+		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), false, 'keyboard close restores panel sizing even while composer stays focused');
 		assert.equal(backdrop.hidden, true, 'keyboard close hides the background');
 		assert.equal(input.value, '尚未提交的中文草稿');
 		assert.equal(root.querySelector('textarea'), input);
@@ -202,12 +204,22 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		scroller.scrollTop = 120; // Native first-focus scroll used the pre-keyboard panel.
 		title.focus(); title.setSelectionRange(2, 2);
 		notifyResize();
+		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), false, 'title editing retains its existing layout');
 		assert.equal(scroller.scrollTop, 0, 'first fit restores the position captured before focus');
 		assert.equal(title.selectionStart, 2, 'native caret placement survives');
 		title.dispatchEvent(new window.Event('touchmove', { bubbles: true })); scroller.scrollTop = 60;
 		notifyResize();
 		assert.equal(scroller.scrollTop, 60, 'user selection/scroll owns position after first focus');
 		title.blur(); input.focus();
+		scroller.scrollTop = 80;
+		input.blur(); input.focus();
+		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), true);
+		assert.equal(scroller.scrollTop, 0, 'opening composer reveals the full title first');
+		view.detail.style.height = '180px'; view.full = false;
+		input.blur();
+		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), false);
+		assert.equal(view.detail.style.height, '180px', 'temporary expansion preserves the manual panel size');
+		assert.equal(view.full, false);
 		await view.onClose(); view.disposers.forEach((fn: () => void) => fn());
 		assert.equal(root.dataset.ignoreSwipe, undefined, 'closing restores host behavior');
 		assert.equal(meta.content, originalViewport, 'unloading restores the original viewport');

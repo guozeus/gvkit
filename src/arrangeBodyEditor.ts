@@ -1,9 +1,8 @@
 import { EditorState, StateField, type Range } from '@codemirror/state';
-import { Decoration, EditorView, keymap, placeholder, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
+import { Decoration, EditorView, keymap, placeholder, WidgetType, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { parser, GFM } from '@lezer/markdown';
 import { MarkdownRenderer, sanitizeHTMLToDom, type App, type Component } from 'obsidian';
-import { buildDecorations as buildColorDecorations } from './editorDecorations';
 
 // This editor belongs only to Arrange. Its document is always the original
 // Markdown, including syntax hidden by decorations; no HTML round-trip occurs.
@@ -35,21 +34,46 @@ function linkTarget(raw: string, auto = false): string {
 	return target;
 }
 
-function arrangeColors(view: EditorView): DecorationSet {
+function arrangeColors(state: EditorState): DecorationSet {
+	const source = state.doc.toString(), ranges: Range<Decoration>[] = [];
 	const code: { from: number; to: number }[] = [];
-	markdown.parse(view.state.doc.toString()).iterate({ enter(node) {
+	markdown.parse(source).iterate({ enter(node) {
 		if (['InlineCode', 'FencedCode', 'IndentedCode'].includes(node.name)) { code.push({ from: node.from, to: node.to }); return false; }
 		return true;
 	} });
-	return buildColorDecorations(view).update({ filter: (from, to) => !code.some(range => from < range.to && to > range.from) });
-}
-const colors = ViewPlugin.fromClass(class {
-	decorations: DecorationSet;
-	constructor(view: EditorView) { this.decorations = arrangeColors(view); }
-	update(update: ViewUpdate): void {
-		if (update.docChanged || update.viewportChanged || update.focusChanged || update.selectionSet) this.decorations = arrangeColors(update.view);
+	// Reading mode and the formatter allow color spans across source lines.
+	// Keep these document decorations independent of hidden-editor viewport/focus.
+	for (const [pattern, background] of [[/~=\{gv-(blue|purple)\}|=~/gu, false], [/~=\{gv-bg-(blue|purple)\}|=bg~/gu, true]] as const) {
+		let open: { from: number; to: number; color: string } | null = null;
+		for (const token of source.matchAll(pattern)) {
+			const from = token.index!, to = from + token[0].length;
+			// Code is literal. Exclude its tokens before pairing, so an unmatched
+			// example in code cannot consume the next real color span.
+			if (code.some(range => from < range.to && to > range.from)) continue;
+			if (token[1]) { open ??= { from, to, color: token[1] }; continue; }
+			if (!open) continue;
+			ranges.push(Decoration.replace({}).range(open.from, open.to));
+			const mark = Decoration.mark({ class: `gvkit-${background ? 'bg' : 'text'}-${open.color}` });
+			let start = open.to;
+			for (const literal of code) {
+				if (literal.to <= start || literal.from >= from) continue;
+				if (literal.from > start) ranges.push(mark.range(start, literal.from));
+				start = literal.to;
+			}
+			if (from > start) ranges.push(mark.range(start, from));
+			ranges.push(Decoration.replace({}).range(from, to));
+			open = null;
+		}
 	}
-}, { decorations: value => value.decorations });
+	return Decoration.set(ranges, true);
+}
+const colors = StateField.define<DecorationSet>({
+	create: arrangeColors,
+	update: (value, tr) => tr.docChanged ? arrangeColors(tr.state) : value,
+	provide: field => [EditorView.decorations.from(field), EditorView.atomicRanges.of(view => view.state.field(field).update({
+		filter: (_from, _to, value) => !value.spec.class,
+	}))],
+});
 
 class Rendered extends WidgetType {
 	constructor(private source: string, private app: App, private path: string, private component: Component) { super(); }
@@ -188,7 +212,6 @@ export class ArrangeBodyEditor {
 		});
 		this.editor = new EditorView({ parent, state: EditorState.create({ doc: value, extensions: [
 			parsed, history(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, colors,
-			EditorView.atomicRanges.of(view => view.plugin(colors)?.decorations.update({ filter: (_from, _to, value) => !value.spec.class }) ?? Decoration.none),
 			EditorView.editorAttributes.of({ class: 'gvkit-arrange-inline-body is-live-preview' }),
 			placeholder(() => { const el = document.createElement('span'); el.textContent = this.hint; return el; }), EditorView.contentAttributes.of({ 'aria-label': '事项正文', 'aria-multiline': 'true' }),
 			EditorView.updateListener.of(update => { if (update.docChanged) changed(); }),
@@ -203,8 +226,6 @@ export class ArrangeBodyEditor {
 			} }),
 		] }) });
 		this.dom = this.editor.dom;
-		// Reuse the existing color extension once the editor's scoped class is set.
-		this.editor.dispatch({ selection: this.editor.state.selection });
 	}
 	get value(): string { return this.editor.state.doc.toString(); }
 	set value(value: string) { this.editor.dispatch({ changes: { from: 0, to: this.editor.state.doc.length, insert: value } }); }

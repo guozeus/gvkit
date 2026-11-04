@@ -42,11 +42,11 @@ export const stringifyYaml=value=>JSON.stringify(value,null,2)+'\\n';
 test('inline edits persist to Markdown, switch safely, and retain drafts on invalid or failed saves', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'gvkit-detail-test-'));
 	const window = new Window();
-	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'NodeFilter', 'Text', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let view: any;
 	try {
 		Object.assign(globalThis, { window, document: window.document, MouseEvent: window.MouseEvent });
-		for (const key of ['MutationObserver', 'Node', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
+		for (const key of ['MutationObserver', 'Node', 'NodeFilter', 'Text', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
 		Object.assign(globalThis, { requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), getComputedStyle: window.getComputedStyle.bind(window) });
 		const copied: string[] = [];
 		let copyFails = false;
@@ -606,6 +606,36 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(store.items.find((x: any) => x.id === family).completedAt, null);
 		assert.equal(view.editing.body.value, '不能丢失的正文'); assert.equal(view.editing.error.hidden, false);
 		fail = false; await view.saveEdit();
+		// Colors span source lines even when the editor opens via empty detail space.
+		const coloredBody = '**粗体** ~={gv-blue}第一行\n[第二行](https://example.com)=~\n~={gv-bg-purple}紫底\n第三行=bg~\n`~={gv-blue}代码=~`';
+		await store.edit(family, '标色焦点回归', coloredBody, null); await view.select(family);
+		const coloredEditor = view.editing.body;
+		const visibleColors = () => {
+			const content = coloredEditor.editor.contentDOM;
+			assert.equal(content.querySelector('.gvkit-text-blue')?.textContent, '第一行');
+			assert.ok(content.querySelector('.gvkit-bg-purple'));
+			assert.equal(content.querySelector('strong')?.textContent, '粗体');
+			assert.equal(content.querySelector('a')?.getAttribute('href'), 'https://example.com');
+			assert.equal(content.querySelector('code')?.textContent, '~={gv-blue}代码=~', 'code remains literal');
+			assert.equal(content.textContent.replace('~={gv-blue}代码=~', '').includes('gv-'), false);
+			assert.equal(coloredEditor.value, coloredBody, 'source is never rewritten');
+		};
+		visibleColors();
+		view.detailScroll.dispatchEvent(new window.MouseEvent('click', { bubbles: true })); visibleColors();
+		assert.equal(coloredEditor.focused, true);
+		view.input.focus(); await view.saveEdit(); visibleColors();
+		coloredEditor.hidden = false; coloredEditor.focus(); visibleColors();
+		coloredEditor.editor.dispatch({ selection: { anchor: coloredBody.indexOf('第一行'), head: coloredBody.indexOf('第二行') + 3 } });
+		assert.equal(coloredEditor.editor.state.sliceDoc(coloredEditor.editor.state.selection.main.from, coloredEditor.editor.state.selection.main.to), '第一行\n[第二行');
+		visibleColors();
+		const codeThenColor = '`~={gv-blue}literal`\n~={gv-blue}real=~\n```\n~={gv-bg-purple}literal\n```\n~={gv-bg-purple}real background=bg~';
+		coloredEditor.value = codeThenColor;
+		assert.equal(coloredEditor.editor.contentDOM.querySelector('.gvkit-text-blue')?.textContent, 'real');
+		assert.equal(coloredEditor.editor.contentDOM.querySelector('.gvkit-bg-purple')?.textContent, 'real background');
+		assert.equal(coloredEditor.value, codeThenColor);
+		coloredEditor.editor.dispatch({ selection: { anchor: 0 } });
+		coloredEditor.editor.contentDOM.blur(); await view.saveEdit(); await view.select(null);
+		window.document.getSelection()?.removeAllRanges();
 		// First body click maps a rendered text node to its Markdown source offset.
 		await store.edit(family, '光标标题', '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字', null);
 		await view.select(family);

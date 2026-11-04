@@ -3,6 +3,7 @@ import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETIO
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
+import { renderGvkitStyles } from './readingView';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -270,6 +271,7 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(root.ownerDocument, 'visibilitychange', () => { if (root.ownerDocument.hidden) void this.saveEdit(); else void this.reload(); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
+		let restingHeight = ownerWindow.innerHeight;
 		const fit = () => {
 			const ownerWindow = root.ownerDocument.defaultView ?? window;
 			const viewport = ownerWindow.visualViewport;
@@ -289,6 +291,16 @@ export class ArrangeView extends ItemView {
 			root.classList.toggle('gvkit-arrange-keyboard-open', keyboard > 0);
 			const visibleBottom = Math.min(viewport ? viewport.height + viewport.offsetTop : ownerWindow.innerHeight,
 				keyboard > 0 ? ownerWindow.innerHeight - keyboard : Infinity);
+			const composerFocused = root.ownerDocument.activeElement === this.input;
+			const keyboardVisible = keyboard > 0 || visibleBottom < ownerWindow.innerHeight
+				|| ownerWindow.innerHeight < restingHeight;
+			const expandDetail = Platform.isMobileApp && composerFocused && keyboardVisible;
+			if (expandDetail && !root.classList.contains('gvkit-arrange-composer-keyboard') && this.detailScroll)
+				this.detailScroll.scrollTop = 0;
+			root.classList.toggle('gvkit-arrange-composer-keyboard', expandDetail);
+			const active = root.ownerDocument.activeElement;
+			const editing = active && root.contains(active) && active.matches('textarea,input,.cm-content');
+			if (!editing && keyboard === 0 && visibleBottom >= ownerWindow.innerHeight) restingHeight = ownerWindow.innerHeight;
 			const overlap = Math.max(0, bottom - visibleBottom);
 			if (keyboard > 0 || overlap > 0) {
 				// Explicit zero must override the host CSS inset after it has resized.
@@ -309,6 +321,8 @@ export class ArrangeView extends ItemView {
 				});
 			}
 		};
+		this.registerDomEvent(this.input, 'focus', fit);
+		this.registerDomEvent(this.input, 'blur', () => root.classList.remove('gvkit-arrange-composer-keyboard'));
 		if (Platform.isIosApp) this.registerEvent(this.app.workspace.on('active-leaf-change', fit));
 		if (ownerWindow.visualViewport) {
 			const observer = new ResizeObserver(fit);
@@ -334,6 +348,7 @@ export class ArrangeView extends ItemView {
 				detachViewport();
 				root.style.paddingBottom = '';
 				root.classList.remove('gvkit-arrange-keyboard-open');
+				root.classList.remove('gvkit-arrange-composer-keyboard');
 				root.style.removeProperty('--gvkit-arrange-keyboard-gap');
 			});
 			bindViewport();
@@ -1252,6 +1267,9 @@ export class ArrangeView extends ItemView {
 			const item = this.store.items.find(item => item.id === edit.id);
 			void MarkdownRenderer.render(this.app, edit.body.value, edit.preview, item?.path ?? '', this).then(() => {
 				if (render !== this.bodyRender || this.editing !== edit || edit.preview.hidden || !item || !edit.body.value.trim()) return;
+				// A focus switch creates a fresh preview. Finish its color rendering here
+				// instead of waiting for the plugin's lazy reading-view observer.
+				renderGvkitStyles(edit.preview);
 				const walker = edit.preview.ownerDocument.createTreeWalker(edit.preview, 4 /* SHOW_TEXT */);
 				let last: Node | null = null;
 				while (walker.nextNode()) if (walker.currentNode.textContent?.trim()) last = walker.currentNode;
