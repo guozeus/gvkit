@@ -164,6 +164,13 @@ export function shiftPeriod(day: string, grain: DateGrain, direction: number): s
 	else date.setUTCFullYear(date.getUTCFullYear() + direction);
 	return date.toISOString().slice(0, 10);
 }
+/** Calendar-month shift preserves the day, clamped to the target month's end. */
+export function shiftDateMonth(day: string, months: number): string {
+	const target = new Date(`${day.slice(0, 7)}-01T12:00:00Z`);
+	target.setUTCMonth(target.getUTCMonth() + months);
+	const start = target.toISOString().slice(0, 10);
+	return `${start.slice(0, 7)}-${String(Math.min(Number(day.slice(8)), Number(dateRange(start, 'month').end.slice(8)))).padStart(2, '0')}`;
+}
 export function matchesDateRange(item: ArrangeItem, range: { start: string; end: string }, timezone: string): boolean {
 	const day = item.completedAt ? dayKey(new Date(item.completedAt), timezone) : item.date;
 	return Boolean(day && day >= range.start && day <= range.end);

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
+import { readFile } from 'node:fs/promises';
 import { Window } from 'happy-dom';
 import { defaultArrangeState } from '../src/arrangeCore.ts';
 
@@ -225,4 +226,21 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 			else Reflect.deleteProperty(globalThis, key);
 		}
 	}
+});
+
+
+test('list date buttons retain blue and overdue red against the host button selector', async () => {
+ const window = new Window();
+ try {
+  // Obsidian 1.14.5's button:not(.clickable-icon) outranks a single class.
+  const style = window.document.createElement('style');
+  style.textContent = `:root { --text-normal: #222222; --color-red: #e93147; --gvkit-arrange-date-color: #0066ff; }
+  button { --text-color: var(--text-normal); } button:not(.clickable-icon) { color: var(--text-color); }
+  ` + await readFile('styles.css', 'utf8');
+  window.document.head.append(style);
+  window.document.body.innerHTML = '<div class="gvkit-arrange"><button class="gvkit-arrange-row-date">今天</button><button class="gvkit-arrange-row-date is-overdue">昨天</button></div>';
+  const [today, late] = window.document.querySelectorAll('button');
+  assert.equal(window.getComputedStyle(today).color,'#0066ff');
+  assert.equal(window.getComputedStyle(late).color,'#e93147');
+ } finally { await window.happyDOM.close(); }
 });

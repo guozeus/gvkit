@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
+import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
 
 test('archived parent references remain editable and today completions remain facts, not active due items', () => {
 	const state = defaultArrangeState();
@@ -153,4 +153,12 @@ test('row deadline hints use the existing date, hide future/completed overdue da
 	assert.equal(hint(today, '2026-10-28T02:00:00Z'), '今天');
 	assert.equal(rowDateLabel(item('year', { date: '2025-12-31' }), '2026-01-01'), '昨天');
 	assert.equal(rowDateLabel(item('week', { date: '2026-10-26' }), '2026-10-30'), '本周一');
+});
+
+
+test('date month shifts keep the calendar day and clamp month ends', () => {
+ assert.equal(shiftDateMonth('2028-01-31',1),'2028-02-29');
+ assert.equal(shiftDateMonth('2027-01-31',1),'2027-02-28');
+ assert.equal(shiftDateMonth('2026-12-15',1),'2027-01-15');
+ assert.equal(shiftDateMonth('2026-11-04',1),'2026-12-04');
 });

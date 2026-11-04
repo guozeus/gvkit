@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
@@ -900,18 +900,34 @@ export class ArrangeView extends ItemView {
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
 		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event);
 	}
-	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, event: MouseEvent): void {
+	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, _event: MouseEvent): void {
 		const day = todayFacts(this.store.items, this.store.state).day;
-		const menu = new Menu();
-		if (current) menu.addItem(entry => entry.setTitle(`当前日期：${current}`).setDisabled(true));
-		for (const [label, date] of [['清除日期', null], ['今天', day], ['明天', offsetDay(day, 1)]] as const)
-			menu.addItem(entry => entry.setTitle(label).onClick(() => { void save(date); }));
-		menu.addItem(entry => entry.setTitle('选择日期…').setIcon('calendar').onClick(() => {
+		const menu = new Modal(this.app);
+		menu.setTitle('设置日期');
+		menu.contentEl.addClass('gvkit-arrange-date-menu');
+		const status = menu.contentEl.createDiv({ cls: 'gvkit-arrange-date-current', attr: { 'aria-live': 'polite' } });
+		const paint = () => { status.textContent = current ? `${relativeDate(current, day, true)} · ${current}` : '未设置日期'; };
+		paint();
+		let saved = current;
+		let pending = Promise.resolve();
+		const apply = (date: string | null) => {
+			current = date; paint();
+			// Keep every rapid tap; the Store write and view refresh run in order.
+			const result = pending.then(async () => {
+				const ok = await save(date);
+				if (ok) saved = date;
+				else if (current === date) { current = saved; paint(); }
+				return ok;
+			});
+			pending = result.then(() => {});
+			return result;
+		};
+		const calendar = () => {
 			const modal = new Modal(this.app);
 			modal.setTitle('选择日期');
-			const input = modal.contentEl.createEl('input', { type: 'date', value: current ?? day, attr: { 'aria-label': '必做日期' } });
-			if (!Platform.isMobileApp) {
-				let month = input.value.slice(0, 7);
+			let selectedDate = current ?? day;
+			{
+				let month = selectedDate.slice(0, 7);
 				const calendar = modal.contentEl.createDiv('gvkit-arrange-calendar');
 				const paint = () => {
 					calendar.empty();
@@ -927,20 +943,36 @@ export class ArrangeView extends ItemView {
 					const count = Number(dateRange(`${month}-01`, 'month').end.slice(8));
 					for (let n = 1; n <= count; n++) {
 						const date = `${month}-${String(n).padStart(2, '0')}`;
-						const button = grid.createEl('button', { text: String(n), attr: { type: 'button', 'aria-label': date, 'aria-pressed': String(input.value === date) } });
-						button.onclick = () => { input.value = date; paint(); };
+						const button = grid.createEl('button', { text: String(n), attr: { type: 'button', 'aria-label': date, 'aria-pressed': String(selectedDate === date) } });
+						button.onclick = () => { selectedDate = date; paint(); };
 					}
 				};
-				input.onchange = () => { if (input.value) { month = input.value.slice(0, 7); paint(); } };
 				paint();
 			}
 			new Setting(modal.contentEl).addButton(button => button.setButtonText('取消').onClick(() => modal.close()))
 				.addButton(button => button.setButtonText('完成').setCta().onClick(async () => {
-					if (input.value && await save(input.value)) modal.close();
+					if (await apply(selectedDate)) modal.close();
 				}));
 			modal.open();
-		}));
-		menu.showAtMouseEvent(event);
+		};
+		const grid = menu.contentEl.createDiv('gvkit-arrange-date-actions');
+		for (const [label, icon, action] of [
+			['今天', 'calendar-check', () => apply(day)],
+			['明天', 'calendar-plus', () => apply(offsetDay(day, 1))],
+			['后天', 'calendar-days', () => apply(offsetDay(day, 2))],
+			['下周', 'calendar-range', () => apply(offsetDay(day, 7))],
+			['选择日期', 'calendar', calendar],
+			['推一天', 'arrow-right', () => apply(offsetDay(current ?? day, 1))],
+			['提前一天', 'arrow-left', () => apply(offsetDay(current ?? day, -1))],
+			['推一周', 'chevrons-right', () => apply(offsetDay(current ?? day, 7))],
+			['推一月', 'calendar-forward', () => apply(shiftDateMonth(current ?? day, 1))],
+			['清除日期', 'calendar-x', () => apply(null)],
+		] as const) {
+			const button = grid.createEl('button', { attr: { type: 'button', 'aria-label': label } });
+			setIcon(button.createSpan(), icon); button.createSpan({ text: label });
+			button.onclick = action;
+		}
+		menu.open();
 	}
 	private async select(id: string | null): Promise<void> {
 		if (this.choosingParent) return;

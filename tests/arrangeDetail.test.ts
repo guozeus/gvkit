@@ -19,13 +19,15 @@ export class ItemView {
 export const Platform={isMobileApp:true,isIosApp:false};
 export class Modal {
  constructor() { this.contentEl=document.createElement('div'); }
- setTitle() {} open() { document.body.append(this.contentEl); } close() { this.contentEl.remove(); }
+ setTitle() {} open() { document.body.append(this.contentEl); if(this.contentEl.classList.contains('gvkit-arrange-date-menu')) window.dateMenus=(window.dateMenus??0)+1; } close() { this.contentEl.remove(); }
 }
 export class Menu {
  constructor(){this.entries=[];}
  addItem(fn){const entry={setTitle(v){this.title=v;return this},setIcon(){return this},setDisabled(){return this},onClick(fn){this.click=fn;return this}};fn(entry);this.entries.push(entry);return this;}
  showAtMouseEvent(event){(window.menus??=[]).push({entries:this.entries,x:event.clientX,y:event.clientY,type:event.constructor.name});}
-} export class Setting {}
+} export class Setting {
+ constructor(el){this.el=el;} addButton(fn){const el=this.el.createEl('button'); const b={setButtonText(t){el.textContent=t;return this},setCta(){return this},onClick(f){el.onclick=f;return this}};fn(b);return this;}
+}
 export class Notice { constructor(message) { (window.notices ??= []).push(message); } }
 export class TFile { constructor(path) { this.path=path;this.name=path.split('/').pop();this.basename=this.name.slice(0,-3); } }
 export class TFolder {} export class Plugin {} export class WorkspaceLeaf {}
@@ -624,7 +626,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const dateRegion = root.querySelector<HTMLButtonElement>('.gvkit-arrange-detail-date')!;
 		assert.equal(dateRegion.tagName, 'BUTTON'); assert.equal(dateRegion.hidden, false);
 		dateRegion.click();
-		assert.ok((window as any).menus.at(-1).entries.some((entry: any) => entry.title === '选择日期…'));
+		assert.ok(window.document.querySelector('.gvkit-arrange-date-menu [aria-label="选择日期"]'));
+		window.document.querySelector('.gvkit-arrange-date-menu')!.remove();
 		view.itemMenu(store.items.find((x: any) => x.id === family), new window.MouseEvent('click'));
 		const batch4Menu = window.document.querySelector('.gvkit-arrange-item-menu')!;
 		assert.equal(batch4Menu.textContent!.includes('Markdown'), false);
@@ -721,6 +724,51 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(hint.classList.contains('is-overdue'), true);
 		await view.toggleComplete(family);
 		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-date').textContent.includes('逾期'), false);
+		// Date menu: all ten operations share one field; rapid taps persist in order.
+		for (const isMobile of [true, false]) {
+			const { Platform } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
+			Platform.isMobileApp = isMobile;
+			await store.setDate(second, '2028-01-31');
+			const preserved = store.items.find((x: any) => x.id === second);
+			const order = [...store.state.order];
+			view.dateMenu(preserved, new window.MouseEvent('click'));
+			const menu = window.document.querySelectorAll('.gvkit-arrange-date-menu');
+			const panel = menu[menu.length - 1];
+			const button = (label: string) => panel.querySelector(`[aria-label="${label}"]`) as any;
+			assert.deepEqual([...panel.querySelectorAll('button')].map(x => x.textContent), ['今天','明天','后天','下周','选择日期','推一天','提前一天','推一周','推一月','清除日期']);
+			const waitDate = async (date: string | null) => {
+				for(let n=0;n<200 && (store.items.find((x:any)=>x.id===second).date!==date || view.busy);n++) await new Promise(r=>setTimeout(r,2));
+				assert.equal(store.items.find((x:any)=>x.id===second).date,date);
+			};
+			button('推一月').click(); await waitDate('2028-02-29');
+			button('推一天').click(); button('推一天').click(); button('提前一天').click();
+			assert.ok(panel.textContent.includes('2028-03-01'), 'date updates immediately before disk writes finish');
+			await waitDate('2028-03-01');
+			button('推一周').click(); await waitDate('2028-03-08');
+			button('清除日期').click(); await waitDate(null);
+			button('提前一天').click(); await waitDate(new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10));
+			for(const [label,days] of [['今天',0],['明天',1],['后天',2],['下周',7]] as const) {
+				button(label).click(); await waitDate(new Date(Date.parse(today+'T12:00:00Z')+days*86400000).toISOString().slice(0,10));
+			}
+			button('选择日期').click();
+			const calendar = window.document.querySelector('.gvkit-arrange-calendar')!;
+			assert.ok(calendar.querySelector('button[aria-label^="'+today.slice(0,7)+'"]'), 'first click directly shows monthly days');
+			const calendarPanel = calendar.parentElement!;
+			(calendar.querySelector('[aria-label="下个月"]') as any).click();
+			const selected = calendar.querySelector('.gvkit-arrange-calendar-days button') as any;
+			const selectedDate = selected.getAttribute('aria-label'); selected.click();
+			([...calendarPanel.querySelectorAll('button')].find(x=>x.textContent==='完成') as any).click();
+			await waitDate(selectedDate);
+			assert.deepEqual(store.state.order,order);
+			assert.equal(store.items.find((x:any)=>x.id===second).pinned,preserved.pinned);
+			panel.remove();
+		}
+		const { Platform } = await import(pathToFileURL(join(dir, 'view.mjs')).href); Platform.isMobileApp=true;
+		view.input.value='带日期草稿'; view.updateComposer(); view.createDateButton.click();
+		const draftPanel = [...window.document.querySelectorAll('.gvkit-arrange-date-menu')].at(-1)!;
+		(draftPanel.querySelector('[aria-label="推一天"]') as any).click();
+		await new Promise(r=>setTimeout(r,10)); assert.ok(view.draftDate); assert.equal(view.input.value,'带日期草稿');
+		draftPanel.remove(); view.draftDate=null; view.input.value=''; view.updateComposer();
 		// One left swipe invokes only the selected action on release, with mouse-compatible coordinates.
 		await view.select(null); await store.configure({ swipeAction: 'date', pullDownClose: true }); view.paintLists();
 		const touch = (el: any, type: string, x: number, y: number, count = 1) => {
@@ -734,22 +782,21 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		};
 		label = view.list.querySelector(`[data-id="${second}"] .gvkit-arrange-title`);
 		const dateBefore = store.items.find((x: any) => x.id === second).date;
-		let menuCount = (window as any).menus.length;
+		let menuCount = (window as any).dateMenus;
 		touch(label, 'touchstart', 180, 60); touch(label, 'touchmove', 100, 62);
-		assert.equal((window as any).menus.length, menuCount);
+		assert.equal((window as any).dateMenus, menuCount);
 		touch(label, 'touchend', 100, 62); label.click();
-		assert.equal((window as any).menus.length, ++menuCount); assert.equal(view.selected, null);
+		assert.equal((window as any).dateMenus, ++menuCount); assert.equal(view.selected, null);
 		assert.equal(store.items.find((x: any) => x.id === second).date, dateBefore);
-		assert.deepEqual({ x: (window as any).menus.at(-1).x, y: (window as any).menus.at(-1).y, type: (window as any).menus.at(-1).type }, { x: 100, y: 62, type: 'MouseEvent' });
 		for (const [dx, dy, cancel] of [[-80, 0, true], [-10, 80, false], [80, 0, false], [-30, 0, false]] as const) gesture(label, dx, dy, cancel);
-		assert.equal((window as any).menus.length, menuCount);
+		assert.equal((window as any).dateMenus, menuCount);
 		await store.configure({ swipeAction: 'none' }); gesture(label, -80);
-		assert.equal((window as any).menus.length, menuCount);
+		assert.equal((window as any).dateMenus, menuCount);
 		await store.configure({ swipeAction: 'date' });
 		await store.setParent(first, parent);
 		await view.select(parent);
 		const childLabel = view.children.querySelector('.gvkit-arrange-title');
-		gesture(childLabel, -80); assert.equal((window as any).menus.length, ++menuCount);
+		gesture(childLabel, -80); assert.equal((window as any).dateMenus, ++menuCount);
 		// A scroll that merely reaches the top cannot close; only a fresh pull can.
 		(window.document.activeElement as any)?.blur();
 		let scroller = view.detailScroll;
