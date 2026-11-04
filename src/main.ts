@@ -167,6 +167,7 @@ class GvkitReadingRenderChild extends MarkdownRenderChild {
 export default class GvkitPlugin extends Plugin {
 	private toolbarEl: HTMLDivElement | null = null;
 	private refreshFrame: number | null = null;
+	private refreshWindow: Window | null = null;
 	private readingObserver: IntersectionObserver | null = null;
 	private fileIds: FileIdManager | null = null;
 	private safeMoves: SafeMoveManager | null = null;
@@ -300,7 +301,17 @@ export default class GvkitPlugin extends Plugin {
 		// mobile editor toolbar for the same registered formatting commands.
 		if (!Platform.isMobileApp) {
 			this.createFloatingToolbar();
-			this.registerSelectionListeners();
+			const documents = new Set<Document>();
+			const listen = (doc: Document) => {
+				if (documents.has(doc)) return;
+				documents.add(doc);
+				this.registerSelectionListeners(doc);
+			};
+			listen(document);
+			this.app.workspace.iterateAllLeaves(leaf => listen(leaf.view.containerEl.ownerDocument));
+			this.registerEvent(this.app.workspace.on('window-open', (_win, win) => listen(win.document)));
+			this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.scheduleToolbarRefresh()));
+			this.register(() => documents.clear());
 		}
 	}
 
@@ -513,9 +524,10 @@ export default class GvkitPlugin extends Plugin {
 		this.gvkitSettingsTab = null;
 		this.publishSettings = null;
 		if (this.refreshFrame !== null) {
-			window.cancelAnimationFrame(this.refreshFrame);
+			this.refreshWindow?.cancelAnimationFrame(this.refreshFrame);
 			this.refreshFrame = null;
 		}
+		this.refreshWindow = null;
 		this.toolbarEl?.remove();
 		this.toolbarEl = null;
 		this.fileIds = null;
@@ -612,16 +624,18 @@ export default class GvkitPlugin extends Plugin {
 		this.toolbarEl = toolbar;
 	}
 
-	private registerSelectionListeners(): void {
-		this.registerDomEvent(document, 'selectionchange', () => {
+	private registerSelectionListeners(doc: Document): void {
+		const ownerWindow = doc.defaultView;
+		if (!ownerWindow) return;
+		this.registerDomEvent(doc, 'selectionchange', () => {
 			this.scheduleToolbarRefresh();
 		});
 
-		this.registerDomEvent(document, 'pointerup', () => {
+		this.registerDomEvent(doc, 'pointerup', () => {
 			this.scheduleToolbarRefresh();
 		});
 
-		this.registerDomEvent(document, 'keyup', (event: KeyboardEvent) => {
+		this.registerDomEvent(doc, 'keyup', (event: KeyboardEvent) => {
 			if (event.key === 'Escape') {
 				this.hideToolbar();
 				return;
@@ -629,21 +643,24 @@ export default class GvkitPlugin extends Plugin {
 			this.scheduleToolbarRefresh();
 		});
 
-		this.registerDomEvent(window, 'resize', () => this.scheduleToolbarRefresh());
-		this.registerDomEvent(window, 'scroll', (event: Event) => {
+		this.registerDomEvent(ownerWindow, 'focus', () => this.scheduleToolbarRefresh());
+		this.registerDomEvent(ownerWindow, 'resize', () => this.scheduleToolbarRefresh());
+		this.registerDomEvent(ownerWindow, 'scroll', (event: Event) => {
 			// Reposition an existing selection after the editor scrolls.
 			// Scrolling the toolbar's own buttons must not dismiss it.
-			if (event.target instanceof Node && this.toolbarEl?.contains(event.target)) return;
+			if (event.target && 'nodeType' in event.target && this.toolbarEl?.contains(event.target as Node)) return;
 			this.scheduleToolbarRefresh();
 		}, true);
 	}
 
 	private scheduleToolbarRefresh(): void {
 		if (this.refreshFrame !== null) {
-			window.cancelAnimationFrame(this.refreshFrame);
+			this.refreshWindow?.cancelAnimationFrame(this.refreshFrame);
 		}
 
-		this.refreshFrame = window.requestAnimationFrame(() => {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		this.refreshWindow = view?.containerEl.ownerDocument.defaultView ?? window;
+		this.refreshFrame = this.refreshWindow.requestAnimationFrame(() => {
 			this.refreshFrame = null;
 			this.refreshToolbar();
 		});
@@ -662,14 +679,18 @@ export default class GvkitPlugin extends Plugin {
 		// CodeMirror is not part of Obsidian's public Editor interface, but its
 		// live selection/coordinates are required for Live Preview task widgets.
 		const cm = (view.editor as Editor & { cm?: CodeMirrorSelectionGeometry }).cm;
-		const rect = resolveEditorSelectionRect(view.editor, view.containerEl, cm, window.getSelection());
+		const doc = view.containerEl.ownerDocument;
+		const ownerWindow = doc.defaultView;
+		if (!ownerWindow) { this.hideToolbar(); return; }
+		const rect = resolveEditorSelectionRect(view.editor, view.containerEl, cm, ownerWindow.getSelection());
 		if (!rect) {
 			this.hideToolbar();
 			return;
 		}
 
 		const pane = view.containerEl.getBoundingClientRect();
-		toolbar.style.maxWidth = `${Math.max(120, Math.min(window.innerWidth, pane.width) - 16)}px`;
+		if (toolbar.ownerDocument !== doc) doc.body.appendChild(toolbar);
+		toolbar.style.maxWidth = `${Math.max(120, Math.min(ownerWindow.innerWidth, pane.width) - 16)}px`;
 		toolbar.hidden = false;
 		toolbar.style.visibility = 'hidden';
 		toolbar.style.left = '0px';
@@ -680,10 +701,10 @@ export default class GvkitPlugin extends Plugin {
 		const margin = 8;
 		const desiredLeft = rect.left + rect.width / 2 - toolbarWidth / 2;
 		const minLeft = Math.max(margin, pane.left + margin);
-		const maxLeft = Math.max(minLeft, Math.min(window.innerWidth, pane.right) - toolbarWidth - margin);
+		const maxLeft = Math.max(minLeft, Math.min(ownerWindow.innerWidth, pane.right) - toolbarWidth - margin);
 		const left = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
 		const above = rect.top - toolbarHeight - margin;
-		const top = above >= margin ? above : Math.min(rect.bottom + margin, window.innerHeight - toolbarHeight - margin);
+		const top = above >= margin ? above : Math.min(rect.bottom + margin, ownerWindow.innerHeight - toolbarHeight - margin);
 
 		toolbar.style.left = `${Math.round(left)}px`;
 		toolbar.style.top = `${Math.round(top)}px`;

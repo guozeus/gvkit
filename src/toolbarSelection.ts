@@ -48,9 +48,8 @@ export function resolveEditorSelectionRect(
 
     // CM6 may temporarily lack coordinates when Live Preview replaces nodes.
     // Fall back only to a selection genuinely inside the active editor.
-    if (cm && !cm.hasFocus &&
-        !(typeof document !== 'undefined' && document.activeElement &&
-            container.contains(document.activeElement))) return null;
+    const activeElement = container.ownerDocument?.activeElement;
+    if (cm && !cm.hasFocus && !(activeElement && container.contains(activeElement))) return null;
     const anchor = nativeSelection?.anchorNode;
     if (!nativeSelection || nativeSelection.isCollapsed || !nativeSelection.rangeCount ||
         !anchor || !container.contains(anchor)) return null;

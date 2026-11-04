@@ -124,6 +124,37 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		// The shortcut measures the rendered panel against the visible screen,
+		// not the full class or the smaller area beneath the header/Tips/composer.
+		{
+		const originalRect = view.detail.getBoundingClientRect;
+		const originalViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+		Object.defineProperty(window, 'visualViewport', { configurable: true, value: { height: 1000 } });
+		let height = 800;
+		view.detail.getBoundingClientRect = () => ({ height });
+		await view.select(first);
+		view.full = true; // Even this flag cannot replace the actual height check.
+		await view.headline.onclick();
+		assert.equal(view.selected, first, 'exactly 80% retains the detail');
+		assert.equal(view.filter, 'today');
+		height = 801;
+		view.editing.title.value = '第一项完整标题已保存';
+		await view.headline.onclick();
+		assert.equal(view.selected, null, 'over 80% closes through the save path');
+		assert.equal(view.filter, 'all', 'the original toggle also works from today');
+		assert.equal(store.items.find((i: any) => i.id === first).title, '第一项完整标题已保存');
+		await view.select(first);
+		view.editing.title.value = '失败仍保留草稿'; fail = true;
+		await view.headline.onclick();
+		assert.equal(view.selected, first); assert.equal(view.editing.title.value, '失败仍保留草稿');
+		assert.equal(view.filter, 'today');
+		fail = false; await view.select(null);
+		await store.edit(first, '第一项完整标题', '', parent);
+		view.setFilter('all');
+		view.detail.getBoundingClientRect = originalRect;
+		if (originalViewport) Object.defineProperty(window, 'visualViewport', originalViewport);
+		else delete (window as any).visualViewport;
+		}
 		// Exercise real menu actions, persistence, deep descendants and intersecting filters.
 		{
 		const grandchild = await store.create('孙事项', first);

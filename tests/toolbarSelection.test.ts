@@ -97,3 +97,15 @@ test('legacy/non-CM editor uses existing DOM selection fallback', () => {
     assert.equal(resolveEditorSelectionRect(editor, container, undefined, nativeSelection)?.left, 20);
     assert.equal(resolveEditorSelectionRect(editor, container, undefined, null), null);
 });
+
+test('popout fallback uses focus from the editor owner document', () => {
+    const { editor, cm, container } = fixture({ focused: false, firstRect: null, lastRect: null });
+    Object.defineProperty(container, 'ownerDocument', { value: { activeElement: cm.dom } });
+    const nativeSelection = {
+        anchorNode: cm.dom, isCollapsed: false, rangeCount: 1,
+        getRangeAt: () => ({ getClientRects: () => [rect(40, 60, 82)] }),
+    } as unknown as Selection;
+    assert.equal(resolveEditorSelectionRect(editor, container, cm, nativeSelection)?.left, 40);
+    Object.defineProperty(container.ownerDocument, 'activeElement', { value: {} });
+    assert.equal(resolveEditorSelectionRect(editor, container, cm, nativeSelection), null);
+});

@@ -170,7 +170,13 @@ export class ArrangeView extends ItemView {
 		const header = root.createDiv('gvkit-arrange-header');
 		header.dataset.ignoreSwipe = 'true';
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
-		this.headline.onclick = () => this.setFilter(this.filter === 'today' ? 'all' : 'today');
+		this.headline.onclick = async () => {
+			const ownerWindow = this.detail.ownerDocument.defaultView ?? window;
+			const screenHeight = ownerWindow.visualViewport?.height ?? ownerWindow.innerHeight;
+			if (Platform.isMobileApp && !this.detail.hidden && screenHeight > 0
+				&& this.detail.getBoundingClientRect().height > screenHeight * 0.8) await this.select(null);
+			this.setFilter(this.filter === 'today' ? 'all' : 'today');
+		};
 		this.hierarchyButton = iconButton(header, '事项筛选：全部', 'list-filter', event => {
 			const menu = new Menu();
 			for (const [value, label] of [['all', '全部'], ['roots', '无上级'], ['leaves', '无下级']] as const) {
