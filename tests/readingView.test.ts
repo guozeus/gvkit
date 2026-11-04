@@ -74,6 +74,26 @@ test('reading view processing is idempotent after markers have been converted', 
 	assert.equal(root.innerHTML, first);
 });
 
+test('popout text nodes keep both color layers without exposing markers from a different window', () => {
+	const { root: mainRoot } = createRoot('<p>~={gv-blue}主窗口=~</p>');
+	const popout = new Window();
+	const root = popout.document.createElement('div');
+	root.innerHTML = '<p>~={gv-blue}<strong>正文</strong> <a href="/target">链接</a>=~ / ~={gv-bg-purple}背景=bg~</p><p><code>~={gv-blue}代码=~</code></p>';
+	popout.document.body.append(root);
+	assert.equal(root.querySelector('p')!.firstChild instanceof Text, false, 'text belongs to the popout realm');
+	renderGvkitStyles(root as unknown as HTMLElement);
+	assert.equal(root.querySelector('p')!.textContent, '正文 链接 / 背景');
+	assert.equal(root.querySelector('.gvkit-text-blue strong')?.textContent, '正文');
+	assert.equal(root.querySelector('.gvkit-text-blue a')?.getAttribute('href'), '/target');
+	assert.equal(root.querySelector('.gvkit-bg-purple')?.textContent, '背景');
+	assert.equal(root.querySelector('code')?.textContent, '~={gv-blue}代码=~');
+	const rendered = root.innerHTML;
+	renderGvkitStyles(root as unknown as HTMLElement);
+	assert.equal(root.innerHTML, rendered, 'lazy postprocessing remains idempotent');
+	renderGvkitStyles(mainRoot);
+	assert.equal(mainRoot.textContent, '主窗口', 'main-window behavior is unchanged');
+});
+
 test('reading view leaves gvkit-looking text inside code untouched', () => {
 	const { root } = createRoot('<pre><code>~={gv-blue}code=~</code></pre>');
 

@@ -68,7 +68,7 @@ function collectNodeEvents(node: Text, spec: MarkerSpec): MarkerEvent[] {
 }
 
 function collectMarkerPairs(root: HTMLElement, spec: MarkerSpec): MarkerPair[] {
-	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+	const walker = root.ownerDocument.createTreeWalker(root, 4 /* SHOW_TEXT */);
 	const pairs: MarkerPair[] = [];
 	let open: MarkerEvent | null = null;
 
@@ -93,23 +93,27 @@ function collectMarkerPairs(root: HTMLElement, spec: MarkerSpec): MarkerPair[] {
 
 function stripAdjacentMarker(span: HTMLElement, marker: string, before: boolean): void {
 	const sibling = before ? span.previousSibling : span.nextSibling;
-	if (!(sibling instanceof Text)) return;
+	// Popout windows have their own Text constructor. Test the DOM node type,
+	// not the plugin's main-window realm.
+	if (!sibling || sibling.nodeType !== 3 /* TEXT_NODE */) return;
+	const text = sibling as Text;
 
-	if (before && sibling.data.endsWith(marker)) {
-		sibling.deleteData(sibling.length - marker.length, marker.length);
-	} else if (!before && sibling.data.startsWith(marker)) {
-		sibling.deleteData(0, marker.length);
+	if (before && text.data.endsWith(marker)) {
+		text.deleteData(text.length - marker.length, marker.length);
+	} else if (!before && text.data.startsWith(marker)) {
+		text.deleteData(0, marker.length);
 	}
 }
 
 function renderMarkerPair(pair: MarkerPair, spec: MarkerSpec): void {
 	if (!pair.open.color) return;
 
-	const range = document.createRange();
+	const doc = pair.open.node.ownerDocument;
+	const range = doc.createRange();
 	range.setStart(pair.open.node, pair.open.index + pair.open.length);
 	range.setEnd(pair.close.node, pair.close.index);
 
-	const span = document.createElement('span');
+	const span = doc.createElement('span');
 	span.className = spec.className(pair.open.color);
 	span.appendChild(range.extractContents());
 	range.insertNode(span);
@@ -127,7 +131,7 @@ function renderMarkerLayer(root: HTMLElement, spec: MarkerSpec): void {
 }
 
 function firstTextNode(root: Element): Text | null {
-	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+	const walker = root.ownerDocument.createTreeWalker(root, 4 /* SHOW_TEXT */);
 	return walker.nextNode() as Text | null;
 }
 
