@@ -206,7 +206,7 @@ export default class GvkitPlugin extends Plugin {
 		const readAloud = new DocumentReadAloud({
 			prepareText: view => embeds.prepare(view.getViewData(), view.file!.path),
 			getText: view => embeds.resolve(view.getViewData(), view.file!.path),
-			getPreferences: () => this.publishSettings?.getReadAloudPreferences() ?? { voiceURI: '', rate: 1 },
+			getPreferences: () => this.publishSettings?.getReadAloudPreferences() ?? { voiceURI: '', rate: 1, pitch: 1 },
 			getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
 			getActiveView: () => this.app.workspace.getActiveViewOfType(MarkdownView),
 			setIcon,

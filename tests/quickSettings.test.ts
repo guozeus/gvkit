@@ -30,7 +30,7 @@ test('real voice list arrives late; choices persist through existing queue witho
 		voice.value = 'device-a'; voice.dispatchEvent(new win.Event('change'));
 		rate.value = '1.4'; rate.dispatchEvent(new win.Event('input')); rate.dispatchEvent(new win.Event('change'));
 		await store.setPublishShortcut(true); await settle();
-		assert.deepEqual(saved.readAloud, { voiceURI: 'device-a', rate: 1.4 });
+		assert.deepEqual(saved.readAloud, { voiceURI: 'device-a', rate: 1.4, pitch: 1 });
 		assert.equal(saved.publishShortcut, true); assert.deepEqual(saved.arrange, { keep: true });
 		assert.equal(saved.zhouyouSyncUrl, 'https://example.com/api/producer-documents/obsidian-sync');
 		assert.match(root.textContent, /已保存/);
@@ -47,10 +47,10 @@ test('missing saved voice remains saved when changing rate; failed save is shown
 	const cleanup = renderQuickSettings(root as any, undefined, store);
 	try {
 		const rate = root.querySelector('input')!; rate.value = '1.5'; rate.dispatchEvent(new win.Event('change')); await settle();
-		assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: 'other-device', rate: 1.5 });
+		assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: 'other-device', rate: 1.5, pitch: 1 });
 		fail = true; rate.value = '1.8'; rate.dispatchEvent(new win.Event('change')); await settle();
 		assert.match(root.textContent, /未能保存/); assert.equal(rate.value, '1.5');
-		assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: 'other-device', rate: 1.5 });
+		assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: 'other-device', rate: 1.5, pitch: 1 });
 	} finally { cleanup(); await win.happyDOM.abort(); }
 });
 
@@ -59,6 +59,50 @@ test('invalid persisted rate falls back to normal speed', async () => {
 		const store = new PublishSettings({ loadData: async () => ({ readAloud: { rate } }), saveData: async () => {} }); await store.load();
 		assert.equal(store.getReadAloudPreferences().rate, 1);
 	}
+});
+
+test('pitch defaults for existing settings, validates its native range, and round trips independently of speed', async () => {
+	for (const pitch of [undefined, null, '1.2', -0.1, 2.1, NaN]) {
+		const store = new PublishSettings({ loadData: async () => ({ readAloud: { rate: 1.4, pitch } }), saveData: async () => {} });
+		await store.load(); assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: '', rate: 1.4, pitch: 1 });
+	}
+	for (const pitch of [0, 0.6, 1.8, 2]) {
+		let saved: any = { readAloud: { voiceURI: 'zh', rate: 1.4 }, arrange: { keep: true } };
+		const store = new PublishSettings({ loadData: async () => saved, saveData: async data => { saved = structuredClone(data); } });
+		await store.load(); await store.setReadAloudPreferences({ ...store.getReadAloudPreferences(), pitch });
+		const reloaded = new PublishSettings({ loadData: async () => saved, saveData: async () => {} }); await reloaded.load();
+		assert.deepEqual(reloaded.getReadAloudPreferences(), { voiceURI: 'zh', rate: 1.4, pitch });
+		assert.deepEqual(saved.arrange, { keep: true });
+	}
+});
+
+test('compact controls expose live name and value while adjusting, inline value on release, and restore failed pitch save', async () => {
+	const win = new Window(), root = win.document.createElement('div'); win.document.body.append(root);
+	let fail = false, saved: any = { readAloud: { voiceURI: '', rate: 1.4, pitch: 0.8 } };
+	const store = new PublishSettings({ loadData: async () => saved, saveData: async data => { if (fail) throw Error('disk'); saved = structuredClone(data); } }); await store.load();
+	const synth = new win.EventTarget() as any; synth.getVoices = () => [{ voiceURI: 'zh', name: '婷婷（增强）', lang: 'zh-CN' }];
+	const cleanup = renderQuickSettings(root as any, synth, store);
+	try {
+		assert.equal(root.querySelector('.gvkit-quick-speech-heading')!.textContent, '朗读');
+		assert.equal(root.querySelector('optgroup')!.label, '朗读音色');
+		const voice = root.querySelector('select')!;
+		voice.value = 'zh'; voice.dispatchEvent(new win.Event('change')); await settle();
+		assert.equal(root.querySelector('.gvkit-quick-voice > span')!.textContent, '婷婷');
+		assert.equal(voice.options[1]!.text, '婷婷（增强） · zh-CN');
+		const pitch = root.querySelector('[aria-label="朗读音高"]')! as any;
+		const wrap = pitch.parentElement, hint = wrap.querySelector('.gvkit-quick-slider-hint'), value = wrap.querySelector('.gvkit-quick-slider-value');
+		assert.equal(hint.hidden, true); assert.equal(value.textContent, '0.8');
+		pitch.dispatchEvent(new win.Event('pointerdown')); assert.equal(hint.hidden, false); assert.equal(value.hidden, true);
+		pitch.value = '1.6'; pitch.dispatchEvent(new win.Event('input')); assert.equal(hint.textContent, '音高 1.6');
+		pitch.dispatchEvent(new win.Event('change')); pitch.dispatchEvent(new win.Event('pointerup')); await settle();
+		assert.equal(hint.hidden, true); assert.equal(value.hidden, false); assert.equal(value.textContent, '1.6');
+		assert.equal(value.style.insetInlineStart, '8px', 'value remains opposite the thumb');
+		assert.deepEqual(saved.readAloud, { voiceURI: 'zh', rate: 1.4, pitch: 1.6 });
+		fail = true; pitch.value = '0.2'; pitch.dispatchEvent(new win.Event('input')); pitch.dispatchEvent(new win.Event('change')); await settle();
+		assert.equal(pitch.value, '1.6'); assert.equal(value.textContent, '1.6'); assert.match(root.textContent, /未能保存/);
+		pitch.dispatchEvent(new win.Event('pointerdown')); pitch.dispatchEvent(new win.Event('pointercancel')); assert.equal(hint.hidden, true);
+		pitch.dispatchEvent(new win.Event('input')); pitch.dispatchEvent(new win.Event('keyup')); assert.equal(hint.hidden, true);
+	} finally { cleanup(); await win.happyDOM.abort(); }
 });
 
 test('only device zh-family choices are shown; a saved non-Chinese choice survives rate changes', async () => {
@@ -71,8 +115,8 @@ test('only device zh-family choices are shown; a saved non-Chinese choice surviv
 		assert.deepEqual([...root.querySelector('select')!.options].map(option => option.value), ['', 'zh-CN', 'zh-TW', 'zh-HK', 'zh_HK', 'ZH']);
 		assert.match(root.textContent, /其他语言音色继续保留/);
 		const rate = root.querySelector('input')!; rate.value = '1.2'; rate.dispatchEvent(new win.Event('change')); await settle();
-		assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: 'en', rate: 1.2 });
-		assert.equal(root.querySelector('.gvkit-quick-settings-controls')!.children.length, 2);
+		assert.deepEqual(store.getReadAloudPreferences(), { voiceURI: 'en', rate: 1.2, pitch: 1 });
+		assert.equal(root.querySelector('.gvkit-quick-settings-controls')!.children.length, 3);
 	} finally { cleanup(); await win.happyDOM.abort(); }
 });
 

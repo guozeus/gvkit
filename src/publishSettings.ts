@@ -28,7 +28,7 @@ export interface PublishDataStore {
 	saveData(data: Record<string, unknown>): Promise<void>;
 }
 
-export interface ReadAloudPreferences { voiceURI: string; rate: number }
+export interface ReadAloudPreferences { voiceURI: string; rate: number; pitch: number }
 
 function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value) ?
@@ -80,11 +80,12 @@ export class PublishSettings {
 		return {
 			voiceURI: typeof value.voiceURI === 'string' ? value.voiceURI : '',
 			rate: typeof value.rate === 'number' && Number.isFinite(value.rate) && value.rate >= 0.5 && value.rate <= 2 ? value.rate : 1,
+			pitch: typeof value.pitch === 'number' && Number.isFinite(value.pitch) && value.pitch >= 0 && value.pitch <= 2 ? value.pitch : 1,
 		};
 	}
 
 	setReadAloudPreferences(value: ReadAloudPreferences): Promise<void> {
-		const snapshot = { voiceURI: value.voiceURI, rate: value.rate };
+		const snapshot = { voiceURI: value.voiceURI, rate: value.rate, pitch: value.pitch };
 		return this.updateNonSecret(data => { data.readAloud = snapshot; });
 	}
 

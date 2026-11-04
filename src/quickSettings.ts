@@ -12,29 +12,50 @@ export function renderQuickSettings(root: HTMLElement, synth: SpeechSynthesis | 
 	root.classList.add('gvkit-quick-settings');
 	let choice = store.getReadAloudPreferences();
 	let revision = 0, closed = false;
+	const heading = doc.createElement('div'); heading.className = 'gvkit-quick-speech-heading';
+	heading.textContent = '朗读'; root.append(heading);
 	const controls = doc.createElement('div'); controls.className = 'gvkit-quick-settings-controls'; root.append(controls);
-	const row = (title: string) => {
-		const label = doc.createElement('label');
-		label.className = 'gvkit-quick-setting';
-		const name = doc.createElement('span'); name.textContent = title;
-		label.append(name); controls.append(label); return label;
-	};
+	const voiceWrap = doc.createElement('label'); voiceWrap.className = 'gvkit-quick-voice'; controls.append(voiceWrap);
+	const voiceCaption = doc.createElement('span'); voiceCaption.setAttribute('aria-hidden', 'true'); voiceWrap.append(voiceCaption);
 	const voice = doc.createElement('select');
-	voice.setAttribute('aria-label', '朗读音色'); row('朗读音色').append(voice);
+	voice.setAttribute('aria-label', '朗读音色'); voiceWrap.append(voice);
 	const voiceStatus = doc.createElement('p'); voiceStatus.className = 'setting-item-description'; root.append(voiceStatus);
-	const rate = doc.createElement('input');
-	rate.type = 'range'; rate.min = '0.5'; rate.max = '2'; rate.step = '0.1'; rate.value = String(choice.rate);
-	rate.setAttribute('aria-label', '朗读语速');
-	const rateLabel = doc.createElement('span');
-	row('朗读语速').append(rate, rateLabel);
-	const updateRateLabel = () => { rateLabel.textContent = Number(rate.value).toFixed(1) + '×'; };
-	updateRateLabel();
-	rate.addEventListener('input', updateRateLabel);
+	const slider = (key: 'rate' | 'pitch', name: string, min: string, suffix: string) => {
+		const wrap = doc.createElement('label'); wrap.className = 'gvkit-quick-slider'; controls.append(wrap);
+		const hint = doc.createElement('span'); hint.className = 'gvkit-quick-slider-hint'; hint.hidden = true;
+		const input = doc.createElement('input');
+		input.type = 'range'; input.min = min; input.max = '2'; input.step = '0.1'; input.value = String(choice[key]);
+		input.setAttribute('aria-label', '朗读' + name);
+		const value = doc.createElement('span'); value.className = 'gvkit-quick-slider-value'; value.setAttribute('aria-hidden', 'true');
+		wrap.append(hint, input, value);
+		const update = () => {
+			const text = Number(input.value).toFixed(1) + suffix;
+			value.textContent = text; hint.textContent = name + ' ' + text; input.setAttribute('aria-valuetext', text);
+			// Keep the inline value on the opposite half from the native thumb.
+			const left = Number(input.value) > (Number(input.min) + Number(input.max)) / 2;
+			value.style.insetInlineStart = left ? '8px' : 'auto';
+			value.style.insetInlineEnd = left ? 'auto' : '8px';
+		};
+		const show = () => { hint.hidden = false; value.hidden = true; };
+		const hide = () => { hint.hidden = true; value.hidden = false; };
+		input.addEventListener('pointerdown', show);
+		input.addEventListener('input', () => { update(); show(); });
+		input.addEventListener('pointerup', hide);
+		input.addEventListener('pointercancel', hide);
+		input.addEventListener('keyup', hide);
+		input.addEventListener('blur', hide);
+		input.addEventListener('change', () => { choice[key] = Number(input.value); hide(); save(); });
+		update();
+		return { input, update };
+	};
+	const rate = slider('rate', '语速', '0.5', '×');
+	const pitch = slider('pitch', '音高', '0', '');
 	const status = doc.createElement('p'); status.setAttribute('role', 'status'); root.append(status);
 	const refreshVoices = () => {
 		voice.replaceChildren();
+		const group = doc.createElement('optgroup'); group.label = '朗读音色'; voice.append(group);
 		const add = (value: string, title: string) => {
-			const option = doc.createElement('option'); option.value = value; option.textContent = title; voice.append(option);
+			const option = doc.createElement('option'); option.value = value; option.textContent = title; group.append(option);
 		};
 		add('', '自动（沿用默认朗读）');
 		const available = synth?.getVoices() ?? [];
@@ -43,6 +64,9 @@ export function renderQuickSettings(root: HTMLElement, synth: SpeechSynthesis | 
 		const selected = available.find(item => item.voiceURI === choice.voiceURI);
 		const missing = choice.voiceURI && !selected;
 		voice.value = voices.some(item => item.voiceURI === choice.voiceURI) ? choice.voiceURI : '';
+		const name = voices.find(item => item.voiceURI === voice.value)?.name ?? '自动';
+		voiceCaption.textContent = [...name].slice(0, 2).join('');
+		voice.title = '朗读音色：' + name;
 		voiceStatus.textContent = !synth ? '当前设备未提供朗读能力。' : missing
 			? '已保存的音色当前不可用，暂用自动音色；声库更新后会重新匹配。'
 			: selected && !voices.includes(selected) ? '已保存的其他语言音色继续保留；可改选中文音色。'
@@ -57,12 +81,12 @@ export function renderQuickSettings(root: HTMLElement, synth: SpeechSynthesis | 
 			if (!closed && current === revision) status.textContent = '已保存，下次朗读生效。';
 		}).catch(() => {
 			if (closed || current !== revision) return;
-			choice = store.getReadAloudPreferences(); rate.value = String(choice.rate);
-			updateRateLabel(); refreshVoices(); status.textContent = '未能保存，请重新调整后重试。';
+			choice = store.getReadAloudPreferences();
+			rate.input.value = String(choice.rate); pitch.input.value = String(choice.pitch);
+			rate.update(); pitch.update(); refreshVoices(); status.textContent = '未能保存，请重新调整后重试。';
 		});
 	};
 	voice.addEventListener('change', () => { choice.voiceURI = voice.value; refreshVoices(); save(); });
-	rate.addEventListener('change', () => { choice.rate = Number(rate.value); save(); });
 	synth?.addEventListener('voiceschanged', refreshVoices);
 	refreshVoices();
 	return () => { closed = true; synth?.removeEventListener('voiceschanged', refreshVoices); };
