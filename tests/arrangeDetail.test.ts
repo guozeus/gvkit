@@ -848,17 +848,19 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		navEditor.value = '编辑不中断'; assert.equal(await view.saveEdit(), true);
 		// Pending acceptance uses the existing menu and the same empty blue box in both views.
 		await view.select(null); view.searchOpen = false; view.filter = 'all'; view.searchInput.value = '';
-		const reviewId = await store.create('等待制作人验收', null);
+		const reviewId = await store.create('AI整理资料，等待制作人验收', null);
 		await store.setDate(reviewId, '2026-10-26');
 		await store.configure({ rowActions: ['developmentCompleted'], detailActions: ['developmentCompleted'] });
 		await view.select(reviewId);
 		const reviewBefore = { ...store.items.find((x: any) => x.id === reviewId) };
+		assert.equal(reviewBefore.developmentProject, false, 'AI执行标记适用于普通事项');
 		const reviewFacts = store.facts(), reviewOrder = [...store.state.order];
 		const style = window.document.createElement('style'); style.textContent = await readFile('styles.css', 'utf8'); window.document.head.append(style);
-		for (const expected of [true, false, true, false]) {
+		for (const [mobile, expected] of [[true, true], [true, false], [false, true], [false, false]] as const) {
+			(await import(pathToFileURL(join(dir, 'view.mjs')).href)).Platform.isMobileApp = mobile;
 			view.itemMenu(store.items.find((x: any) => x.id === reviewId), new window.MouseEvent('click'));
 			const reviewMenu = window.document.querySelector('.gvkit-arrange-item-menu:last-child')!;
-			const action = [...reviewMenu.querySelectorAll<HTMLButtonElement>('.gvkit-arrange-menu-action')].find(el => el.textContent === (expected ? '已完成开发' : '取消已完成开发'))!;
+			const action = [...reviewMenu.querySelectorAll<HTMLButtonElement>('.gvkit-arrange-menu-action')].find(el => el.textContent === (expected ? 'AI已执行' : '取消AI已执行'))!;
 			assert.equal(action.getAttribute('aria-pressed'), String(!expected)); action.click(); await settle();
 			const current = { ...store.items.find((x: any) => x.id === reviewId) };
 			assert.equal(current.developmentCompleted, expected);
@@ -870,9 +872,21 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 				assert.equal(box.classList.contains('is-development-completed'), expected);
 				if (expected) assert.equal(window.getComputedStyle(box).borderTopColor, '#2563eb');
 			}
-			for (const button of [view.list.querySelector(`[data-id="${reviewId}"] [aria-label="已完成开发"]`), view.detail.querySelector('[aria-label="已完成开发"]')])
+			for (const button of [view.list.querySelector(`[data-id="${reviewId}"] [aria-label="AI已执行"]`), view.detail.querySelector('[aria-label="AI已执行"]')])
 				assert.equal(button.classList.contains('is-active'), expected);
 		}
+		// Both configured quick actions work for non-development tasks on both platforms.
+		for (const mobile of [true, false]) {
+			(await import(pathToFileURL(join(dir, 'view.mjs')).href)).Platform.isMobileApp = mobile;
+			view.paintLists(); view.paintDetailActions();
+			for (const area of [view.list, view.detail]) {
+				area.querySelector(area === view.list ? `[data-id="${reviewId}"] [aria-label="AI已执行"]` : '[aria-label="AI已执行"]').click(); await settle();
+				const marked = area === view.list;
+				assert.equal(store.items.find((x: any) => x.id === reviewId).developmentCompleted, marked);
+				assert.equal(view.detail.querySelector('.gvkit-arrange-detail-title-row input').checked, false);
+			}
+		}
+		(await import(pathToFileURL(join(dir, 'view.mjs')).href)).Platform.isMobileApp = true;
 		// External edits refresh the existing detail editor, and manual acceptance remains normal.
 		await store.toggleDevelopmentCompleted(reviewId); await view.reload();
 		assert.equal(view.detail.querySelector('.is-development-completed').checked, false);

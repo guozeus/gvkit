@@ -10,7 +10,7 @@ const actions: Record<RowAction, { title: string; icon: string }> = {
 	top: { title: '置顶', icon: 'arrow-up-to-line' }, pin: { title: '钉住位置', icon: 'pin' },
 	changeParent: { title: '修改上级', icon: 'list-tree' }, copy: { title: '复制标题', icon: 'copy' },
 	archive: { title: '归档', icon: 'archive' },
-	developmentCompleted: { title: '已完成开发', icon: 'code-xml' },
+	developmentCompleted: { title: 'AI已执行', icon: 'code-xml' },
 	developmentProject: { title: '开发工程', icon: 'folder-code' },
 };
 function iconButton(parent: HTMLElement, label: string, icon: string, action: (event: MouseEvent) => void): HTMLButtonElement {
@@ -867,7 +867,7 @@ export class ArrangeView extends ItemView {
 		};
 		for (const key of ARRANGE_ACTIONS) {
 			const title = key === 'pin' && item.pinned ? '取消钉住'
-				: key === 'developmentCompleted' && item.developmentCompleted ? '取消已完成开发'
+				: key === 'developmentCompleted' && item.developmentCompleted ? '取消AI已执行'
 				: key === 'developmentProject' && item.developmentProject ? '取消开发工程' : actions[key].title;
 			const row = entry(title, actions[key].icon, () => this.action(key, item, event));
 			if (key === 'developmentCompleted' || key === 'developmentProject') {
