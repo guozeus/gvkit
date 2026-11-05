@@ -27,6 +27,7 @@ export interface ArrangeState {
 	tips: string;
 	tipsScrollSpeed: number;
 	tipsInterval: number;
+	tipsProbability: number;
 	tipsTextColor: string;
 	tipsBackgroundColor: string;
 	fullscreenThreshold: number;
@@ -78,7 +79,7 @@ export const ARRANGE_FREE_SIZES = {
 
 export function defaultArrangeState(): ArrangeState {
 	return { order: [], rewardsEnabledAt: null, dailyGoal: null, achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
-		tips: '', tipsScrollSpeed: 45, tipsInterval: 3,
+		tips: '', tipsScrollSpeed: 45, tipsInterval: 3, tipsProbability: 10,
 		tipsTextColor: '#ffd76a', tipsBackgroundColor: '#6b3a91',
 		submitArrowSize: 24, submitColor: 'classic',
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background', rootItemStyle: 'background',

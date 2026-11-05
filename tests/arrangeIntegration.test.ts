@@ -48,7 +48,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(store.state.detailShadow, 24);
 		assert.equal(store.state.bodyPlaceholder, '记录正文、链接、思路…');
 		assert.equal(store.state.dateHintColor, 'vivid', 'existing settings without a color use the new vivid default');
-		assert.equal(store.state.tips, ''); assert.equal(store.state.tipsInterval, 3); assert.equal(store.state.tipsScrollSpeed, 45);
+		assert.equal(store.state.tipsProbability, 10); assert.equal(store.state.tips, ''); assert.equal(store.state.tipsInterval, 3); assert.equal(store.state.tipsScrollSpeed, 45);
 		assert.equal(store.state.tipsTextColor, '#ffd76a'); assert.equal(store.state.tipsBackgroundColor, '#6b3a91');
 		await store.configure({ tips: '先做重要的事\n记得休息', tipsInterval: 4.5, tipsScrollSpeed: 38,
 			tipsTextColor: '#ffe099', tipsBackgroundColor: '#552288' });
@@ -57,6 +57,11 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.equal(tipsReload.state.tipsInterval, 4.5); assert.equal(tipsReload.state.tipsScrollSpeed, 38);
 		assert.equal(tipsReload.state.tipsTextColor, '#ffe099'); assert.equal(tipsReload.state.tipsBackgroundColor, '#552288');
 		assert.equal(tipsReload.state.dateHintColor, 'vivid');
+		for (const probability of [0, 10, 100]) {
+			await store.configure({ tipsProbability: probability });
+			const reloaded = new ArrangeStore(app); await reloaded.load();
+			assert.equal(reloaded.state.tipsProbability, probability);
+		}
 		const parent = await store.create('父事项', null);
 		const child1 = await store.create('第一项', parent);
 		const child2 = await store.create('第二项', parent);

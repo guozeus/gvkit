@@ -14,6 +14,8 @@ export class ArrangeTips {
 	private closed = false;
 	private speed = 45;
 	private interval = 3;
+	private probability = 10;
+	private events = new WeakSet<Event>();
 	constructor(parent: HTMLElement) {
 		const doc = parent.ownerDocument;
 		this.el = doc.createElement('div'); this.el.className = 'gvkit-arrange-tips'; parent.append(this.el);
@@ -31,6 +33,7 @@ export class ArrangeTips {
 	}
 	update(state: ArrangeState): void {
 		this.speed = state.tipsScrollSpeed; this.interval = state.tipsInterval;
+		this.probability = state.tipsProbability;
 		this.el.style.setProperty('--gvkit-tips-text', state.tipsTextColor);
 		this.el.style.setProperty('--gvkit-tips-background', state.tipsBackgroundColor);
 		const lines = state.tips.split('\n').map(line => line.trim()).filter(Boolean);
@@ -52,10 +55,38 @@ export class ArrangeTips {
 	}
 	start(): void {
 		if (this.closed || this.playing || !this.lines.length || !this.viewport.clientWidth) return;
+		if (this.probability <= 0 || (this.probability < 100 && Math.random() >= this.probability / 100)) return;
 		this.playing = true;
 		const mode = Math.random() < .5 ? 'horizontal' : 'vertical';
 		this.el.dataset.playing = mode;
 		void this.play([...this.lines], mode, this.speed, this.interval);
+	}
+	/** One operation: click OR editable input OR discrete control change, never all three. */
+	interaction(event: Event): void {
+		if (this.events.has(event)) return;
+		this.events.add(event);
+		const target = event.target as HTMLElement | null;
+		if (!target || this.el.contains(target)) return; // Manual expansion always works independently.
+		const control = target.closest('input, textarea, select, [contenteditable="true"]') as HTMLInputElement | null;
+		const discrete = control && (control.tagName === 'SELECT' || ['checkbox', 'radio', 'color', 'range', 'date', 'month', 'time'].includes(control.type));
+		if (event.type === 'click') {
+			if (control || target.closest('.gvkit-arrange-divider, .gvkit-arrange-panel-grip') || (target.closest('label') as HTMLLabelElement | null)?.control) return;
+			// Wait until dispatch ends: native events may run microtasks between listeners.
+			// This checks this event's cancellation only; it never groups separate operations.
+			this.el.ownerDocument.defaultView!.setTimeout(() => { if (!event.defaultPrevented) this.start(); }, 0);
+		} else if (event.type === 'input') {
+			if (!discrete) this.start();
+		} else if (event.type === 'change') {
+			if (discrete) this.start();
+		} else if (event.type === 'contextmenu') {
+			this.el.ownerDocument.defaultView!.setTimeout(() => { if (!event.defaultPrevented) this.start(); }, 0);
+		}
+		else if (event.type === 'keydown') {
+			const key = (event as KeyboardEvent).key;
+			if ((event as KeyboardEvent).repeat) return;
+			if (key === 'Enter' && (target.closest('button, a, textarea, select, [contenteditable="true"]') || discrete)) return;
+			if (['Escape', 'Enter', 'Tab'].includes(key)) this.start();
+		}
 	}
 	private async animate(frames: Keyframe[], duration: number): Promise<void> {
 		const animation = this.text.animate(frames, { duration, fill: 'forwards', easing: 'linear' });
@@ -107,6 +138,16 @@ export function renderArrangeTipsSettings(root: HTMLElement, store: ArrangeStore
 			.catch(() => { if (current === revision) status.textContent = '保存失败，内容已保留，请修改后重试。'; });
 	};
 	content.addEventListener('change', () => save({ tips: content.value }));
+	const probabilityLabel = doc.createElement('label'); probabilityLabel.textContent = '自动播报概率（%）';
+	const probability = doc.createElement('input'); probability.type = 'number'; probability.min = '0'; probability.max = '100'; probability.step = 'any';
+	probability.value = String(store.state.tipsProbability); probability.setAttribute('aria-label', '自动播报概率（%）');
+	probabilityLabel.append(probability); section.append(probabilityLabel);
+	const probabilityHint = doc.createElement('p'); probabilityHint.textContent = '默认10%；0%不自动播报，100%在空闲时每次操作都播报。点击广播仍可展开全部。'; section.append(probabilityHint);
+	probability.addEventListener('change', () => {
+		const value = Number(probability.value);
+		if (!probability.value.trim() || !Number.isFinite(value) || value < 0 || value > 100) { status.textContent = '请输入0到100之间的百分比。'; return; }
+		save({ tipsProbability: value });
+	});
 	for (const [key, title, unit] of [['tipsScrollSpeed', '横向速度', '像素/秒'], ['tipsInterval', '上浮间隔', '秒']] as const) {
 		const label = doc.createElement('label'); label.textContent = `${title}（${unit}）`;
 		const input = doc.createElement('input'); input.type = 'number'; input.min = '0.1'; input.step = 'any';

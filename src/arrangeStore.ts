@@ -44,6 +44,8 @@ export class ArrangeStore {
 				if (typeof goal.returnedId === 'string') state.dailyGoal.returnedId = goal.returnedId;
 			}
 			if (typeof fields.tips === 'string') state.tips = fields.tips;
+			if (typeof fields.tipsProbability === 'number' && Number.isFinite(fields.tipsProbability))
+				state.tipsProbability = Math.max(0, Math.min(100, fields.tipsProbability));
 			for (const key of ['tipsTextColor', 'tipsBackgroundColor'] as const) {
 				const value = fields[key];
 				if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) state[key] = value;

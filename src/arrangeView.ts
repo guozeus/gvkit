@@ -297,9 +297,9 @@ export class ArrangeView extends ItemView {
 		this.tips = new ArrangeTips(root);
 		for (const surface of [root, header]) {
 			for (const type of ['click', 'input', 'change', 'contextmenu'] as const)
-				this.registerDomEvent(surface, type, () => this.tips.start(), true);
+				this.registerDomEvent(surface, type, event => this.tips.interaction(event), true);
 		}
-		this.registerDomEvent(root, 'keydown', event => { if (['Escape', 'Enter', 'Tab'].includes(event.key)) this.tips.start(); }, true);
+		this.registerDomEvent(root, 'keydown', event => this.tips.interaction(event), true);
 		this.parentBar = root.createDiv('gvkit-arrange-parent-picker');
 		this.parentBar.hidden = true;
 		this.parentBar.createSpan({ text: '选择上一级事项' });
@@ -921,8 +921,10 @@ export class ArrangeView extends ItemView {
 				this.trace('drag.release', { dragging, moves, target: Boolean(targetId), topDrop, swipe });
 				cleanup();
 				if (dragging && (topDrop || targetId)) void this.run(() => this.store.move(item.id, topDrop ? undefined : targetId, after));
-				else if (swipe && key !== 'none' && !this.busy) this.action(key, item,
-					new win.MouseEvent('click', { clientX: lastX, clientY: lastY, view: win }));
+				else if (swipe && key !== 'none' && !this.busy) {
+					this.tips.start();
+					this.action(key, item, new win.MouseEvent('click', { clientX: lastX, clientY: lastY, view: win }));
+				}
 			};
 			const extraTouch = (e: TouchEvent) => { if (e.touches.length !== 1) cancel(); };
 			const touchMove = (e: TouchEvent) => { const p = e.touches[0]; if (p && e.touches.length === 1) move(p.clientX, p.clientY, e); else cancel(); };
@@ -957,9 +959,11 @@ export class ArrangeView extends ItemView {
 			this.cancelResize?.(); this.cancelReorder?.();
 			divider.setPointerCapture(event.pointerId);
 			divider.addClass('is-resizing');
+			let moved = false;
 			const move = (e: PointerEvent) => {
 				if (e.pointerId !== event.pointerId) return;
-				this.tips.start();
+				if (!moved) this.tips.start();
+				moved = true;
 				const bounds = this.area.getBoundingClientRect();
 				const minimum = Math.min(240, bounds.width * .3);
 				const width = Math.max(minimum, Math.min(bounds.width - minimum, bounds.right - e.clientX));
@@ -1025,8 +1029,9 @@ export class ArrangeView extends ItemView {
 	}
 	private itemMenu(item: ArrangeItem, event: MouseEvent): void {
 		const modal = new Modal(this.app);
-		modal.contentEl.addEventListener('click', () => this.tips.start(), true);
-		modal.contentEl.addEventListener('input', () => this.tips.start(), true);
+		modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
+		modal.contentEl.addEventListener('input', event => this.tips.interaction(event), true);
+		modal.contentEl.addEventListener('change', event => this.tips.interaction(event), true);
 		modal.setTitle('事项操作');
 		modal.contentEl.addClass('gvkit-arrange-item-menu');
 		const headings = modal.contentEl.createDiv('gvkit-arrange-menu-headings');
@@ -1098,8 +1103,9 @@ export class ArrangeView extends ItemView {
 		};
 		const calendar = () => {
 			const modal = new Modal(this.app);
-			modal.contentEl.addEventListener('click', () => this.tips.start(), true);
-			modal.contentEl.addEventListener('input', () => this.tips.start(), true);
+			modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
+			modal.contentEl.addEventListener('input', event => this.tips.interaction(event), true);
+			modal.contentEl.addEventListener('change', event => this.tips.interaction(event), true);
 			modal.setTitle('选择日期');
 			let selectedDate = current ?? day;
 			{
@@ -1355,8 +1361,8 @@ export class ArrangeView extends ItemView {
 			this.detail.style.maxHeight = '100%';
 			const move = (e: PointerEvent) => {
 				if (e.pointerId !== event.pointerId) return;
+				if (!moved) this.tips.start();
 				moved = true;
-				this.tips.start();
 				height = Math.min(available, Math.max(0, startHeight + startY - e.clientY));
 				this.detail.style.height = `${height}px`;
 			};
@@ -1526,8 +1532,9 @@ export class ArrangeView extends ItemView {
 	}
 	private settings(): void {
 		const modal = new Modal(this.app);
-		modal.contentEl.addEventListener('click', () => this.tips.start(), true);
-		modal.contentEl.addEventListener('input', () => this.tips.start(), true); modal.setTitle('安排界面设置');
+		modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
+		modal.contentEl.addEventListener('input', event => this.tips.interaction(event), true);
+		modal.contentEl.addEventListener('change', event => this.tips.interaction(event), true); modal.setTitle('安排界面设置');
 		modal.contentEl.createEl('p', { text: '设置自动保存在 settings/gvkit/arrange.md，随同一 Vault 的文件同步到其他设备。请确保同步包含 settings 目录。完成时播放轻音；触觉反馈取决于设备支持与系统设置，不支持震动的平台仅播放音效。' });
 		modal.contentEl.dataset.ignoreSwipe = 'true';
 		let rowActions = [...this.store.state.rowActions];
