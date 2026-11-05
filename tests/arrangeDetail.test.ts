@@ -163,7 +163,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.reload();
 		const stableOrder = [...store.state.order], stableFacts = store.facts();
 		const stableRelations = store.items.map((item: any) => [item.id, item.parent, item.completedAt]);
-		const visible = () => [...view.list.querySelectorAll('.gvkit-arrange-row')].map((row: any) => row.dataset.id);
+		const visible = () => [...view.list.querySelectorAll('.gvkit-arrange-row[data-id]')].map((row: any) => row.dataset.id);
 		const chooseHierarchy = (label: string) => {
 			view.hierarchyButton.click();
 			window.menus.at(-1).entries.find((entry: any) => entry.title.replace('✓ ', '') === label).click();
@@ -371,7 +371,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		// P0: use the real view and disk-backed Store for today's mixed list.
 		await view.select(null);
 		const settle = async () => { while (view.busy || view.savingEdit) await new Promise(resolve => setTimeout(resolve, 1)); };
-		const rowIds = () => [...view.list.querySelectorAll('.gvkit-arrange-row')].map((el: any) => el.dataset.id);
+		const rowIds = () => [...view.list.querySelectorAll('.gvkit-arrange-row[data-id]')].map((el: any) => el.dataset.id);
 		const today = view.today;
 		const A = await store.create('今天必做 A', null), B = await store.create('今天必做 B', null);
 		const C = await store.create('无日期完成 C', null), D = await store.create('明天安排完成 D', null);
@@ -523,7 +523,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			await vault.process(files.get(child.path), source => source.replace(child.completedAt, today + 'T' + time + ':00+08:00'));
 		}
 		await view.reload(); await view.select(family);
-		const childIds = () => [...view.children.querySelectorAll('.gvkit-arrange-row')].map((el: any) => el.dataset.id);
+		const childIds = () => [...view.children.querySelectorAll('.gvkit-arrange-row[data-id]')].map((el: any) => el.dataset.id);
 		assert.deepEqual(childIds(), [children[1], children[0], children[3], children[2]]);
 		assert.ok(!childIds().includes(descendant));
 		title = view.editing.title; title.value = '未保存详情草稿';
@@ -543,7 +543,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const original = [...store.state.order];
 		const pinned = new Set(store.items.filter((x: any) => x.pinned && !x.completedAt).map((x: any) => x.id));
 		view.list.getBoundingClientRect = () => ({ top: 90, bottom: 600 } as any);
-		for (const [index, row] of [...view.list.querySelectorAll('.gvkit-arrange-row')].entries()) (row as any).getBoundingClientRect = () => ({ top: 90 + index * 44, height: 44 } as any);
+		for (const [index, row] of [...view.list.querySelectorAll('.gvkit-arrange-row[data-id]')].entries()) (row as any).getBoundingClientRect = () => ({ top: 90 + index * 44, height: 44 } as any);
 		label = view.list.querySelector('[data-id="' + moving + '"] .gvkit-arrange-title');
 		window.document.elementFromPoint = () => null;
 		pointer(label, 'pointerdown', 100, 400); await waitHold();
@@ -759,7 +759,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await fresh.load(); assert.equal(fresh.items.find((x: any) => x.id === family).body, '拖动关闭前编辑');
 		// A horizontal swipe must never override the configured list shortcut set.
 		view.setFilter('all'); await store.configure({ rowActions: ['top'] }); view.applyComposerSettings(); view.paintLists();
-		const icons = () => [...view.list.querySelectorAll('.gvkit-arrange-row')].map((row: any) => [...row.querySelectorAll('.gvkit-arrange-icon')].map((button: any) => button.getAttribute('aria-label')));
+		const icons = () => [...view.list.querySelectorAll('.gvkit-arrange-row[data-id]')].map((row: any) => [...row.querySelectorAll('.gvkit-arrange-icon')].map((button: any) => button.getAttribute('aria-label')));
 		const configuredIcons = icons();
 		label = view.list.querySelector('.gvkit-arrange-title');
 		pointer(label, 'pointerdown', 150, 30); pointer(window.document, 'pointermove', 70, 30); pointer(window.document, 'pointerup', 70, 30);
@@ -1058,6 +1058,83 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await store.configure({ keyboardGap: 12 });
 		otherDeviceBytes = await vault.read(stateFile); await otherDevice.load();
 		assert.deepEqual(otherDevice.state, store.state, 'the existing file works in the return direction too');
+		// Daily target reuses the real task, picker and normal complete/undo path.
+		await view.select(null); view.searchOpen = false; view.filter = 'all'; view.hierarchyFilter = 'all';
+		view.feedback = { prepare: () => {}, play: () => {}, close: () => {} };
+		await store.configure({ rowActions: ['parent', 'date', 'top'] });
+		const dailyTarget = await store.create('每日目标测试', null);
+		const replacement = await store.create('更换目标测试', dailyTarget);
+		await view.reload();
+		assert.equal(view.list.firstElementChild.textContent, '选择今天特产产出基础目标');
+		const beforeChoice = await vault.read(stateFile), achievedBeforeGoal = store.facts().achieved;
+		view.list.querySelector('.gvkit-arrange-goal-empty').click(); await settle();
+		assert.equal(view.parentBar.querySelector('span').textContent, '请选择今天特产基础产出事项');
+		assert.ok(view.parentBar.classList.contains('gvkit-arrange-goal-picker'));
+		assert.equal(view.parentBar.querySelector('button').hidden, true);
+		view.parentBar.querySelectorAll('button')[1].click();
+		assert.equal(await vault.read(stateFile), beforeChoice, 'cancel writes nothing');
+		await view.changeParent(null); await view.chooseParent(replacement);
+		assert.equal(store.state.dailyGoal.id, replacement);
+		assert.equal(view.list.firstElementChild.dataset.id, replacement);
+		assert.equal(view.list.querySelectorAll(`[data-id="${replacement}"]`).length, 1);
+		assert.equal(store.items.find((x: any) => x.id === replacement).parent, dailyTarget);
+		assert.equal(store.items.find((x: any) => x.id === replacement).date, store.facts().day);
+		assert.equal(store.facts().achieved, achievedBeforeGoal, 'daily target choice is not basic input confirmation');
+		const goalOrder = [...store.state.order], countBefore = store.facts().x;
+		await view.changeParent(null); view.finishParentChoice();
+		assert.equal(store.state.dailyGoal.id, replacement, 'cancel replacement keeps current target');
+		await view.select(replacement);
+		assert.equal(view.editing.id, replacement, 'normal details open the same item');
+		view.list.firstElementChild.querySelector('input').click(); await settle();
+		assert.equal(view.list.firstElementChild.querySelector('.gvkit-arrange-title').textContent, '已达成今天特产产出基础目标！很棒！');
+		assert.equal(store.facts().x, countBefore + 1);
+		view.list.firstElementChild.querySelector('input').click(); await settle();
+		assert.equal(view.list.firstElementChild.querySelector('.gvkit-arrange-title').textContent, '更换目标测试');
+		assert.equal(store.facts().x, countBefore);
+		assert.equal(new Set(store.state.order).size, store.state.order.length);
+		await view.changeParent(null); await view.chooseParent(dailyTarget);
+		assert.equal(view.list.firstElementChild.dataset.id, dailyTarget);
+		assert.equal(view.list.querySelectorAll(`[data-id="${replacement}"]`).length, 1);
+		assert.equal(store.items.find((x: any) => x.id === replacement).parent, dailyTarget);
+		await assert.rejects(store.complete(dailyTarget, true), /下级/);
+		// Parent picker retains its original self/cycle rules after target picking.
+		await view.changeParent(dailyTarget);
+		assert.equal(view.parentBar.querySelector('span').textContent, '选择上一级事项');
+		assert.equal(view.parentBar.querySelector('button').hidden, false);
+		assert.equal(view.list.querySelector(`[data-id="${dailyTarget}"] button`).getAttribute('aria-disabled'), 'true');
+		view.finishParentChoice();
+		assert.equal(goalOrder.length, store.state.order.length);
+		// An unfinished goal under a folded project must return visibly at the
+		// front, without unfolding the project or exposing its other children.
+		await store.toggleDevelopmentProject(dailyTarget);
+		const foldedSibling = await store.create('仍应折叠的其它下级', dailyTarget);
+		await store.setDailyGoal(replacement);
+		await store.configure({ dailyGoal: { day: '2000-01-01', id: replacement } });
+		await view.reload();
+		assert.equal(store.state.dailyGoal.id, null);
+		assert.equal(store.state.order[0], replacement);
+		assert.equal(view.list.querySelector('.gvkit-arrange-row[data-id]').dataset.id, replacement);
+		assert.equal(view.list.querySelector(`[data-id="${foldedSibling}"]`), null);
+		assert.ok(store.items.find((x: any) => x.id === dailyTarget).developmentProject);
+		const secondStore = new ArrangeStore(app); await secondStore.load();
+		assert.equal(secondStore.state.dailyGoal.returnedId, replacement, 'return visibility travels in the original state file');
+		await store.setDailyGoal(replacement); await store.complete(replacement, true); await view.reload();
+		const achievedCount = store.facts().x;
+		await store.archive(replacement); await view.reload();
+		assert.ok(!store.items.some((x: any) => x.id === replacement), 'archive still removes the active task');
+		assert.equal(view.list.firstElementChild.querySelector('.gvkit-arrange-goal-achieved').textContent, '已达成今天特产产出基础目标！很棒！');
+		assert.equal(store.facts().x, achievedCount, 'archived target counts once through existing completion facts');
+		await secondStore.load(); assert.equal(secondStore.archivedDailyGoalCompletedAt, store.archivedDailyGoalCompletedAt);
+		const archivedGoalFile = vault.getMarkdownFiles().find((f: any) => f.path.startsWith('安排/历史/') && f.basename === replacement);
+		await vault.process(archivedGoalFile, (source: string) => {
+			const end = source.indexOf('\n---', 4), fields = JSON.parse(source.slice(4, end));
+			fields.completed_at = null; return '---\n' + JSON.stringify(fields) + source.slice(end);
+		});
+		await view.reload();
+		assert.equal(view.list.firstElementChild.querySelector('.gvkit-arrange-goal-achieved'), null, 'an externally corrected completion is not a cached achievement');
+		assert.equal(store.facts().x, achievedCount - 1);
+
+
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

@@ -19,6 +19,7 @@ export const PIN_COLORS = { gold: '#bb8c18', purple: '#9860d6', blue: '#3084df' 
 export const COMPLETION_SOUNDS = { chime: '轻扬（原音效）', bell: '清铃', bright: '悦音' } as const;
 export interface ArrangeState {
 	order: string[];
+	dailyGoal: { day: string; id: string | null; returnedId?: string } | null;
 	achievedDays: string[];
 	timezone: string;
 	tips: string;
@@ -74,7 +75,7 @@ export const ARRANGE_FREE_SIZES = {
 } as const;
 
 export function defaultArrangeState(): ArrangeState {
-	return { order: [], achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
+	return { order: [], dailyGoal: null, achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		tips: '', tipsScrollSpeed: 45, tipsInterval: 3,
 		tipsTextColor: '#ffd76a', tipsBackgroundColor: '#6b3a91',
 		submitArrowSize: 24, submitColor: 'classic',

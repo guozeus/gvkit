@@ -16,7 +16,7 @@ export const parseYaml = JSON.parse;
 export const stringifyYaml = value => JSON.stringify(value, null, 2)+'\\n';
 `;
 
-test('disk Markdown create, sibling context, edit, reload, pin, complete/undo preserve children and other notes', async () => {
+test('disk Markdown create, sibling context, edit, reload, pin, complete/undo preserve children and other notes', async t => {
 	const root = await mkdtemp(join(tmpdir(), 'gvkit-arrange-test-'));
 	try {
 		// Export the same shim class identities as used by the bundled module.
@@ -314,5 +314,64 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.ok(reads.every(path => !path.startsWith('安排/历史/1999/') && path !== stable.path), 'old history bodies are not part of daily active load');
 		assert.ok(reads.includes(completedFile.path), 'today-modified history reads real completion facts while its metadata can lag');
 		assert.ok(fresh.items.every((x: any) => !x.path.startsWith('安排/历史/')));
+		// Same Markdown/GVID state across midnight, closed/reopened views and devices.
+		t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-05T15:59:59Z') });
+		await store.load();
+		await store.configure({ timezone: 'Asia/Shanghai' });
+		const daily = await store.create('跨午夜目标', null);
+		const peer = await store.create('同级钉住保护', null);
+		await store.togglePin(peer);
+		const dailyPath = store.items.find((x: any) => x.id === daily).path;
+		const orderBefore = [...store.state.order], achievedBefore = [...store.state.achievedDays];
+		const fileCount = vault.getMarkdownFiles().length;
+		await store.setDailyGoal(daily);
+		assert.deepEqual(store.state.dailyGoal, { day: '2026-11-05', id: daily });
+		assert.deepEqual(store.state.order, orderBefore, 'selecting target does not rewrite the one global order');
+		assert.deepEqual(store.state.achievedDays, achievedBefore);
+		assert.equal(store.items.find((x: any) => x.id === daily).path, dailyPath);
+		assert.equal(store.items.find((x: any) => x.id === daily).date, '2026-11-05');
+		assert.equal(vault.getMarkdownFiles().length, fileCount, 'selection creates no copied note');
+		const device = new ArrangeStore(app); await device.load();
+		assert.deepEqual(device.state.dailyGoal, store.state.dailyGoal);
+		assert.equal(device.items.find((x: any) => x.id === daily).date, '2026-11-05');
+		t.mock.timers.tick(2000);
+		await device.load();
+		assert.equal(device.state.dailyGoal.id, null);
+		assert.equal(device.state.dailyGoal.returnedId, daily);
+		assert.equal(device.state.order[0], daily, 'explicit daily return precedes even a first pinned item');
+		assert.deepEqual(device.state.order.slice(1), orderBefore.filter(id => id !== daily), 'other items keep their relative order');
+		assert.ok(device.items.find((x: any) => x.id === peer).pinned);
+		const returnedPinSlot = device.state.order.indexOf(peer);
+		await device.create('回归后新增事项', null);
+		assert.equal(device.state.order.indexOf(peer), returnedPinSlot, 'ordinary insertion still protects the current pinned slot');
+		assert.equal(device.items.find((x: any) => x.id === daily).date, '2026-11-05', 'rollover does not silently reschedule unfinished work');
+		assert.equal(new Set(device.state.order).size, device.state.order.length);
+		const rolledBytes = await vault.read(stateFile); await store.load();
+		assert.equal(await vault.read(stateFile), rolledBytes, 'a second device does not apply rollover twice');
+		await store.setDailyGoal(daily); await store.complete(daily, true);
+		assert.equal(store.facts().x, 1);
+		await store.complete(daily, false); assert.equal(store.facts().x, 0);
+		assert.equal(store.state.dailyGoal.id, daily);
+		await store.complete(daily, true);
+		t.mock.timers.tick(86400000);
+		const reopened = new ArrangeStore(app); await reopened.load();
+		assert.equal(reopened.state.dailyGoal, null);
+		assert.ok(!reopened.state.order.includes(daily), 'yesterday completed target stays completed');
+		assert.ok(reopened.items.find((x: any) => x.id === daily).completedAt);
+		assert.deepEqual(reopened.state.achievedDays, achievedBefore);
+		const lastPinned = await reopened.create('全钉住时的目标', null);
+		await reopened.move(lastPinned, reopened.state.order.at(-1), true);
+		for (const item of [...reopened.items]) if (!item.completedAt && !item.pinned) await reopened.togglePin(item.id);
+		await reopened.setDailyGoal(lastPinned);
+		const allPinnedOrder = [...reopened.state.order];
+		t.mock.timers.tick(86400000); await reopened.load();
+		assert.equal(reopened.state.order[0], lastPinned);
+		assert.deepEqual(reopened.state.order.slice(1), allPinnedOrder.filter(id => id !== lastPinned));
+		assert.ok(reopened.items.filter((x: any) => !x.completedAt).every((x: any) => x.pinned));
+		const afterPinnedReturn = [...reopened.state.order];
+		const afterReturnNew = await reopened.create('全钉住后新增仍在末尾', null);
+		assert.deepEqual(reopened.state.order, [...afterPinnedReturn, afterReturnNew]);
+		t.mock.timers.reset();
+
 	} finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -93,7 +93,7 @@ export class ArrangeView extends ItemView {
 	private moreButton!: HTMLButtonElement;
 	private parentBar!: HTMLElement;
 	private parentError!: HTMLElement;
-	private choosingParent: { id: string; scroll: number; detailScroll: number; searchOpen: boolean; query: string; searchScroll: number } | null = null;
+	private choosingParent: { id: string | null; scroll: number; detailScroll: number; searchOpen: boolean; query: string; searchScroll: number } | null = null;
 	private scrolls = new Map<string, number>();
 	private list!: HTMLElement;
 	private detail!: HTMLElement;
@@ -282,7 +282,10 @@ export class ArrangeView extends ItemView {
 		if (this.app.metadataCache) this.registerEvent(this.app.metadataCache.on('changed', file => {
 			if (file.path.startsWith('安排/历史/')) refresh();
 		}));
-		this.registerInterval(window.setInterval(() => this.paintLists(), 60_000));
+		this.registerInterval(window.setInterval(() => {
+			if (this.today !== dayKey(new Date(), this.store.state.timezone)) { if (!this.busy) void this.reload(); }
+			else this.paintLists();
+		}, 60_000));
 		this.registerDomEvent(root.ownerDocument, 'visibilitychange', () => { if (root.ownerDocument.hidden) void this.saveEdit(); else void this.reload(); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
@@ -501,6 +504,10 @@ export class ArrangeView extends ItemView {
 		if (!this.headline || this.closed) return;
 		this.cancelReorder?.();
 		const facts = this.store.facts();
+		if (this.store.state.dailyGoal && this.store.state.dailyGoal.day < facts.day) {
+			if (!this.busy) void this.reload();
+			return;
+		}
 		this.today = facts.day;
 		this.headline.empty();
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
@@ -520,6 +527,25 @@ export class ArrangeView extends ItemView {
 		this.contentEl.dataset.rootItemStyle = this.store.state.rootItemStyle;
 		const scroll = this.list.scrollTop;
 		this.list.empty();
+		const goal = this.store.state.dailyGoal?.day === facts.day
+			? this.store.items.find(item => item.id === this.store.state.dailyGoal!.id) : undefined;
+		if (!this.choosingParent) {
+			if (goal) this.row(this.list, goal, true);
+			else {
+				const slot = this.list.createDiv('gvkit-arrange-row gvkit-arrange-daily-goal');
+				if (this.store.archivedDailyGoalCompletedAt && dayKey(new Date(this.store.archivedDailyGoalCompletedAt), this.store.state.timezone) === facts.day) {
+					// Archiving leaves the original completion fact intact; this is
+					// a status, not a copied or reactivated task.
+					slot.addClass('is-completed', 'gvkit-arrange-goal-done');
+					slot.createSpan({ cls: 'gvkit-arrange-title gvkit-arrange-goal-achieved', text: '已达成今天特产产出基础目标！很棒！', attr: { role: 'status' } });
+					const replace = slot.createEl('button', { cls: 'gvkit-arrange-goal-replace', text: '更换' });
+					replace.onclick = () => { void this.changeParent(null); };
+				} else {
+					const choose = slot.createEl('button', { cls: 'gvkit-arrange-title gvkit-arrange-goal-empty', text: '选择今天特产产出基础目标' });
+					choose.onclick = () => { void this.changeParent(null); };
+				}
+			}
+		}
 		if (this.filter === 'overdue' && !this.searchOpen && !this.choosingParent) {
 			const bar = this.list.createDiv('gvkit-arrange-scope');
 			bar.createSpan({ text: '逾期事项' });
@@ -527,7 +553,8 @@ export class ArrangeView extends ItemView {
 		}
 		let items = this.ordered();
 		if (this.choosingParent) {
-			items = [...items, ...this.store.items.filter(item => item.completedAt)];
+			items = [...items, ...this.store.items.filter(item => item.completedAt
+				&& (this.choosingParent!.id !== null || dayKey(new Date(item.completedAt), this.store.state.timezone) === facts.day))];
 		} else if (!this.searchOpen) {
 			if (this.filter === 'today') items = [
 				...items.filter(item => item.date && item.date <= facts.day),
@@ -557,6 +584,9 @@ export class ArrangeView extends ItemView {
 			if (!this.searchOpen && this.filter === 'all') {
 				const byId = new Map(this.store.items.map(item => [item.id, item]));
 				items = items.filter(item => {
+					// Yesterday's target must visibly return even when its project
+					// normally folds descendants. No parent classification changes.
+					if (this.store.state.dailyGoal?.returnedId === item.id) return true;
 					const seen = new Set([item.id]);
 					let parent = item.parent;
 					while (parent && !seen.has(parent)) {
@@ -569,6 +599,7 @@ export class ArrangeView extends ItemView {
 				});
 			}
 		}
+		if (!this.choosingParent && goal) items = items.filter(item => item.id !== goal.id);
 		for (const item of items) this.row(this.list, item);
 		if (!items.length) this.list.createDiv({ cls: 'gvkit-arrange-empty', text: this.searchOpen || this.choosingParent ? '没有符合条件的事项' : this.filter === 'all' ? '想到什么，就从下面记下来。' : '这里已经清空。' });
 		this.list.scrollTop = scroll;
@@ -642,8 +673,9 @@ export class ArrangeView extends ItemView {
 		}
 		iconButton(period, '下一期', 'chevron-right', () => { filter.day = shiftPeriod(filter.day, filter.grain, 1); update(); });
 	}
-	private row(parent: HTMLElement, item: ArrangeItem): void {
+	private row(parent: HTMLElement, item: ArrangeItem, dailyGoal = false): void {
 		const row = parent.createDiv('gvkit-arrange-row');
+		row.toggleClass('gvkit-arrange-daily-goal', dailyGoal);
 		row.dataset.id = item.id;
 		row.toggleClass('is-selected', item.id === this.selected);
 		row.toggleClass('is-pinned', item.pinned);
@@ -651,7 +683,7 @@ export class ArrangeView extends ItemView {
 		row.toggleClass('is-development-project', Boolean(item.developmentProject));
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
-			const invalid = !validParent(this.store.items, this.choosingParent.id, item.id);
+			const invalid = this.choosingParent.id !== null && !validParent(this.store.items, this.choosingParent.id, item.id);
 			row.toggleClass('is-invalid-parent', invalid);
 			const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { 'aria-disabled': String(invalid) } });
 			this.paintTitle(label, item.title, true);
@@ -667,6 +699,11 @@ export class ArrangeView extends ItemView {
 		};
 		const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { title: item.title } });
 		this.paintTitle(label, item.title, parent === this.list);
+		if (dailyGoal && item.completedAt && dayKey(new Date(item.completedAt), this.store.state.timezone) === this.today) {
+			label.textContent = '已达成今天特产产出基础目标！很棒！';
+			label.addClass('gvkit-arrange-goal-achieved');
+			row.addClass('gvkit-arrange-goal-done');
+		}
 		label.onclick = () => { void this.select(this.selected === item.id ? null : item.id); };
 		if (this.store.items.some(child => child.parent === item.id)) {
 			const indicator = row.createSpan({ cls: 'gvkit-arrange-has-children', attr: { title: '有直接下级事项', 'aria-label': '有直接下级事项' } });
@@ -692,6 +729,10 @@ export class ArrangeView extends ItemView {
 			if (key === 'developmentCompleted') button.toggleClass('is-active', Boolean(item.developmentCompleted));
 			if (key === 'developmentProject') button.toggleClass('is-active', Boolean(item.developmentProject));
 		}
+		if (dailyGoal) {
+			const replace = row.createEl('button', { cls: 'gvkit-arrange-goal-replace', text: '更换' });
+			replace.onclick = () => { void this.changeParent(null); };
+		}
 		this.rowGesture(row, label, item);
 	}
 	private rowGesture(row: HTMLElement, label: HTMLElement, item: ArrangeItem): void {
@@ -712,7 +753,7 @@ export class ArrangeView extends ItemView {
 			let axis: 'left' | 'other' | null = null;
 			let lastX = x, lastY = y;
 			const beginDrag = () => {
-				if (this.busy || item.pinned || item.completedAt) return;
+				if (this.busy || item.pinned || item.completedAt || row.classList.contains('gvkit-arrange-daily-goal')) return;
 				dragging = true; row.addClass('is-dragging'); this.tips.start();
 				this.trace('drag.begin');
 				suppressClickUntil = Infinity;
@@ -750,13 +791,13 @@ export class ArrangeView extends ItemView {
 				row.style.transform = `translateY(${clientY - y}px)`;
 				target?.removeClass('is-drop-target');
 				const container = row.parentElement!;
-				const first = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed)');
+				const first = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed):not(.gvkit-arrange-daily-goal)');
 				const scroller = row.closest<HTMLElement>('.gvkit-arrange-detail-scroll') ?? this.list;
 				const bounds = scroller.getBoundingClientRect();
 				// Above the list remains a real global-top destination, even outside the pane.
 				topDrop = Boolean(first && clientY <= Math.max(bounds.top, first === row ? container.getBoundingClientRect().top : first.getBoundingClientRect().top));
 				if (topDrop) {
-					target = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed):not(.is-pinned):not(.is-dragging)');
+					target = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed):not(.is-pinned):not(.is-dragging):not(.gvkit-arrange-daily-goal)');
 					after = false;
 				} else {
 					const hit = doc.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('.gvkit-arrange-row');
@@ -1235,22 +1276,25 @@ export class ArrangeView extends ItemView {
 		}
 		strip.scrollLeft = scroll;
 	}
-	private async changeParent(id: string): Promise<void> {
+	private async changeParent(id: string | null): Promise<void> {
 		if (this.busy || this.choosingParent) return;
 		if (!(await this.saveEdit())) return;
 		const item = this.store.items.find(item => item.id === id);
-		if (!item) return;
+		if (id !== null && !item) return;
 		this.choosingParent = { id, scroll: this.list.scrollTop, detailScroll: this.detailScroll?.scrollTop ?? 0,
 			searchOpen: this.searchOpen, query: this.searchInput.value, searchScroll: this.searchScroll };
 		this.cancelReorder?.();
 		this.searchOpen = false; this.searchInput.value = ''; this.syncSearch();
 		this.parentError.textContent = ''; this.parentError.hidden = true; this.parentBar.hidden = false;
+		this.parentBar.querySelector('span')!.textContent = id === null ? '请选择今天特产基础产出事项' : '选择上一级事项';
+		this.parentBar.querySelector('button')!.hidden = id === null;
+		this.parentBar.toggleClass('gvkit-arrange-goal-picker', id === null);
 		this.detail.hidden = true; this.updateComposer(); this.paintLists(); this.list.scrollTop = 0;
 	}
 	private async chooseParent(parent: string | null): Promise<void> {
 		const choice = this.choosingParent;
 		if (!choice || this.busy) return;
-		if (parent && !validParent(this.store.items, choice.id, parent)) {
+		if (choice.id !== null && parent && !validParent(this.store.items, choice.id, parent)) {
 			new Notice(parent === choice.id ? '不能选择自己作为上级' : '不能选择自己的下级事项作为上级', 2500);
 			return;
 		}
@@ -1258,7 +1302,8 @@ export class ArrangeView extends ItemView {
 		this.parentError.textContent = '';
 		this.parentError.hidden = true;
 		try {
-			await this.store.setParent(choice.id, parent);
+			if (choice.id === null) { if (!parent) return; await this.store.setDailyGoal(parent); }
+			else await this.store.setParent(choice.id, parent);
 			this.busy = false;
 			this.finishParentChoice();
 		} catch (error) {

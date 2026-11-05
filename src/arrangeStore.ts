@@ -20,6 +20,7 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 export class ArrangeStore {
 	items: ArrangeItem[] = [];
 	state = defaultArrangeState();
+	archivedDailyGoalCompletedAt: string | null = null;
 	private archivedCompletions: string[] = [];
 	private queue: Promise<unknown> = Promise.resolve();
 	constructor(private app: App) {}
@@ -34,6 +35,11 @@ export class ArrangeStore {
 			if (!strings(fields.order) || !strings(fields.achievedDays)) throw Error('安排顺序格式不正确');
 			state.order = fields.order;
 			state.achievedDays = fields.achievedDays;
+			const goal = fields.dailyGoal as ArrangeState['dailyGoal'];
+			if (goal && typeof goal.day === 'string' && (typeof goal.id === 'string' || goal.id === null)) {
+				state.dailyGoal = { day: goal.day, id: goal.id };
+				if (typeof goal.returnedId === 'string') state.dailyGoal.returnedId = goal.returnedId;
+			}
 			if (typeof fields.tips === 'string') state.tips = fields.tips;
 			for (const key of ['tipsTextColor', 'tipsBackgroundColor'] as const) {
 				const value = fields[key];
@@ -85,6 +91,7 @@ export class ArrangeStore {
 				state.dateHintColor = fields.dateHintColor as ArrangeState['dateHintColor'];
 		}
 		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
+		let archivedDailyGoalCompletedAt: string | null = null;
 		const today = dayKey(new Date(), state.timezone);
 		const currentMonth = `${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`;
 		for (const file of this.app.vault.getMarkdownFiles()) {
@@ -99,7 +106,10 @@ export class ArrangeStore {
 				}
 				const completed = fields?.completed_at;
 				if (fields?.gvkit_arrange === true && typeof completed === 'string' && Number.isFinite(Date.parse(completed))
-					&& dayKey(new Date(completed), state.timezone) === today) archivedCompletions.push(completed);
+					&& dayKey(new Date(completed), state.timezone) === today) {
+					archivedCompletions.push(completed);
+					if (state.dailyGoal?.day === today && fields.gvid === state.dailyGoal.id) archivedDailyGoalCompletedAt = completed;
+				}
 				continue;
 			}
 			if (!file.path.startsWith(`${TODO}/`) && !file.path.startsWith(`${DONE}/`)) continue;
@@ -121,6 +131,18 @@ export class ArrangeStore {
 		this.items = items;
 		this.state = state;
 		this.archivedCompletions = archivedCompletions;
+		this.archivedDailyGoalCompletedAt = archivedDailyGoalCompletedAt;
+		if (state.dailyGoal && state.dailyGoal.day < today) {
+			const previous = items.find(item => item.id === state.dailyGoal!.id);
+			if (previous && !previous.completedAt) {
+				// This explicit daily return is an insertion at the very front, not
+				// ordinary top. All other items keep their relative order and pins;
+				// subsequent ordinary moves protect their resulting global slots.
+				state.order = [previous.id, ...state.order.filter(id => id !== previous.id)];
+				state.dailyGoal = { day: today, id: null, returnedId: previous.id };
+			} else state.dailyGoal = null;
+			await this.saveState();
+		}
 	}
 	facts() { return todayFacts(this.items, this.state, new Date(), this.archivedCompletions); }
 
@@ -214,6 +236,18 @@ export class ArrangeStore {
 	}
 	setDate(id: string, date: string | null): Promise<void> {
 		return this.serial(async () => { await this.patch(id, { date }); await this.load(); });
+	}
+	setDailyGoal(id: string): Promise<void> {
+		return this.serial(async () => {
+			const item = this.items.find(item => item.id === id);
+			const day = dayKey(new Date(), this.state.timezone);
+			if (!item || (item.completedAt && dayKey(new Date(item.completedAt), this.state.timezone) !== day))
+				throw Error('请选择未完成或今天完成的事项');
+			await this.patch(id, { date: day });
+			this.state.dailyGoal = { ...this.state.dailyGoal, day, id };
+			await this.saveState();
+			await this.load();
+		});
 	}
 	archive(id: string): Promise<void> {
 		return this.serial(async () => {
