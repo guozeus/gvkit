@@ -1,5 +1,10 @@
 # gvkit
 
+## 0.6.55 置顶提醒核查
+
+桌面与手机均可在「GVKit 快捷设置」或自御「安排界面设置」编辑置顶提醒，保存于当前 Vault 的 `settings/gvkit/arrange.md`。空闲栏保持空白，有提醒时操作才启动一轮。每轮仍独立随机，可能连续同样式；修正上浮首尾动画，使只有一条提醒时也完整上浮入场、停留、离场，长文仍完整经过。
+
+
 A lightweight Obsidian toolkit focused on fast, native-feeling editing actions.
 
 ## 0.6.53 奖励点与五周期成就

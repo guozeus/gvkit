@@ -73,7 +73,7 @@ export class ArrangeTips {
 				if (mode === 'horizontal') {
 					await this.animate([{ transform: `translateX(${width}px)` }, { transform: `translateX(${-length}px)` }], (width + length) / speed * 1000);
 				} else {
-					if (i > 0) await this.animate([{ transform: 'translateY(100%)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], 220);
+					await this.animate([{ transform: 'translateY(100%)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], 220);
 					const overflow = Math.max(0, length - width);
 					// Long tips remain one line but travel fully into view before switching.
 					const duration = interval * 1000 + overflow / speed * 1000;
@@ -82,7 +82,7 @@ export class ArrangeTips {
 						{ transform: 'translateX(0)', offset: 0 }, { transform: 'translateX(0)', offset: hold },
 						{ transform: `translateX(${-overflow}px)`, offset: 1 - hold }, { transform: `translateX(${-overflow}px)`, offset: 1 },
 					], duration);
-					if (i < lines.length - 1) await this.animate([{ transform: `translate(${-overflow}px, 0)`, opacity: 1 }, { transform: `translate(${-overflow}px, -100%)`, opacity: 0 }], 220);
+					await this.animate([{ transform: `translate(${-overflow}px, 0)`, opacity: 1 }, { transform: `translate(${-overflow}px, -100%)`, opacity: 0 }], 220);
 				}
 			}
 		} catch { /* Closing the view cancels its animations. */ }

@@ -42,11 +42,13 @@ test('one complete round survives clicks, expansion and state refresh; cancellat
 		jobs[1].finish(); await settle(); assert.equal(tips.el.dataset.playing, undefined);
 		assert.equal(root.querySelector('.gvkit-arrange-tips-text')!.textContent, '', 'finished round returns to blank');
 		Math.random = () => .9; tips.start(); assert.equal(tips.el.dataset.playing, 'vertical');
-		assert.equal(jobs[2].options.duration, 7000, '3s hold plus readable long-line traversal');
-		jobs[2].finish(); await settle(); assert.match(jobs[3].frames[1].transform, /-100%/);
-		jobs[3].finish(); await settle(); assert.equal(jobs[4].el.textContent, '第二条');
-		assert.match(jobs[4].frames[0].transform, /100%/);
-		tips.destroy(); await settle(); tips.start(); assert.equal(jobs.length, 5, 'close cancels and cannot restart');
+		assert.match(jobs[2].frames[0].transform, /100%/, 'first tip also floats in');
+		jobs[2].finish(); await settle();
+		assert.equal(jobs[3].options.duration, 7000, '3s hold plus readable long-line traversal');
+		jobs[3].finish(); await settle(); assert.match(jobs[4].frames[1].transform, /-100%/);
+		jobs[4].finish(); await settle(); assert.equal(jobs[5].el.textContent, '第二条');
+		assert.match(jobs[5].frames[0].transform, /100%/);
+		tips.destroy(); await settle(); tips.start(); assert.equal(jobs.length, 6, 'close cancels and cannot restart');
 	} finally { Math.random = oldRandom; await win.happyDOM.abort(); }
 });
 
@@ -72,4 +74,36 @@ test('shared settings retain text after failure, validate positive timing and sa
 		fail = true; content.value = '保留输入'; content.dispatchEvent(new win.Event('change')); await settle();
 		assert.equal(content.value, '保留输入'); assert.match(root.textContent, /保存失败/);
 	} finally { await win.happyDOM.abort(); }
+});
+
+test('a single vertical tip visibly enters and leaves; each idle round samples again', async () => {
+	const win = new Window(), root = win.document.createElement('div'); win.document.body.append(root);
+	const jobs: any[] = [];
+	(win.HTMLElement.prototype as any).animate = function (frames: any, options: any) {
+		let finish!: () => void;
+		const finished = new Promise<void>(resolve => { finish = resolve; });
+		const job = { frames, options, finished, finish, cancel() {} }; jobs.push(job); return job;
+	};
+	const original = Math.random;
+	let samples = 0;
+	try {
+		const tips = new ArrangeTips(root as any), state = defaultArrangeState(); state.tips = '一条提醒';
+		Object.defineProperty(root.querySelector('.gvkit-arrange-tips-viewport'), 'clientWidth', { value: 200 });
+		Object.defineProperty(root.querySelector('.gvkit-arrange-tips-text'), 'scrollWidth', { value: 80 });
+		tips.update(state); Math.random = () => { samples++; return .9; }; tips.start();
+		assert.match(jobs[0].frames[0].transform, /translateY\(100%\)/);
+		for (let n = 0; n < 3; n++) {
+			tips.start(); tips.update({ ...state, rowHeight: 60 });
+			assert.equal(samples, 1, 'active input and reload do not reroll or restart');
+			if (n === 1) assert.equal(jobs[n].options.duration, 3000, 'default readable interval unchanged');
+			if (n === 2) assert.match(jobs[n].frames[1].transform, /-100%/);
+			jobs[n].finish(); await settle();
+		}
+		assert.equal(tips.el.dataset.playing, undefined);
+		tips.start(); assert.equal(samples, 2); assert.equal(tips.el.dataset.playing, 'vertical', 'consecutive same modes remain possible');
+		for (let n = 3; n < 6; n++) { jobs[n].finish(); await settle(); }
+		Math.random = () => { samples++; return .1; }; tips.start();
+		assert.equal(tips.el.dataset.playing, 'horizontal'); assert.equal(samples, 3);
+		jobs[6].finish(); await settle(); tips.destroy();
+	} finally { Math.random = original; await win.happyDOM.abort(); }
 });
