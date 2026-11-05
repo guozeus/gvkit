@@ -252,7 +252,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-children { margin: 8px -8px 0; }
 .gvkit-arrange-panel-grip { display: none; }
 .gvkit-arrange-empty { padding: 40px 16px; text-align: center; color: var(--text-muted); }
-.gvkit-arrange[data-root-item-style="background"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-selected):not(.is-dragging):not(.is-invalid-parent) { background: color-mix(in srgb, var(--color-purple, #9860d6) 12%, var(--background-primary)); }
+.gvkit-arrange[data-root-item-style="background"] .gvkit-arrange-row.is-root-item:not(.gvkit-arrange-daily-goal):not(.is-completed):not(.is-selected):not(.is-dragging):not(.is-invalid-parent) { background: color-mix(in srgb, var(--color-purple, #9860d6) 12%, var(--background-primary)); }
 .gvkit-arrange[data-root-item-style="text"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title:not(.is-overdue) { color: var(--color-purple, #9860d6); }
 .gvkit-arrange .gvkit-arrange-row.is-development-project:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title,
 .gvkit-arrange .gvkit-arrange-detail-title-row.is-development-project:not(.is-completed) .gvkit-arrange-detail-title { color: var(--color-purple, #9860d6); }
@@ -355,11 +355,12 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-date-actions > button > span:first-child { display: flex; }
 .gvkit-arrange-date-actions svg { width: 20px; height: 20px; }
 
-/* Daily target is the same task row; only its empty/celebration text is special. */
+/* The daily target keeps the same task behavior with a distinct surface. */
+.gvkit-arrange[data-completed-style] .gvkit-arrange-row.gvkit-arrange-daily-goal[data-id], .gvkit-arrange[data-completed-style] .gvkit-arrange-row.gvkit-arrange-goal-done { background: color-mix(in srgb, #b395e5 20%, var(--background-primary)); }
 .gvkit-arrange .gvkit-arrange-goal-empty { color: var(--color-red, #d33); font-style: italic; cursor: pointer; }
 .gvkit-arrange-goal-picker { background: color-mix(in srgb, var(--color-blue, #3084df) 15%, var(--background-primary)); }
 .gvkit-arrange-goal-picker > button[hidden] { display: none; }
-.gvkit-arrange .gvkit-arrange-goal-replace { flex: 0 0 auto; padding: 0 4px; height: 100%; border: 0; box-shadow: none; background: transparent; color: var(--text-muted); font-size: var(--gvkit-arrange-date-font, 12px); touch-action: manipulation; }
+.gvkit-arrange .gvkit-arrange-row .gvkit-arrange-goal-replace { flex: 0 0 44px; width: 44px; align-self: stretch; height: auto; min-height: 44px; color: var(--text-normal); }
 .gvkit-arrange[data-completed-style] .gvkit-arrange-row.is-completed .gvkit-arrange-title.gvkit-arrange-goal-achieved { color: #bb8c18; white-space: normal; cursor: pointer; }
 .gvkit-arrange-goal-done { height: auto; min-height: var(--gvkit-arrange-row-height, 44px); }
 .gvkit-arrange-goal-done > .gvkit-arrange-title { padding: 6px 0; }

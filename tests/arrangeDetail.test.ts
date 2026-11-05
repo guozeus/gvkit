@@ -1105,7 +1105,14 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(store.items.find((x: any) => x.id === replacement).date, store.facts().day);
 		assert.equal(store.facts().achieved, achievedBeforeGoal, 'daily target choice is not basic input confirmation');
 		const goalOrder = [...store.state.order], countBefore = store.facts().x;
-		await view.changeParent(null); view.finishParentChoice();
+		assert.equal(view.list.firstElementChild.querySelector('[aria-label="置顶"]'), null);
+		assert.ok(view.list.querySelector(`[data-id="${dailyTarget}"] [aria-label="置顶"]`), 'ordinary task retains its top action');
+		const replaceButton = view.list.firstElementChild.querySelector('.gvkit-arrange-goal-replace');
+		assert.equal(replaceButton.getAttribute('aria-label'), '更换今天特产基础产出事项');
+		replaceButton.click(); await settle();
+		assert.equal(view.choosingParent.id, null, 'right-end icon opens the daily target picker');
+		assert.equal(view.selected, null, 'replace does not open task details');
+		view.finishParentChoice();
 		assert.equal(store.state.dailyGoal.id, replacement, 'cancel replacement keeps current target');
 		await view.select(replacement);
 		assert.equal(view.editing.id, replacement, 'normal details open the same item');

@@ -634,8 +634,7 @@ export class ArrangeView extends ItemView {
 					// a status, not a copied or reactivated task.
 					slot.addClass('is-completed', 'gvkit-arrange-goal-done');
 					slot.createSpan({ cls: 'gvkit-arrange-title gvkit-arrange-goal-achieved', text: '已达成今天特产产出基础目标！很棒！', attr: { role: 'status' } });
-					const replace = slot.createEl('button', { cls: 'gvkit-arrange-goal-replace', text: '更换' });
-					replace.onclick = () => { void this.changeParent(null); };
+					this.goalReplaceButton(slot);
 				} else {
 					const choose = slot.createEl('button', { cls: 'gvkit-arrange-title gvkit-arrange-goal-empty', text: '选择今天特产产出基础目标' });
 					choose.onclick = () => { void this.changeParent(null); };
@@ -818,7 +817,7 @@ export class ArrangeView extends ItemView {
 		}
 		const actionArea = row.createDiv('gvkit-arrange-actions');
 		for (const key of this.store.state.rowActions) {
-			if (!this.actionAvailable(key, item)) continue;
+			if (dailyGoal && key === 'top' || !this.actionAvailable(key, item)) continue;
 			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'date' && item.date) button.addClass('is-active');
@@ -826,10 +825,13 @@ export class ArrangeView extends ItemView {
 			if (key === 'developmentProject') button.toggleClass('is-active', Boolean(item.developmentProject));
 		}
 		if (dailyGoal) {
-			const replace = row.createEl('button', { cls: 'gvkit-arrange-goal-replace', text: '更换' });
-			replace.onclick = () => { void this.changeParent(null); };
+			this.goalReplaceButton(row);
 		}
 		this.rowGesture(row, label, item);
+	}
+	private goalReplaceButton(row: HTMLElement): void {
+		iconButton(row, '更换今天特产基础产出事项', 'refresh-cw', () => { void this.changeParent(null); })
+			.addClass('gvkit-arrange-goal-replace');
 	}
 	private rowGesture(row: HTMLElement, label: HTMLElement, item: ArrangeItem): void {
 		let suppressClickUntil = 0;
