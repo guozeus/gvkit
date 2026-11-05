@@ -11,25 +11,21 @@ export class ArrangeRewardsView {
  private open = false;
  private days: Partial<Record<DateGrain, string>> = {};
  private effects = new Set<HTMLElement>();
- private observer: ResizeObserver;
  constructor(private app: App, private store: ArrangeStore, private root: HTMLElement, private header: HTMLElement) {
-  this.top = root.createEl('button', { cls: 'gvkit-reward-top', attr: { type: 'button', 'aria-label': '今天奖励点，展开成就面板' } });
+  this.top = header.createEl('button', { cls: 'gvkit-reward-top', attr: { type: 'button' } });
+  header.insertBefore(this.top, header.children[1] ?? null);
   this.panel = root.createDiv('gvkit-reward-panel');
   this.panel.hidden = true;
   this.top.onclick = event => { event.stopPropagation(); this.open = !this.open; this.paint(); };
-  const place = () => {
-   if (root.clientWidth >= 650) { if (this.top.parentElement !== header) header.insertBefore(this.top, header.children[1] ?? null); }
-   else if (this.top.parentElement !== root) root.insertBefore(this.top, this.panel);
-  };
-  this.observer = new ResizeObserver(place); this.observer.observe(root); place();
  }
  private today() { return dayKey(new Date(), this.store.state.timezone); }
  private total(period: RewardPeriod, day = this.today()) { return rewardTotal(this.store.rewards, period, day, this.store.state.timezone); }
  levels() { return periods.map(period => rewardProgress(this.total(period), period).level); }
  paint(): void {
   this.top.empty();
-  this.bar(this.top, 'day', this.today(), '今日');
-  this.top.createSpan({ text: this.open ? '▴' : '▾', attr: { 'aria-hidden': 'true' } });
+  const points = this.total('day');
+  this.top.createSpan({ cls: 'gvkit-reward-summary', text: `${points}点` });
+  this.top.setAttribute('aria-label', `今天奖励 ${points} 点，${this.open ? '收起' : '展开'}成就面板`);
   this.top.setAttribute('aria-expanded', String(this.open));
   this.panel.hidden = !this.open;
   if (!this.open) return;
@@ -130,5 +126,5 @@ export class ArrangeRewardsView {
   this.effects.add(element);
   (this.root.ownerDocument.defaultView ?? window).setTimeout(() => { element.remove(); this.effects.delete(element); }, ms);
  }
- close() { this.observer.disconnect(); this.top.remove(); this.panel.remove(); for (const effect of this.effects) effect.remove(); this.effects.clear(); }
+ close() { this.top.remove(); this.panel.remove(); for (const effect of this.effects) effect.remove(); this.effects.clear(); }
 }

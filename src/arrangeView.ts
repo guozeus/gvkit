@@ -172,7 +172,9 @@ export class ArrangeView extends ItemView {
 			// Padding is part of a flex item's minimum size. Never let the desired
 			// margins enlarge its box beyond the actually visible parent region.
 			const gap = Math.min(3 * (line || 24), Math.max(0, (bounds.bottom - bounds.top - 1) / 2));
-			scroll.style.paddingTop = `${gap}px`; scroll.style.paddingBottom = `${gap}px`;
+			// Body editing keeps the title against its toolbar. At the start of
+			// the note, the existing title is the upper context; don't insert blank lines.
+			scroll.style.paddingTop = title ? `${gap}px` : '0px'; scroll.style.paddingBottom = `${gap}px`;
 			const caret = title ? titleCaretRect(edit.title) : edit.body.editor.coordsAtPos(edit.body.editor.state.selection.main.head);
 			if (!caret) return;
 			bounds = visibleBounds();
@@ -262,8 +264,11 @@ export class ArrangeView extends ItemView {
 			}
 			menu.showAtMouseEvent(event);
 		});
+		this.hierarchyButton.hidden = true;
 		this.searchButton = iconButton(header, '搜索事项', 'search', () => this.toggleSearch());
 		this.moreButton = iconButton(header, '安排更多', 'more-horizontal', event => this.headerMenu(event));
+		this.rewardsView = new ArrangeRewardsView(this.app, this.store, root, header);
+		this.register(() => { this.rewardsView?.close(); this.rewardChoiceObserver?.disconnect(); });
 		// Use only this leaf's title slot. Unknown/hidden host layouts keep the thin local bar.
 		const titleSlot = this.containerEl?.querySelector<HTMLElement>('.view-header-title-container');
 		const hostHeader = titleSlot?.closest<HTMLElement>('.view-header');
@@ -271,18 +276,24 @@ export class ArrangeView extends ItemView {
 			const syncHeader = () => {
 				const active = !this.closed && this.app.workspace.getActiveViewOfType(ArrangeView) === this;
 				const visible = hostHeader.getBoundingClientRect().height > 0;
-				titleSlot.classList.toggle('gvkit-arrange-host-title', active && visible);
-				if (active && visible) titleSlot.append(header);
-				else root.prepend(header);
+				const needed = Array.from(header.children).reduce((sum, child) => sum + child.getBoundingClientRect().width, 0);
+				const fits = active && visible && titleSlot.clientWidth >= needed;
+				titleSlot.classList.toggle('gvkit-arrange-host-title', fits);
+				if (fits) { if (header.parentElement !== titleSlot) titleSlot.append(header); }
+				else if (header.parentElement !== root) root.prepend(header);
 			};
 			this.restoreHeader = () => { titleSlot.classList.remove('gvkit-arrange-host-title'); root.prepend(header); };
 			this.registerEvent(this.app.workspace.on('active-leaf-change', syncHeader));
 			this.registerEvent(this.app.workspace.on('layout-change', syncHeader));
+			// The native slot can be much narrower than the window (navigation,
+			// view actions, split panes). Keep all controls in the existing local
+			// bar when that slot cannot fit them, instead of covering host actions.
+			const headerSize = new ResizeObserver(syncHeader);
+			for (const el of [titleSlot, root, this.headline, header.querySelector('.gvkit-reward-top')!]) headerSize.observe(el);
+			this.register(() => headerSize.disconnect());
 			this.register(() => this.restoreHeader?.());
 			syncHeader();
 		}
-		this.rewardsView = new ArrangeRewardsView(this.app, this.store, root, header);
-		this.register(() => { this.rewardsView?.close(); this.rewardChoiceObserver?.disconnect(); });
 		this.tips = new ArrangeTips(root);
 		for (const surface of [root, header]) {
 			for (const type of ['click', 'input', 'change', 'contextmenu'] as const)

@@ -118,10 +118,10 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 	box-sizing: border-box;
 }
 .gvkit-arrange button { touch-action: manipulation; }
-.gvkit-arrange-header { display: flex; align-items: center; flex: 0 0 auto; gap: 0; padding: 0 4px; border-bottom: 1px solid var(--background-modifier-border); }
+.gvkit-arrange-header { display: flex; align-items: center; flex: 0 0 auto; gap: 0; padding: 0 4px; border-bottom: 1px solid var(--background-modifier-border); container-type: inline-size; }
 .gvkit-arrange-host-title > :not(.gvkit-arrange-header) { display: none; }
 .gvkit-arrange-host-title .gvkit-arrange-header { width: 100%; min-width: 0; border: 0; padding: 0; }
-.gvkit-arrange-header .gvkit-arrange-today { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; height: 40px; min-width: 0; padding: 3px 4px; box-shadow: none; background: transparent; white-space: nowrap; touch-action: manipulation; }
+.gvkit-arrange-header .gvkit-arrange-today { flex: 0 0 auto; margin-left: 0; display: flex; align-items: center; justify-content: center; gap: 6px; height: 40px; min-width: 0; padding: 3px 4px; box-shadow: none; background: transparent; white-space: nowrap; touch-action: manipulation; }
 .gvkit-arrange-status-icon { display: flex; flex: 0 0 auto; }
 .gvkit-arrange-status-icon svg { width: 18px; height: 18px; }
 .gvkit-arrange-today > span { font-size: 14px; font-weight: 600; }
@@ -170,6 +170,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-actions { display: flex; flex: 0 1 auto; min-width: 0; max-width: 48%; overflow-x: auto; scrollbar-width: none; }
 .gvkit-arrange-actions::-webkit-scrollbar { display: none; }
 .gvkit-arrange .gvkit-arrange-icon, .gvkit-arrange-header .gvkit-arrange-icon { flex: 0 0 36px; width: 36px; min-height: 40px; padding: 8px; background: transparent; border: 0; box-shadow: none; color: var(--text-muted); touch-action: manipulation; }
+.gvkit-arrange-header .gvkit-arrange-icon[hidden] { display: none; }
 .gvkit-arrange .gvkit-arrange-row .gvkit-arrange-icon { display: flex; align-items: center; justify-content: center; flex-basis: var(--gvkit-arrange-row-slot, 23px); width: var(--gvkit-arrange-row-slot, 23px); height: var(--gvkit-arrange-row-height, 44px); min-height: 0; padding: 0; }
 .gvkit-arrange-icon svg { width: 19px; height: 19px; }
 .gvkit-arrange-row .gvkit-arrange-icon svg { width: var(--gvkit-arrange-row-icon, 19px); height: var(--gvkit-arrange-row-icon, 19px); }
@@ -365,8 +366,13 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 
 /* Reward facts are independent of the existing red/blue/gold completion status. */
 .gvkit-reward-top, .gvkit-reward-strip { display:flex; align-items:center; gap:6px; min-width:0; border:0; box-shadow:none; background:transparent; padding:3px 6px; touch-action:manipulation; }
-.gvkit-reward-top { flex:0 0 auto; width:100%; height:34px; }
-.gvkit-arrange-header .gvkit-reward-top { flex:1.5; width:auto; }
+.gvkit-arrange-header .gvkit-reward-top { flex:0 0 auto; margin-right:auto; justify-content:center; height:40px; min-width:44px; padding:4px 0; }
+.gvkit-reward-summary { display:flex; align-items:center; min-height:28px; padding:0 6px; border:1px solid color-mix(in srgb, var(--text-muted) 25%, transparent); border-radius:8px; background:color-mix(in srgb, #378ce7 12%, var(--background-primary)); color:var(--text-normal); font-size:12px; font-weight:600; white-space:nowrap; }
+.gvkit-reward-top[aria-expanded="true"] .gvkit-reward-summary { border-color:var(--text-accent); background:color-mix(in srgb, #378ce7 24%, var(--background-primary)); }
+@container (max-width:340px) {
+ .gvkit-arrange-header .gvkit-arrange-today { padding-inline:0; }
+ .gvkit-arrange-header .gvkit-arrange-icon { flex-basis:28px; width:28px; padding-inline:4px; }
+}
 .gvkit-reward-bar { position:relative; flex:1; min-width:0; overflow:hidden; border-radius:7px; background:color-mix(in srgb, #378ce7 14%, var(--background-primary)); color:var(--text-normal); height:27px; display:flex; align-items:center; justify-content:center; }
 .gvkit-reward-bar::before { content:''; position:absolute; inset:0 auto 0 0; width:var(--reward-fill); background:color-mix(in srgb, #378ce7 40%, transparent); }
 .gvkit-reward-bar.is-high::before { background:color-mix(in srgb, #dfb644 45%, transparent); }
