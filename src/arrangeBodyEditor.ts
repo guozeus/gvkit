@@ -201,7 +201,7 @@ export class ArrangeBodyEditor {
 	readonly editor: EditorView;
 	readonly dom: HTMLElement;
 	private hint: string;
-	constructor(parent: HTMLElement, value: string, hint: string, app: App, path: string, component: Component, changed: () => void) {
+	constructor(parent: HTMLElement, value: string, hint: string, app: App, path: string, component: Component, changed: () => void, caretChanged: () => void = () => {}) {
 		this.hint = hint;
 		const parsed = StateField.define<DecorationSet>({
 			create: state => parsedDocument(state, app, path, component),
@@ -214,7 +214,10 @@ export class ArrangeBodyEditor {
 			parsed, history(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, colors,
 			EditorView.editorAttributes.of({ class: 'gvkit-arrange-inline-body is-live-preview' }),
 			placeholder(() => { const el = document.createElement('span'); el.textContent = this.hint; return el; }), EditorView.contentAttributes.of({ 'aria-label': '事项正文', 'aria-multiline': 'true' }),
-			EditorView.updateListener.of(update => { if (update.docChanged) changed(); }),
+			EditorView.updateListener.of(update => {
+				if (update.docChanged) changed();
+				if (update.docChanged || update.selectionSet || update.focusChanged || update.geometryChanged) caretChanged();
+			}),
 			EditorView.domEventHandlers({ click: (event, view) => {
 				const link = (event.target as HTMLElement).closest('a');
 				const href = link?.getAttribute('data-href') ?? link?.getAttribute('href');

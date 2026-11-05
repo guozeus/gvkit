@@ -17,6 +17,10 @@ export class ItemView {
  registerDomEvent(el,type,fn,options) { el.addEventListener(type,fn,options); this.register(()=>el.removeEventListener(type,fn,options)); }
 }
 export const Platform={isMobileApp:true,isIosApp:false};
+export class Scope {
+ constructor(parent) { this.parent=parent;this.handlers=[]; }
+ register(modifiers,key,func) { const handler={modifiers,key,func};this.handlers.push(handler);return handler; }
+}
 export class Modal {
  constructor() { this.contentEl=document.createElement('div'); }
  setTitle() {} open() { document.body.append(this.contentEl); if(this.contentEl.classList.contains('gvkit-arrange-date-menu')) window.dateMenus=(window.dateMenus??0)+1; } close() { this.contentEl.remove(); }
@@ -1002,6 +1006,26 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		platform.isMobileApp = true; input.value = '手机点击'; input.dispatchEvent(new window.Event('input')); view.createButton.click();
 		await settle(); await new Promise(resolve => setTimeout(resolve, 0));
 		assert.equal(createCalls, 3); assert.equal(store.items.filter((x: any) => x.title === '手机点击').length, 1);
+		// A native host can consume Ctrl+Enter at window capture before the input.
+		// Exercise the view Scope callback at that exact boundary.
+		let scopeHandled = 0;
+		const hostShortcut = (event: any) => {
+			if (event.key !== 'Enter') return;
+			const handler = view.scope.handlers.find((value: any) => value.key === 'Enter');
+			if (handler.func(event) === false) {
+				scopeHandled++; event.preventDefault(); event.stopImmediatePropagation();
+			}
+		};
+		window.addEventListener('keydown', hostShortcut, true);
+		input.value = '宿主Scope输入'; input.dispatchEvent(new window.Event('input'));
+		input.dispatchEvent(new window.CompositionEvent('compositionstart', { bubbles: true }));
+		key({ ctrlKey: true }); assert.equal(createCalls, 3, 'IME composition also guards native scope');
+		input.dispatchEvent(new window.CompositionEvent('compositionend', { bubbles: true }));
+		key({ ctrlKey: true }); await settle(); await new Promise(resolve => setTimeout(resolve, 0));
+		assert.equal(scopeHandled, 1); assert.equal(createCalls, 4);
+		assert.equal(store.items.filter((x: any) => x.title === '宿主Scope输入').length, 1);
+		assert.equal(input.value, '');
+		window.removeEventListener('keydown', hostShortcut, true);
 		root.removeEventListener('keydown', bubble); store.create = originalCreate;
 		// Feedback is tied to saved completion, from both checkbox surfaces.
 		let prepared = 0, played = 0;

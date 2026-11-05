@@ -16,6 +16,7 @@ export class ItemView {
  registerDomEvent(el, type, fn) { el.addEventListener(type, fn); this.register(() => el.removeEventListener(type, fn)); }
 }
 export const Platform = { isMobileApp: true, isIosApp: true };
+export class Scope { register() {} }
 export class Modal {}
 export class Menu {}
 export class Notice { constructor(message) { throw Error(message); } }
@@ -204,12 +205,12 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 		scroller.scrollTop = 120; // Native first-focus scroll used the pre-keyboard panel.
 		title.focus(); title.setSelectionRange(2, 2);
 		notifyResize();
-		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), false, 'title editing retains its existing layout');
-		assert.equal(scroller.scrollTop, 0, 'first fit restores the position captured before focus');
+		assert.equal(root.classList.contains('gvkit-arrange-composer-keyboard'), false);
+		assert.equal(root.classList.contains('gvkit-arrange-detail-keyboard'), true, 'detail editing expands while keyboard occupies space');
 		assert.equal(title.selectionStart, 2, 'native caret placement survives');
 		title.dispatchEvent(new window.Event('touchmove', { bubbles: true })); scroller.scrollTop = 60;
 		notifyResize();
-		assert.equal(scroller.scrollTop, 60, 'user selection/scroll owns position after first focus');
+		assert.equal(title.selectionStart, 2, 'fitting never rewrites the native caret');
 		title.blur(); input.focus();
 		scroller.scrollTop = 80;
 		input.blur(); input.focus();

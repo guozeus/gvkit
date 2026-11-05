@@ -1,6 +1,6 @@
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
-import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
 import { ArrangeFeedback } from './arrangeFeedback';
@@ -22,6 +22,25 @@ function iconButton(parent: HTMLElement, label: string, icon: string, action: (e
 	setIcon(button, icon);
 	button.addEventListener('click', event => { event.stopPropagation(); action(event); });
 	return button;
+}
+/** Measure the native textarea's current caret without changing its selection. */
+function titleCaretRect(input: HTMLTextAreaElement): DOMRect | null {
+	const doc = input.ownerDocument, css = doc.defaultView!.getComputedStyle(input);
+	const mirror = doc.createElement('div'), marker = doc.createElement('span');
+	for (const key of ['box-sizing', 'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
+		'letter-spacing', 'text-indent', 'text-align', 'white-space', 'overflow-wrap', 'word-break', 'tab-size',
+		'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'border-width', 'border-style'])
+		mirror.style.setProperty(key, css.getPropertyValue(key));
+	const bounds = input.getBoundingClientRect();
+	const head = input.selectionDirection === 'backward' ? input.selectionStart : input.selectionEnd;
+	Object.assign(mirror.style, { position: 'fixed', visibility: 'hidden', pointerEvents: 'none',
+		left: `${bounds.left}px`, top: `${bounds.top - input.scrollTop}px`, width: `${bounds.width}px` });
+	mirror.textContent = input.value.slice(0, head);
+	marker.textContent = input.value.slice(head) || '\u200b';
+	mirror.append(marker); doc.body.append(mirror);
+	const range = doc.createRange(); range.setStart(marker.firstChild!, 0); range.setEnd(marker.firstChild!, 1);
+	const rect = range.getClientRects()[0] ?? null;
+	mirror.remove(); return rect;
 }
 
 /** WebKit/Chromium caret hit → original Markdown offset. No Markdown is rewritten.
@@ -122,7 +141,32 @@ export class ArrangeView extends ItemView {
 	private restoreHeader: (() => void) | null = null;
 	private cancelReorder: (() => void) | null = null;
 	private cancelResize: (() => void) | null = null;
-	private titleFocusScroll: { input: HTMLTextAreaElement; top: number } | null = null;
+	private composerComposing = false;
+	private caretFrame: number | null = null;
+	private fitDetailCaret(): void {
+		const root = this.contentEl, win = root.ownerDocument.defaultView;
+		if (!win || this.caretFrame !== null || this.closed) return;
+		this.caretFrame = win.requestAnimationFrame(() => {
+			this.caretFrame = null;
+			const edit = this.editing, scroll = this.detailScroll;
+			if (!scroll) return;
+			if (!edit || !root.classList.contains('gvkit-arrange-detail-keyboard')) {
+				scroll.style.removeProperty('padding-top'); scroll.style.removeProperty('padding-bottom'); return;
+			}
+			const title = root.ownerDocument.activeElement === edit.title;
+			const line = title ? parseFloat(win.getComputedStyle(edit.title).lineHeight) : edit.body.editor.defaultLineHeight;
+			const gap = 3 * (line || 24);
+			scroll.style.paddingTop = `${gap}px`; scroll.style.paddingBottom = `${gap}px`;
+			const caret = title ? titleCaretRect(edit.title) : edit.body.editor.coordsAtPos(edit.body.editor.state.selection.main.head);
+			if (!caret) return;
+			const bounds = scroll.getBoundingClientRect();
+			const available = Math.max(0, (bounds.height - (caret.bottom - caret.top)) / 2);
+			const margin = Math.min(gap, available);
+			const top = bounds.top + margin, bottom = bounds.bottom - margin;
+			if (caret.top < top) scroll.scrollTop += caret.top - top;
+			else if (caret.bottom > bottom) scroll.scrollTop += caret.bottom - bottom;
+		});
+	}
 	private bodyRender = 0;
 	private interactionLog: { time: string; event: string; detail: Record<string, unknown> }[] = [];
 	private trace(event: string, detail: Record<string, unknown> = {}): void {
@@ -150,7 +194,18 @@ export class ArrangeView extends ItemView {
 		} catch { new Notice('复制失败，请重试'); }
 	}
 
-	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) { super(leaf); this.store = store; }
+	constructor(leaf: WorkspaceLeaf, store: ArrangeStore) {
+		super(leaf); this.store = store;
+		// Obsidian handles shortcuts at window capture, before textarea keydown.
+		// A view scope participates in that native path, including popout windows.
+		this.scope = new Scope(this.app.scope);
+		this.scope.register(null, 'Enter', event => {
+			if (event.target !== this.input || !(event.ctrlKey || event.metaKey)
+				|| event.isComposing || event.keyCode === 229 || this.composerComposing) return;
+			if (!event.repeat) this.createButton.click();
+			return false;
+		});
+	}
 	getViewType(): string { return ARRANGE_VIEW; }
 	getDisplayText(): string { return '自御安排'; }
 	getIcon(): string { return 'list-checks'; }
@@ -262,11 +317,13 @@ export class ArrangeView extends ItemView {
 			this.register(() => { this.keyboardBackdrop?.remove(); this.keyboardBackdrop = null; });
 		}
 		this.input.onkeydown = event => {
-			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) {
+			if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing && event.keyCode !== 229 && !this.composerComposing) {
 				event.preventDefault(); event.stopPropagation();
 				if (!event.repeat) this.createButton.click();
 			}
 		};
+		this.registerDomEvent(this.input, 'compositionstart', () => { this.composerComposing = true; });
+		this.registerDomEvent(this.input, 'compositionend', () => { this.composerComposing = false; });
 		this.registerDomEvent(root, 'keydown', event => {
 			if (event.key !== 'Escape') return;
 			if (this.choosingParent) this.finishParentChoice();
@@ -323,6 +380,8 @@ export class ArrangeView extends ItemView {
 				this.detailScroll.scrollTop = 0;
 			root.classList.toggle('gvkit-arrange-composer-keyboard', expandDetail);
 			const active = root.ownerDocument.activeElement;
+			const detailEditing = Boolean(this.editing && (active === this.editing.title || this.editing.body.dom.contains(active)));
+			root.classList.toggle('gvkit-arrange-detail-keyboard', Platform.isMobileApp && detailEditing && keyboardVisible);
 			const editing = active && root.contains(active) && active.matches('textarea,input,.cm-content');
 			if (!editing && keyboard === 0 && visibleBottom >= ownerWindow.innerHeight) restingHeight = ownerWindow.innerHeight;
 			const overlap = Math.max(0, bottom - visibleBottom);
@@ -330,11 +389,7 @@ export class ArrangeView extends ItemView {
 				// Explicit zero must override the host CSS inset after it has resized.
 				root.style.setProperty('padding-bottom', `${overlap}px`, keyboard > 0 ? 'important' : '');
 			} else root.style.removeProperty('padding-bottom');
-			// First keyboard opening can scroll the title using the old panel geometry.
-			// Restore the pre-focus position after fitting, without changing the caret.
-			const anchor = this.titleFocusScroll;
-			if (anchor && root.ownerDocument.activeElement === anchor.input && this.editing?.title === anchor.input)
-				this.detailScroll.scrollTop = anchor.top;
+			this.fitDetailCaret();
 			// Paint behind native keyboard corners, outside the host's clipped pane.
 			// This is decoration only: it never changes keyboard/composer geometry.
 			if (this.keyboardBackdrop) {
@@ -346,6 +401,9 @@ export class ArrangeView extends ItemView {
 			}
 		};
 		this.registerDomEvent(this.input, 'focus', fit);
+		this.registerDomEvent(root, 'focusin', fit);
+		this.registerDomEvent(root, 'focusout', () => ownerWindow.requestAnimationFrame(fit));
+		this.registerDomEvent(root.ownerDocument, 'selectionchange', () => this.fitDetailCaret());
 		this.registerDomEvent(this.input, 'blur', () => root.classList.remove('gvkit-arrange-composer-keyboard'));
 		if (Platform.isIosApp) this.registerEvent(this.app.workspace.on('active-leaf-change', fit));
 		if (ownerWindow.visualViewport) {
@@ -373,6 +431,7 @@ export class ArrangeView extends ItemView {
 				root.style.paddingBottom = '';
 				root.classList.remove('gvkit-arrange-keyboard-open');
 				root.classList.remove('gvkit-arrange-composer-keyboard');
+				root.classList.remove('gvkit-arrange-detail-keyboard');
 				root.style.removeProperty('--gvkit-arrange-keyboard-gap');
 			});
 			bindViewport();
@@ -382,9 +441,10 @@ export class ArrangeView extends ItemView {
 	}
 	async onClose(): Promise<void> {
 		this.closed = true;
+		if (this.caretFrame !== null) this.contentEl.ownerDocument.defaultView?.cancelAnimationFrame(this.caretFrame);
+		this.caretFrame = null;
 		this.tips.destroy();
 		this.feedback.close();
-		this.titleFocusScroll = null;
 		delete this.contentEl.dataset.ignoreSwipe;
 		this.cancelReorder?.();
 		this.cancelResize?.();
@@ -1174,24 +1234,12 @@ export class ArrangeView extends ItemView {
 		complete.onclick = () => { complete.checked = Boolean(this.store.items.find(value => value.id === item.id)?.completedAt); void this.toggleComplete(item.id, complete.getBoundingClientRect()); };
 		const title = titleRow.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
 		title.value = item.title;
-		title.addEventListener('focus', () => {
-			if (Platform.isIosApp && this.titleFocusScroll?.input !== title)
-				this.titleFocusScroll = { input: title, top: this.detailScroll.scrollTop };
-		});
-		// A new selection/scroll or actual editing takes ownership after keyboard fitting.
-		for (const type of ['touchstart', 'pointerdown'] as const)
-			this.detailScroll.addEventListener(type, event => {
-				this.titleFocusScroll = Platform.isIosApp && event.target === title && document.activeElement !== title
-					? { input: title, top: this.detailScroll.scrollTop } : null;
-			}, { passive: true });
-		for (const type of ['touchmove', 'input', 'focusout'] as const)
-			this.detailScroll.addEventListener(type, () => { this.titleFocusScroll = null; }, { passive: true });
 		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
 		error.hidden = true;
 		const preview = this.detailScroll.createDiv({ cls: 'gvkit-arrange-body', attr: { tabindex: '0', 'aria-label': '编辑事项正文' } });
 		const body = new ArrangeBodyEditor(this.detailScroll, item.body, this.store.state.bodyPlaceholder, this.app, item.path, this, () => {
 			error.hidden = true; this.scheduleEdit();
-		});
+		}, () => this.fitDetailCaret());
 		body.hidden = true;
 		const edit = this.editing = { id: item.id, title, body, preview, error, savedTitle: item.title, savedBody: item.body, composing: false as boolean };
 		this.renderBody();
@@ -1210,7 +1258,7 @@ export class ArrangeView extends ItemView {
 		for (const input of [title, body.editor.contentDOM]) {
 			input.addEventListener('compositionstart', () => { edit.composing = true; });
 			input.addEventListener('compositionend', () => { edit.composing = false; this.scheduleEdit(); });
-			if (input === title) input.oninput = () => { resize(title); error.hidden = true; title.removeAttribute('aria-invalid'); this.scheduleEdit(); };
+			if (input === title) input.oninput = () => { resize(title); error.hidden = true; title.removeAttribute('aria-invalid'); this.scheduleEdit(); this.fitDetailCaret(); };
 			input.onblur = () => { void this.saveEdit().then(ok => {
 				// Replacing preview text on title blur can swallow the click landing on it.
 				if (ok && input !== title && this.editing === edit && !body.focused) this.renderBody();
