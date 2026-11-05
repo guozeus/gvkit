@@ -151,16 +151,32 @@ export class ArrangeView extends ItemView {
 			const edit = this.editing, scroll = this.detailScroll;
 			if (!scroll) return;
 			if (!edit || !root.classList.contains('gvkit-arrange-detail-keyboard')) {
+				root.classList.remove('gvkit-arrange-caret-tight');
 				scroll.style.removeProperty('padding-top'); scroll.style.removeProperty('padding-bottom'); return;
 			}
 			const title = root.ownerDocument.activeElement === edit.title;
 			const line = title ? parseFloat(win.getComputedStyle(edit.title).lineHeight) : edit.body.editor.defaultLineHeight;
-			const gap = 3 * (line || 24);
+			const visibleBounds = () => {
+				const bounds = scroll.getBoundingClientRect(), panel = this.detail.getBoundingClientRect();
+				const area = this.area.getBoundingClientRect(), viewport = win.visualViewport;
+				return { top: Math.max(bounds.top, panel.top, area.top, viewport?.offsetTop ?? 0),
+					bottom: Math.min(bounds.bottom, panel.bottom, area.bottom, this.input.getBoundingClientRect().top,
+						viewport ? viewport.offsetTop + viewport.height : win.innerHeight) };
+			};
+			let bounds = visibleBounds();
+			// In a short viewport prioritize editing over detail chrome until the
+			// keyboard closes or focus leaves. Keep the global bars and composer.
+			if (bounds.bottom - bounds.top < 7 * (line || 24)) {
+				root.classList.add('gvkit-arrange-caret-tight'); bounds = visibleBounds();
+			}
+			// Padding is part of a flex item's minimum size. Never let the desired
+			// margins enlarge its box beyond the actually visible parent region.
+			const gap = Math.min(3 * (line || 24), Math.max(0, (bounds.bottom - bounds.top - 1) / 2));
 			scroll.style.paddingTop = `${gap}px`; scroll.style.paddingBottom = `${gap}px`;
 			const caret = title ? titleCaretRect(edit.title) : edit.body.editor.coordsAtPos(edit.body.editor.state.selection.main.head);
 			if (!caret) return;
-			const bounds = scroll.getBoundingClientRect();
-			const available = Math.max(0, (bounds.height - (caret.bottom - caret.top)) / 2);
+			bounds = visibleBounds();
+			const available = Math.max(0, (bounds.bottom - bounds.top - (caret.bottom - caret.top)) / 2);
 			const margin = Math.min(gap, available);
 			const top = bounds.top + margin, bottom = bounds.bottom - margin;
 			if (caret.top < top) scroll.scrollTop += caret.top - top;
@@ -432,6 +448,7 @@ export class ArrangeView extends ItemView {
 				root.classList.remove('gvkit-arrange-keyboard-open');
 				root.classList.remove('gvkit-arrange-composer-keyboard');
 				root.classList.remove('gvkit-arrange-detail-keyboard');
+				root.classList.remove('gvkit-arrange-caret-tight');
 				root.style.removeProperty('--gvkit-arrange-keyboard-gap');
 			});
 			bindViewport();

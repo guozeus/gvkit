@@ -297,6 +297,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 /* Temporarily use all space above the composer; leave the user's panel size intact. */
 .gvkit-arrange-mobile.gvkit-arrange-composer-keyboard .gvkit-arrange-detail,
 .gvkit-arrange-mobile.gvkit-arrange-detail-keyboard .gvkit-arrange-detail { height: 100% !important; max-height: 100% !important; border-radius: 0; }
+.gvkit-arrange-mobile.gvkit-arrange-detail-keyboard.gvkit-arrange-caret-tight .gvkit-arrange-detail > :is(.gvkit-arrange-panel-grip, .gvkit-arrange-detail-tools, .gvkit-reward-choices) { display: none; }
 .gvkit-arrange-mobile .gvkit-arrange-panel-grip { display: flex; align-items: center; justify-content: center; flex: 0 0 var(--gvkit-arrange-grip-height, 32px); cursor: ns-resize; touch-action: none; }
 .gvkit-arrange-mobile .gvkit-arrange-panel-grip::before { content: ''; display: block; width: var(--gvkit-arrange-grip-width, 36px); height: 4px; background: var(--text-faint); border-radius: 4px; }
 /* Only the native Markdown switcher marked by DocumentQuickSettings, on mobile. */
