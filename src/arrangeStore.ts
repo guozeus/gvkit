@@ -1,3 +1,4 @@
+import { rewardRecord, rewardValue, type RewardRecord } from './arrangeRewards';
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
@@ -19,6 +20,7 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 
 export class ArrangeStore {
 	items: ArrangeItem[] = [];
+	rewards: RewardRecord[] = [];
 	state = defaultArrangeState();
 	archivedDailyGoalCompletedAt: string | null = null;
 	private archivedCompletions: string[] = [];
@@ -34,6 +36,7 @@ export class ArrangeStore {
 			const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(x => typeof x === 'string');
 			if (!strings(fields.order) || !strings(fields.achievedDays)) throw Error('安排顺序格式不正确');
 			state.order = fields.order;
+			if (typeof fields.rewardsEnabledAt === 'string' && Number.isFinite(Date.parse(fields.rewardsEnabledAt))) state.rewardsEnabledAt = fields.rewardsEnabledAt;
 			state.achievedDays = fields.achievedDays;
 			const goal = fields.dailyGoal as ArrangeState['dailyGoal'];
 			if (goal && typeof goal.day === 'string' && (typeof goal.id === 'string' || goal.id === null)) {
@@ -91,19 +94,23 @@ export class ArrangeStore {
 				state.dateHintColor = fields.dateHintColor as ArrangeState['dateHintColor'];
 		}
 		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
+		const rewards: RewardRecord[] = [];
 		let archivedDailyGoalCompletedAt: string | null = null;
 		const today = dayKey(new Date(), state.timezone);
-		const currentMonth = `${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`;
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (file.path.startsWith(`${HISTORY}/`)) {
 				// The index may lag a just-completed/undone note. Today's modified
 				// files need their real fields; mtime selects reads, never counts completions.
 				let fields = this.app.metadataCache?.getFileCache(file)?.frontmatter;
 				const changedToday = file.stat && dayKey(new Date(file.stat.mtime), state.timezone) === today;
-				if (changedToday || (!fields && file.path.startsWith(currentMonth))) {
+				const rewardHistory = state.rewardsEnabledAt && (!file.stat || file.stat.mtime >= Date.parse(state.rewardsEnabledAt));
+				const currentMonth = file.path.startsWith(`${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`);
+				if (changedToday || (!fields && (currentMonth || rewardHistory))) {
 					const source = await this.app.vault.read(file);
 					fields = getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange') ? documentParts(source).fields : undefined;
 				}
+				const record = fields && rewardRecord(fields);
+				if (record) rewards.push(record);
 				const completed = fields?.completed_at;
 				if (fields?.gvkit_arrange === true && typeof completed === 'string' && Number.isFinite(Date.parse(completed))
 					&& dayKey(new Date(completed), state.timezone) === today) {
@@ -117,6 +124,8 @@ export class ArrangeStore {
 			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
 			const { fields, body } = documentParts(source);
 			if (fields.gvkit_arrange !== true) continue;
+			const record = rewardRecord(fields);
+			if (record) rewards.push(record);
 			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
 			if (items.some(item => item.id === fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
 			items.push({ id: fields.gvid, path: file.path,
@@ -124,9 +133,11 @@ export class ArrangeStore {
 				parent: typeof fields.parent === 'string' ? fields.parent : null,
 				date: typeof fields.date === 'string' ? fields.date : null,
 				completedAt: typeof fields.completed_at === 'string' ? fields.completed_at : null,
+				rewardPoints: rewardValue(fields.reward_points),
 				pinned: fields.pinned === true, developmentCompleted: fields.development_completed === true,
 				developmentProject: fields.development_project === true });
 		}
+		this.rewards = rewards;
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
 		this.state = state;
@@ -226,7 +237,13 @@ export class ArrangeStore {
 			}
 			const destination = `${folder}/${this.file(id).name}`;
 			if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
-			await this.patch(id, { completed_at: done ? new Date().toISOString() : null, pinned: false });
+			if (done && !this.state.rewardsEnabledAt) {
+				this.state.rewardsEnabledAt = new Date().toISOString();
+				await this.saveState();
+			}
+			const completedAt = done ? new Date().toISOString() : null;
+			await this.patch(id, { completed_at: completedAt, pinned: false,
+				reward_completed_at: completedAt, reward_awarded: done ? rewardValue(item.rewardPoints) : null });
 			const file = this.file(id);
 			await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
 			await this.load();
@@ -234,6 +251,24 @@ export class ArrangeStore {
 			return true;
 		});
 	}
+ enableRewards(): Promise<void> {
+  return this.serial(async () => {
+   if (!this.state.rewardsEnabledAt) { this.state.rewardsEnabledAt = new Date().toISOString(); await this.saveState(); }
+  });
+ }
+ setReward(id: string, points: number): Promise<void> {
+  return this.serial(async () => {
+   if (![0, 1, 2, 3, 5, 8].includes(points)) throw Error('请选择奖励点数');
+   await this.app.vault.process(this.file(id), source => {
+    const { fields, body } = documentParts(source);
+    // Correct only this explicit award. Old completed notes are never backfilled.
+    const changes = rewardRecord(fields) ? { reward_awarded: points } : {};
+    return markdown({ ...fields, reward_points: points, ...changes }, body);
+   });
+   await this.load();
+  });
+ }
+
 	setDate(id: string, date: string | null): Promise<void> {
 		return this.serial(async () => { await this.patch(id, { date }); await this.load(); });
 	}

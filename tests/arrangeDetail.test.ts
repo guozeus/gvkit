@@ -42,11 +42,11 @@ export const stringifyYaml=value=>JSON.stringify(value,null,2)+'\\n';
 test('inline edits persist to Markdown, switch safely, and retain drafts on invalid or failed saves', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'gvkit-detail-test-'));
 	const window = new Window();
-	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'NodeFilter', 'Text', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+	const globals = new Map(['window', 'document', 'MouseEvent', 'navigator', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'Node', 'NodeFilter', 'Text', 'HTMLElement', 'getComputedStyle'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
 	let view: any;
 	try {
 		Object.assign(globalThis, { window, document: window.document, MouseEvent: window.MouseEvent });
-		for (const key of ['MutationObserver', 'Node', 'NodeFilter', 'Text', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
+		for (const key of ['MutationObserver', 'ResizeObserver', 'Node', 'NodeFilter', 'Text', 'HTMLElement']) (globalThis as any)[key] = (window as any)[key];
 		Object.assign(globalThis, { requestAnimationFrame: window.requestAnimationFrame.bind(window), cancelAnimationFrame: window.cancelAnimationFrame.bind(window), getComputedStyle: window.getComputedStyle.bind(window) });
 		const copied: string[] = [];
 		let copyFails = false;

@@ -360,3 +360,35 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange[data-completed-style] .gvkit-arrange-row.is-completed .gvkit-arrange-title.gvkit-arrange-goal-achieved { color: #bb8c18; white-space: normal; cursor: pointer; }
 .gvkit-arrange-goal-done { height: auto; min-height: var(--gvkit-arrange-row-height, 44px); }
 .gvkit-arrange-goal-done > .gvkit-arrange-title { padding: 6px 0; }
+
+/* Reward facts are independent of the existing red/blue/gold completion status. */
+.gvkit-reward-top, .gvkit-reward-strip { display:flex; align-items:center; gap:6px; min-width:0; border:0; box-shadow:none; background:transparent; padding:3px 6px; touch-action:manipulation; }
+.gvkit-reward-top { flex:0 0 auto; width:100%; height:34px; }
+.gvkit-arrange-header .gvkit-reward-top { flex:1.5; width:auto; }
+.gvkit-reward-bar { position:relative; flex:1; min-width:0; overflow:hidden; border-radius:7px; background:color-mix(in srgb, #378ce7 14%, var(--background-primary)); color:var(--text-normal); height:27px; display:flex; align-items:center; justify-content:center; }
+.gvkit-reward-bar::before { content:''; position:absolute; inset:0 auto 0 0; width:var(--reward-fill); background:color-mix(in srgb, #378ce7 40%, transparent); }
+.gvkit-reward-bar.is-high::before { background:color-mix(in srgb, #dfb644 45%, transparent); }
+.gvkit-reward-bar.is-segmented::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(to right, transparent 0, transparent calc(10% - 1px), color-mix(in srgb, var(--background-primary) 70%, transparent) calc(10% - 1px), color-mix(in srgb, var(--background-primary) 70%, transparent) 10%); pointer-events:none; }
+.gvkit-reward-bar-text { position:relative; z-index:1; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px; }
+.gvkit-reward-next { flex:0 0 auto; font-size:11px; color:var(--text-muted); white-space:nowrap; }
+.gvkit-reward-panel { flex:0 0 auto; padding:2px 4px 5px; border-bottom:1px solid var(--background-modifier-border); }
+.gvkit-reward-panel[hidden] { display:none; }
+.gvkit-reward-row { display:flex; align-items:center; height:36px; gap:0; }
+.gvkit-reward-strip { flex:1; height:36px; }
+.gvkit-reward-arrow, .gvkit-reward-arrow-space { width:30px; flex:0 0 30px; }
+.gvkit-reward-arrow { height:36px; padding:0; box-shadow:none; border:0; background:transparent; font-size:24px; touch-action:manipulation; }
+.gvkit-reward-choices { display:flex; align-items:center; justify-content:center; flex:0 0 auto; gap:5px; padding:2px 4px; font-size:12px; }
+.gvkit-reward-choice { min-width:34px; height:32px; padding:0 6px; border:1px solid transparent; box-shadow:none; background:transparent; touch-action:manipulation; }
+.gvkit-reward-choice[aria-pressed="true"] { background:color-mix(in srgb, #378ce7 22%, var(--background-primary)); color:var(--text-normal); border-color:#378ce7; font-weight:700; }
+.gvkit-reward-tier { padding:5px 8px; color:var(--text-muted); }
+.gvkit-reward-tier.is-earned { color:var(--text-normal); background:color-mix(in srgb, #378ce7 17%, transparent); border-radius:5px; }
+.gvkit-reward-float { position:fixed; z-index:10000; pointer-events:none; font-size:25px; font-weight:800; color:#1670cc; text-shadow:0 1px 3px var(--background-primary), 0 0 5px var(--background-primary); animation:gvkit-reward-rise 2.4s ease-out both; }
+.theme-dark .gvkit-reward-float { color:#8bcdff; }
+.gvkit-reward-celebration { position:fixed; z-index:10000; top:70px; left:50%; transform:translateX(-50%); width:max-content; max-width:calc(100vw - 32px); padding:10px 16px; border-radius:14px; background:var(--background-primary); color:var(--text-normal); box-shadow:0 2px 20px #d5ab4655; border:1px solid #d5ab46; pointer-events:none; text-align:center; animation:gvkit-reward-glow 2s ease-out both; }
+.gvkit-reward-celebration strong { display:block; color:#997016; }
+.theme-dark .gvkit-reward-celebration strong { color:#ffdb7e; }
+.gvkit-reward-celebration span { font-size:12px; }
+@keyframes gvkit-reward-rise { 0% { opacity:1; transform:translateY(0); } 85% { opacity:1; } 100% { opacity:0; transform:translateY(-76px); } }
+@keyframes gvkit-reward-glow { 0% { opacity:0; } 12%,85% { opacity:1; } 100% { opacity:0; } }
+@media (max-width:380px) { .gvkit-reward-next { display:none; } }
+@media (prefers-reduced-motion:reduce) { .gvkit-reward-float, .gvkit-reward-celebration { animation:none; } }

@@ -86,7 +86,7 @@ test('keyboard compensation follows delayed host resize, preserves draft, and cl
 	const leafCallbacks: (() => void)[] = [];
 	const changeLeaf = () => leafCallbacks.forEach(fn => fn());
 	try {
-		const store = { load: async () => {}, facts: () => ({ day: '2026-10-26', x: 0, y: 0, remaining: 0, achieved: false, color: 'blue' }), items: [] as any[], state: defaultArrangeState() };
+		const store = { load: async () => {}, enableRewards: async () => {}, rewards: [], facts: () => ({ day: '2026-10-26', x: 0, y: 0, remaining: 0, achieved: false, color: 'blue' }), items: [] as any[], state: defaultArrangeState() };
 		view = new module.exports.ArrangeView({ contentEl: root, app: {
 			vault: { on: () => ({}) },
 			workspace: { getActiveViewOfType: () => active ? view : null, on: (_name: string, fn: () => void) => { leafCallbacks.push(fn); return {}; } },

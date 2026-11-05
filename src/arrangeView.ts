@@ -1,3 +1,5 @@
+import { ArrangeRewardsView } from './arrangeRewardsView';
+import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
@@ -76,6 +78,8 @@ export function registerArrange(plugin: Plugin): void {
 export class ArrangeView extends ItemView {
 	private store: ArrangeStore;
 	private feedback = new ArrangeFeedback();
+	private rewardsView?: ArrangeRewardsView;
+	private rewardChoiceObserver?: ResizeObserver;
 	private selected: string | null = null;
 	private filter: 'all' | 'today' | 'overdue' = 'all';
 	private searchOpen = false;
@@ -206,6 +210,8 @@ export class ArrangeView extends ItemView {
 			this.register(() => this.restoreHeader?.());
 			syncHeader();
 		}
+		this.rewardsView = new ArrangeRewardsView(this.app, this.store, root, header);
+		this.register(() => { this.rewardsView?.close(); this.rewardChoiceObserver?.disconnect(); });
 		this.tips = new ArrangeTips(root);
 		for (const surface of [root, header]) {
 			for (const type of ['click', 'input', 'change', 'contextmenu'] as const)
@@ -371,6 +377,7 @@ export class ArrangeView extends ItemView {
 			});
 			bindViewport();
 		}
+		try { await this.store.enableRewards(); } catch (error) { this.error(error); }
 		await this.reload();
 	}
 	async onClose(): Promise<void> {
@@ -509,6 +516,7 @@ export class ArrangeView extends ItemView {
 			return;
 		}
 		this.today = facts.day;
+		this.rewardsView?.paint();
 		this.headline.empty();
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
 		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
@@ -695,7 +703,7 @@ export class ArrangeView extends ItemView {
 		complete.toggleClass('is-development-completed', Boolean(item.developmentCompleted && !item.completedAt));
 		complete.onclick = event => {
 			event.stopPropagation(); complete.checked = Boolean(item.completedAt);
-			void this.toggleComplete(item.id);
+			void this.toggleComplete(item.id, complete.getBoundingClientRect());
 		};
 		const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { title: item.title } });
 		this.paintTitle(label, item.title, parent === this.list);
@@ -1062,7 +1070,7 @@ export class ArrangeView extends ItemView {
 		this.detail.style.maxHeight = '';
 		this.paintLists(); this.paintDetail();
 	}
-	private async toggleComplete(id: string): Promise<void> {
+	private async toggleComplete(id: string, rect?: DOMRect): Promise<void> {
 		if (this.busy) return;
 		if (!this.store.items.find(item => item.id === id)?.completedAt) this.feedback.prepare();
 		await this.run(async () => {
@@ -1070,8 +1078,13 @@ export class ArrangeView extends ItemView {
 			const item = this.store.items.find(item => item.id === id);
 			if (item) {
 				const done = !item.completedAt;
+				const before = this.rewardsView?.levels() ?? [];
 				const changed = await this.store.complete(id, done);
-				if (changed && done && !this.closed) this.feedback.play(this.store.state.completionSound);
+				if (changed && done && !this.closed) {
+     this.feedback.play(this.store.state.completionSound);
+     const award = this.store.rewards.find(record => record.id === id);
+     if (award) this.rewardsView?.celebrate(award.points, before, rect);
+    }
 			}
 		});
 	}
@@ -1100,9 +1113,13 @@ export class ArrangeView extends ItemView {
 			checkbox.toggleClass('is-development-completed', Boolean(item.developmentCompleted && !item.completedAt));
 			checkbox.setAttribute('aria-label', `${item.completedAt ? '撤销完成' : '完成'}：${item.title}`);
 		}
-		this.paintDetailActions();
+		for (const button of Array.from(this.detail.querySelectorAll<HTMLButtonElement>('.gvkit-reward-choice'))) {
+   button.setAttribute('aria-pressed', String(Number(button.dataset.points) === rewardValue(item.rewardPoints)));
+  }
+  this.paintDetailActions();
 	}
 	private paintDetail(): void {
+		this.rewardChoiceObserver?.disconnect();
 		this.trace('detail.render', { focused: this.focusRole(this.contentEl.ownerDocument.activeElement), keepingEditor: this.keepEditor() });
 		if (this.choosingParent) { this.detail.hidden = true; return; }
 		const item = this.store.items.find(item => item.id === this.selected);
@@ -1119,7 +1136,27 @@ export class ArrangeView extends ItemView {
 		iconButton(tools, '返回主列表', 'arrow-left', () => { void this.select(null); });
 		const date = tools.createEl('button', { cls: 'gvkit-arrange-detail-date', attr: { type: 'button', 'aria-label': '设置日期' } });
 		date.onclick = event => this.action('date', this.store.items.find(value => value.id === item.id) ?? item, event);
-		tools.createDiv('gvkit-arrange-detail-actions');
+		const rewards = this.detail.createDiv('gvkit-reward-choices');
+  rewards.createSpan({ text: '奖励点' });
+  for (const points of REWARD_VALUES) {
+   const button = rewards.createEl('button', { cls: 'gvkit-reward-choice', text: String(points), attr: { type: 'button', 'aria-label': `${points}奖励点，再点取消` } });
+   button.dataset.points = String(points);
+   button.onclick = () => { void this.run(async () => {
+    if (!(await this.saveEdit())) return;
+    const current = this.store.items.find(value => value.id === item.id);
+    await this.store.setReward(item.id, rewardValue(current?.rewardPoints) === points ? 0 : points);
+    this.paintDetailState();
+   }); };
+  }
+  const placeRewards = () => {
+   if (Platform.isMobileApp || tools.clientWidth < 620) {
+    if (rewards.nextElementSibling !== tools) this.detail.insertBefore(rewards, tools);
+   } else if (rewards.parentElement !== tools) tools.insertBefore(rewards, tools.querySelector('.gvkit-arrange-detail-actions'));
+  };
+  this.rewardChoiceObserver = new ResizeObserver(placeRewards);
+  this.rewardChoiceObserver.observe(tools);
+  placeRewards();
+  tools.createDiv('gvkit-arrange-detail-actions');
 		this.paintDetailActions();
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
 		this.detailScroll = this.detail.createDiv('gvkit-arrange-detail-scroll');
@@ -1134,7 +1171,7 @@ export class ArrangeView extends ItemView {
 		}
 		const titleRow = this.detailScroll.createDiv('gvkit-arrange-detail-title-row');
 		const complete = titleRow.createEl('input', { type: 'checkbox' });
-		complete.onclick = () => { complete.checked = Boolean(this.store.items.find(value => value.id === item.id)?.completedAt); void this.toggleComplete(item.id); };
+		complete.onclick = () => { complete.checked = Boolean(this.store.items.find(value => value.id === item.id)?.completedAt); void this.toggleComplete(item.id, complete.getBoundingClientRect()); };
 		const title = titleRow.createEl('textarea', { cls: 'gvkit-arrange-detail-title', attr: { 'aria-label': '事项完整标题', rows: '1' } });
 		title.value = item.title;
 		title.addEventListener('focus', () => {

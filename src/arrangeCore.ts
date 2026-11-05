@@ -7,6 +7,7 @@ export interface ArrangeItem {
 	date: string | null;
 	completedAt: string | null;
 	pinned: boolean;
+	rewardPoints?: number;
 	developmentCompleted?: boolean;
 	developmentProject?: boolean;
 }
@@ -16,9 +17,10 @@ export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
 export const PIN_COLORS = { gold: '#bb8c18', purple: '#9860d6', blue: '#3084df' } as const;
-export const COMPLETION_SOUNDS = { chime: '轻扬（原音效）', bell: '清铃', bright: '悦音' } as const;
+export const COMPLETION_SOUNDS = { chime: '轻扬（原音效）', bell: '清铃', bright: '悦音', payment: '轻快确认（付款成功感）', sparkle: '星光', warm: '暖木', bloom: '绽放' } as const;
 export interface ArrangeState {
 	order: string[];
+	rewardsEnabledAt: string | null;
 	dailyGoal: { day: string; id: string | null; returnedId?: string } | null;
 	achievedDays: string[];
 	timezone: string;
@@ -75,7 +77,7 @@ export const ARRANGE_FREE_SIZES = {
 } as const;
 
 export function defaultArrangeState(): ArrangeState {
-	return { order: [], dailyGoal: null, achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
+	return { order: [], rewardsEnabledAt: null, dailyGoal: null, achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		tips: '', tipsScrollSpeed: 45, tipsInterval: 3,
 		tipsTextColor: '#ffd76a', tipsBackgroundColor: '#6b3a91',
 		submitArrowSize: 24, submitColor: 'classic',
@@ -139,8 +141,12 @@ export function validParent(items: ArrangeItem[], id: string, parent: string | n
 	return true;
 }
 
+// The same timezone is used across a Vault. Reuse its formatter while scanning history.
+let dayFormatter: { timezone: string; value: Intl.DateTimeFormat } | undefined;
 export function dayKey(date: Date, timezone: string): string {
-	const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+	if (dayFormatter?.timezone !== timezone) dayFormatter = { timezone,
+		value: new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }) };
+	const parts = dayFormatter.value.formatToParts(date);
 	const get = (type: string) => parts.find(part => part.type === type)?.value;
 	return `${get('year')}-${get('month')}-${get('day')}`;
 }

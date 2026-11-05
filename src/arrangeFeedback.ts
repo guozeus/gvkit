@@ -25,6 +25,10 @@ export class ArrangeFeedback {
 			try {
 				// A quiet ascending chime with a short attack and smooth decay.
 				const notes: [number, number][] = sound === 'bell' ? [[1046.5, 0], [1568, 0.06]]
+					: sound === 'payment' ? [[659.25, 0], [987.77, 0.085], [1318.51, 0.085]]
+					: sound === 'sparkle' ? [[1174.66, 0], [1568, 0.07], [2093, 0.14]]
+					: sound === 'warm' ? [[523.25, 0], [659.25, 0.09], [783.99, 0.18]]
+					: sound === 'bloom' ? [[523.25, 0], [783.99, 0.06], [1046.5, 0.12], [1318.51, 0.18]]
 					: sound === 'bright' ? [[784, 0], [1046.5, 0.045], [1568, 0.09]] : [[880, 0], [1320, 0.045]];
 				for (const [frequency, delay] of notes) {
 					const tone = context.createOscillator(), volume = context.createGain();

@@ -17,6 +17,9 @@ test('completion sound choices keep the original chime and produce distinct loca
 		feedback.play(); await Promise.resolve(); assert.deepEqual(tones.splice(0), [880, 1320]);
 		feedback.play('bell'); await Promise.resolve(); assert.deepEqual(tones.splice(0), [1046.5, 1568]);
 		feedback.play('bright'); await Promise.resolve(); assert.deepEqual(tones.splice(0), [784, 1046.5, 1568]);
+		for (const [sound, expected] of [['payment', [659.25,987.77,1318.51]], ['sparkle',[1174.66,1568,2093]], ['warm',[523.25,659.25,783.99]], ['bloom',[523.25,783.99,1046.5,1318.51]]] as const) {
+			feedback.play(sound); await Promise.resolve(); assert.deepEqual(tones.splice(0), expected);
+		}
 		feedback.close();
 	} finally { if (original) Object.defineProperty(globalThis, 'window', original); else Reflect.deleteProperty(globalThis, 'window'); }
 });
