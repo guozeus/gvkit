@@ -360,16 +360,16 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange .gvkit-arrange-goal-empty { color: var(--color-red, #d33); font-style: italic; cursor: pointer; }
 .gvkit-arrange-goal-picker { background: color-mix(in srgb, var(--color-blue, #3084df) 15%, var(--background-primary)); }
 .gvkit-arrange-goal-picker > button[hidden] { display: none; }
-.gvkit-arrange .gvkit-arrange-row .gvkit-arrange-goal-replace { flex: 0 0 44px; width: 44px; align-self: stretch; height: auto; min-height: 44px; color: var(--text-normal); }
+.gvkit-arrange .gvkit-arrange-row .gvkit-arrange-goal-replace { align-self: stretch; height: auto; min-height: 44px; color: var(--text-normal); }
 .gvkit-arrange[data-completed-style] .gvkit-arrange-row.is-completed .gvkit-arrange-title.gvkit-arrange-goal-achieved { color: #bb8c18; white-space: normal; cursor: pointer; }
 .gvkit-arrange-goal-done { height: auto; min-height: var(--gvkit-arrange-row-height, 44px); }
 .gvkit-arrange-goal-done > .gvkit-arrange-title { padding: 6px 0; }
 
 /* Reward facts are independent of the existing red/blue/gold completion status. */
 .gvkit-reward-top, .gvkit-reward-strip { display:flex; align-items:center; gap:6px; min-width:0; border:0; box-shadow:none; background:transparent; padding:3px 6px; touch-action:manipulation; }
-.gvkit-arrange-header .gvkit-reward-top { flex:0 0 auto; margin-right:auto; justify-content:center; height:40px; min-width:44px; padding:4px 0; }
-.gvkit-reward-summary { display:flex; align-items:center; min-height:28px; padding:0 6px; border:1px solid color-mix(in srgb, var(--text-muted) 25%, transparent); border-radius:8px; background:color-mix(in srgb, #378ce7 12%, var(--background-primary)); color:var(--text-normal); font-size:12px; font-weight:600; white-space:nowrap; }
-.gvkit-reward-top[aria-expanded="true"] .gvkit-reward-summary { border-color:var(--text-accent); background:color-mix(in srgb, #378ce7 24%, var(--background-primary)); }
+.gvkit-arrange-header .gvkit-reward-top { flex:1 1 44px; margin-right:auto; justify-content:center; height:40px; min-width:44px; padding:4px 0; }
+.gvkit-reward-top .gvkit-reward-summary { min-height:28px; border:1px solid color-mix(in srgb, var(--text-muted) 25%, transparent); border-radius:8px; }
+.gvkit-reward-top[aria-expanded="true"] .gvkit-reward-summary { border-color:var(--text-accent); }
 @container (max-width:340px) {
  .gvkit-arrange-header .gvkit-arrange-today { padding-inline:0; }
  .gvkit-arrange-header .gvkit-arrange-icon { flex-basis:28px; width:28px; padding-inline:4px; }
@@ -377,13 +377,12 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-reward-bar { position:relative; flex:1; min-width:0; overflow:hidden; border-radius:7px; background:color-mix(in srgb, #378ce7 14%, var(--background-primary)); color:var(--text-normal); height:27px; display:flex; align-items:center; justify-content:center; }
 .gvkit-reward-bar::before { content:''; position:absolute; inset:0 auto 0 0; width:var(--reward-fill); background:color-mix(in srgb, #378ce7 40%, transparent); }
 .gvkit-reward-bar.is-high::before { background:color-mix(in srgb, #dfb644 45%, transparent); }
-.gvkit-reward-bar.is-segmented::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(to right, transparent 0, transparent calc(10% - 1px), color-mix(in srgb, var(--background-primary) 70%, transparent) calc(10% - 1px), color-mix(in srgb, var(--background-primary) 70%, transparent) 10%); pointer-events:none; }
 .gvkit-reward-bar-text { position:relative; z-index:1; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px; }
-.gvkit-reward-next { flex:0 0 auto; font-size:11px; color:var(--text-muted); white-space:nowrap; }
-.gvkit-reward-panel { flex:0 0 auto; padding:2px 4px 5px; border-bottom:1px solid var(--background-modifier-border); }
+.gvkit-reward-next { font-size:11px; color:var(--text-muted); white-space:nowrap; text-align:right; }
+.gvkit-reward-panel { display:grid; grid-template-columns:30px minmax(0,1fr) max-content 30px; flex:0 0 auto; padding:2px 4px 5px; border-bottom:1px solid var(--background-modifier-border); }
 .gvkit-reward-panel[hidden] { display:none; }
-.gvkit-reward-row { display:flex; align-items:center; height:36px; gap:0; }
-.gvkit-reward-strip { flex:1; height:36px; }
+.gvkit-reward-row { display:grid; grid-column:1 / -1; grid-template-columns:subgrid; align-items:center; height:36px; gap:0; }
+.gvkit-reward-strip { display:grid; grid-column:span 2; grid-template-columns:subgrid; height:36px; }
 .gvkit-reward-arrow, .gvkit-reward-arrow-space { width:30px; flex:0 0 30px; }
 .gvkit-reward-arrow { height:36px; padding:0; box-shadow:none; border:0; background:transparent; font-size:24px; touch-action:manipulation; }
 .gvkit-reward-choices { display:flex; align-items:center; justify-content:center; flex:0 0 auto; gap:5px; padding:2px 4px; font-size:12px; }

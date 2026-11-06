@@ -276,7 +276,12 @@ export class ArrangeView extends ItemView {
 			const syncHeader = () => {
 				const active = !this.closed && this.app.workspace.getActiveViewOfType(ArrangeView) === this;
 				const visible = hostHeader.getBoundingClientRect().height > 0;
-				const needed = Array.from(header.children).reduce((sum, child) => sum + child.getBoundingClientRect().width, 0);
+				// The reward bar fills spare space; use its text width, not its
+				// stretched width, when deciding whether the native slot fits.
+				const needed = Array.from(header.children).reduce((sum, child) => {
+					const text = child.querySelector<HTMLElement>('.gvkit-reward-bar-text');
+					return sum + (text ? Math.max(44, text.scrollWidth + 2) : child.getBoundingClientRect().width);
+				}, 0);
 				const fits = active && visible && titleSlot.clientWidth >= needed;
 				titleSlot.classList.toggle('gvkit-arrange-host-title', fits);
 				if (fits) { if (header.parentElement !== titleSlot) titleSlot.append(header); }

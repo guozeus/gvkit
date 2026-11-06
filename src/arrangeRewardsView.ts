@@ -23,9 +23,12 @@ export class ArrangeRewardsView {
  levels() { return periods.map(period => rewardProgress(this.total(period), period).level); }
  paint(): void {
   this.top.empty();
-  const points = this.total('day');
-  this.top.createSpan({ cls: 'gvkit-reward-summary', text: `${points}点` });
-  this.top.setAttribute('aria-label', `今天奖励 ${points} 点，${this.open ? '收起' : '展开'}成就面板`);
+  const points = this.total('day'), progress = rewardProgress(points, 'day');
+  const summary = this.top.createSpan({ cls: 'gvkit-reward-summary gvkit-reward-bar' });
+  summary.toggleClass('is-high', progress.level >= 8);
+  summary.style.setProperty('--reward-fill', `${progress.fill * 100}%`);
+  summary.createSpan({ cls: 'gvkit-reward-bar-text', text: `${points}点奖励 · ${progress.name}` });
+  this.top.setAttribute('aria-label', `今天 ${points}点奖励 · ${progress.name}，${this.open ? '收起' : '展开'}成就面板`);
   this.top.setAttribute('aria-expanded', String(this.open));
   this.panel.hidden = !this.open;
   if (!this.open) return;
@@ -65,12 +68,11 @@ export class ArrangeRewardsView {
  private bar(parent: HTMLElement, period: RewardPeriod, day: string, label: string) {
   const points = this.total(period, day), progress = rewardProgress(points, period);
   const bar = parent.createSpan({ cls: 'gvkit-reward-bar' });
-  bar.toggleClass('is-segmented', period !== 'permanent');
   bar.toggleClass('is-high', progress.level >= (period === 'permanent' ? 40 : 8));
   bar.style.setProperty('--reward-fill', `${progress.fill * 100}%`);
   const before = this.beforeEnabled(period, day);
   bar.createSpan({ cls: 'gvkit-reward-bar-text', text: before ? `${label} · 启用前无奖励点记录` : `${label} ${points}点 · ${period === 'permanent' ? '' : progress.level ? progress.level+'档·' : ''}${progress.name}` });
-  if (!before) parent.createSpan({ cls: 'gvkit-reward-next', text: progress.next === null ? '满档' : `${progress.next}·${progress.nextName}` });
+  parent.createSpan({ cls: 'gvkit-reward-next', text: before ? '' : progress.next === null ? '满档' : `${progress.next}·${progress.nextName}` });
  }
  private detail(period: RewardPeriod, day: string): void {
   const modal = new Modal(this.app), content = modal.contentEl;
