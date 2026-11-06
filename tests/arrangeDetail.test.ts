@@ -126,6 +126,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		host.innerHTML = '<div class="view-header"><button id="nav">导航</button><div class="view-header-title-container"><div class="view-header-title">自御安排</div></div><button id="native-more">宿主更多</button></div>';
 		const hostHeader = host.querySelector<HTMLElement>('.view-header')!;
 		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
+		Object.defineProperty(host.querySelector('.view-header-title-container'), 'clientWidth', { value: 600 });
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
 		// The shortcut measures the rendered panel against the visible screen,

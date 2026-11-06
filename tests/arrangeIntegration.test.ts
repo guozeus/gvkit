@@ -18,6 +18,8 @@ export const stringifyYaml = value => JSON.stringify(value, null, 2)+'\\n';
 
 test('disk Markdown create, sibling context, edit, reload, pin, complete/undo preserve children and other notes', async t => {
 	const root = await mkdtemp(join(tmpdir(), 'gvkit-arrange-test-'));
+	// Keep earlier completions outside the later November rollover scenario.
+	t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-24T04:00:00Z') });
 	try {
 		// Export the same shim class identities as used by the bundled module.
 		await build({ stdin: { contents: `export {ArrangeStore} from './src/arrangeStore'; export {TFile,TFolder} from 'obsidian';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(root, 'store.mjs'), plugins: [{ name: 'obsidian-test', setup(b) {
@@ -135,6 +137,10 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.deepEqual(store.state.order, beforeUnpin);
 		assert.equal(store.state.checkboxScale, 80); assert.equal(store.state.rowRightGap, 2);
 		assert.equal(store.state.pinColor, 'gold');
+		for (const mobileHeaderGap of [0, 8, 12]) {
+			await store.configure({ mobileHeaderGap }); await pinReload.load();
+			assert.equal(pinReload.state.mobileHeaderGap, mobileHeaderGap);
+		}
 		await store.configure({ checkboxScale: 65.5, rowRightGap: 3.5, pinColor: 'purple' });
 		await pinReload.load();
 		assert.equal(pinReload.state.checkboxScale, 65.5); assert.equal(pinReload.state.rowRightGap, 3.5);
@@ -320,7 +326,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		assert.ok(reads.includes(completedFile.path), 'today-modified history reads real completion facts while its metadata can lag');
 		assert.ok(fresh.items.every((x: any) => !x.path.startsWith('安排/历史/')));
 		// Same Markdown/GVID state across midnight, closed/reopened views and devices.
-		t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-05T15:59:59Z') });
+		t.mock.timers.setTime(new Date('2026-11-05T15:59:59Z').getTime());
 		await store.load();
 		await store.configure({ timezone: 'Asia/Shanghai' });
 		const daily = await store.create('跨午夜目标', null);

@@ -64,11 +64,12 @@ export interface ArrangeState {
 	pinColor: keyof typeof PIN_COLORS;
 	checkboxScale: number;
 	rowRightGap: number;
+	mobileHeaderGap: number;
 }
 
 export const ARRANGE_NUMBER_SETTINGS = {
 	gripHeight: [24, 56, 32], gripWidth: [24, 96, 36], toolbarHeight: [40, 56, 44], closeThreshold: [10, 40, 25],
-	rowIconGap: [0, 24, 4], detailIconGap: [0, 32, 8],
+	rowIconGap: [0, 24, 4], detailIconGap: [0, 32, 8], mobileHeaderGap: [0, 12, 8],
 } as const;
 
 /** CSS sizes accept nonnegative numbers; do not impose product typography limits. */
@@ -81,7 +82,7 @@ export function defaultArrangeState(): ArrangeState {
 	return { order: [], rewardsEnabledAt: null, dailyGoal: null, achievedDays: [], timezone: 'Asia/Shanghai', fullscreenThreshold: 80, keyboardGap: 7,
 		tips: '', tipsScrollSpeed: 45, tipsInterval: 3, tipsProbability: 10,
 		tipsTextColor: '#ffd76a', tipsBackgroundColor: '#6b3a91',
-		submitArrowSize: 24, submitColor: 'classic',
+		submitArrowSize: 24, submitColor: 'classic', mobileHeaderGap: 8,
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background', rootItemStyle: 'background',
 		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2, completionSound: 'chime',
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent'],

@@ -374,6 +374,17 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
  .gvkit-arrange-header .gvkit-arrange-today { padding-inline:0; }
  .gvkit-arrange-header .gvkit-arrange-icon { flex-basis:28px; width:28px; padding-inline:4px; }
 }
+/* Keep mobile header styling on the header itself when it moves into the host title. */
+.gvkit-arrange-header-mobile .gvkit-arrange-today {
+ padding-inline:8px; height:32px; min-height:32px; border:1px solid transparent; border-radius:8px;
+}
+.gvkit-arrange-header-mobile .gvkit-arrange-today[aria-pressed="true"] {
+ outline:none; border-color:var(--gvkit-selection);
+}
+.gvkit-arrange-header-mobile .gvkit-reward-top {
+ margin-left:var(--gvkit-mobile-header-gap, 8px); background:transparent; box-shadow:none;
+}
+.gvkit-arrange-header-mobile .gvkit-arrange-icon { transform:translateX(10px); }
 .gvkit-reward-bar { position:relative; flex:1; min-width:0; overflow:hidden; border-radius:7px; background:color-mix(in srgb, #378ce7 14%, var(--background-primary)); color:var(--text-normal); height:27px; display:flex; align-items:center; justify-content:center; }
 .gvkit-reward-bar::before { content:''; position:absolute; inset:0 auto 0 0; width:var(--reward-fill); background:color-mix(in srgb, #378ce7 40%, transparent); }
 .gvkit-reward-bar.is-high::before { background:color-mix(in srgb, #dfb644 45%, transparent); }

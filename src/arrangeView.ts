@@ -245,6 +245,7 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(ownerWindow, 'focus', () => this.trace('window.focus'));
 		if (Platform.isIosApp) this.guardSmallEditorZoom(root);
 		const header = root.createDiv('gvkit-arrange-header');
+		header.toggleClass('gvkit-arrange-header-mobile', Platform.isMobileApp);
 		header.dataset.ignoreSwipe = 'true';
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = async () => {
@@ -281,7 +282,7 @@ export class ArrangeView extends ItemView {
 				const needed = Array.from(header.children).reduce((sum, child) => {
 					const text = child.querySelector<HTMLElement>('.gvkit-reward-bar-text');
 					return sum + (text ? Math.max(44, text.scrollWidth + 2) : child.getBoundingClientRect().width);
-				}, 0);
+				}, 0) + (Platform.isMobileApp ? this.store.state.mobileHeaderGap + 10 : 0);
 				const fits = active && visible && titleSlot.clientWidth >= needed;
 				titleSlot.classList.toggle('gvkit-arrange-host-title', fits);
 				if (fits) { if (header.parentElement !== titleSlot) titleSlot.append(header); }
@@ -552,6 +553,7 @@ export class ArrangeView extends ItemView {
 		this.contentEl.style.setProperty('--gvkit-arrange-pin-color', PIN_COLORS[state.pinColor]);
 		this.contentEl.style.setProperty('--gvkit-arrange-date-color', DATE_HINT_COLORS[state.dateHintColor] ?? DATE_HINT_COLORS.vivid);
 		this.headline.dataset.selectionColor = state.selectionColor;
+		this.headline.parentElement?.style.setProperty('--gvkit-mobile-header-gap', `${state.mobileHeaderGap}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-keyboard-gap', `${this.store.state.keyboardGap}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-size', `${this.store.state.submitArrowSize}px`);
 		this.contentEl.style.setProperty('--gvkit-arrange-submit-color', SUBMIT_BLUE_COLORS[this.store.state.submitColor]);
@@ -1554,6 +1556,7 @@ export class ArrangeView extends ItemView {
 			detailFontSize: '详情标题字号', bodyFontSize: '详情正文字号', dateFontSize: '日期提示字号（列表与详情共用）',
 			rowIconGap: '列表操作图标间距', detailIconGap: '详情操作图标间距',
 			checkboxScale: '勾选框尺寸（原尺寸百分比）', rowRightGap: '列表右侧留白（字宽）',
+			mobileHeaderGap: '手机顶栏达成与奖励间距',
 		};
 		// Keep the established settings order; input implementation must not reorder it.
 		for (const settingKey of Object.keys(names) as (keyof typeof names)[]) {
