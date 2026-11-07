@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
     resolveEditorSelectionRect,
+    resolveToolbarPosition,
     type CodeMirrorSelectionGeometry,
     type ToolbarSelectionEditor,
 } from '../src/toolbarSelection.ts';
@@ -79,9 +80,34 @@ test('use selected DOM text inside the same editor if CM6 has no geometry', () =
     assert.equal(resolveEditorSelectionRect(editor, container, cm, nativeSelection)?.left, 40);
 });
 
-test('multi-line selection anchors near visible caret instead of a giant rectangle', () => {
+test('multi-line selection includes every selected line so toolbar cannot cover earlier text', () => {
     const { editor, cm, container } = fixture({ firstRect: rect(100, 30), lastRect: rect(240, 90) });
-    assert.equal(resolveEditorSelectionRect(editor, container, cm, null)?.top, 90);
+    const result = resolveEditorSelectionRect(editor, container, cm, null);
+    assert.equal(result?.top, 30);
+    assert.equal(result?.bottom, 108);
+});
+
+test('toolbar avoids single/multiline selections and flips below near the top', () => {
+    const pane = { left: 0, right: 1000 } as DOMRect;
+    assert.equal(resolveToolbarPosition(rect(200, 180, 400), 300, 48, pane, 1000, 800)?.top, 124);
+    const multiline = { ...rect(200, 20, 400), bottom: 180, height: 160 };
+    assert.equal(resolveToolbarPosition(multiline, 300, 48, pane, 1000, 800)?.top, 188);
+    assert.equal(resolveToolbarPosition(rect(800, 740, 900), 300, 48, pane, 1000, 800)?.left, 692);
+});
+
+test('toolbar never clamps over a tall selection when neither vertical side fits', () => {
+    const pane = { left: 0, right: 1000 } as DOMRect;
+    const tall = { ...rect(10, 10, 990), bottom: 790, height: 780 };
+    assert.equal(resolveToolbarPosition(tall, 300, 48, pane, 1000, 800), null);
+    const narrow = { ...tall, right: 200, width: 190 };
+    assert.equal(resolveToolbarPosition(narrow, 300, 48, pane, 1000, 800), null);
+});
+
+test('incomplete CM geometry cannot position a toolbar over unknown selected lines', () => {
+    for (const options of [{ firstRect: null }, { lastRect: null }]) {
+        const { editor, cm, container } = fixture(options);
+        assert.equal(resolveEditorSelectionRect(editor, container, cm, null), null);
+    }
 });
 
 test('legacy/non-CM editor uses existing DOM selection fallback', () => {

@@ -5,7 +5,7 @@ import {
 	type StyleAction,
 } from './formatting';
 import { gvkitEditorDecorations } from './editorDecorations';
-import { resolveEditorSelectionRect, type CodeMirrorSelectionGeometry } from './toolbarSelection';
+import { resolveEditorSelectionRect, resolveToolbarPosition, type CodeMirrorSelectionGeometry } from './toolbarSelection';
 import { renderGvkitStyles } from './readingView';
 import { FileIdManager } from './fileIds';
 import { GvkitSettingTab } from './fileIdSettings';
@@ -698,16 +698,11 @@ export default class GvkitPlugin extends Plugin {
 
 		const toolbarWidth = toolbar.offsetWidth;
 		const toolbarHeight = toolbar.offsetHeight;
-		const margin = 8;
-		const desiredLeft = rect.left + rect.width / 2 - toolbarWidth / 2;
-		const minLeft = Math.max(margin, pane.left + margin);
-		const maxLeft = Math.max(minLeft, Math.min(ownerWindow.innerWidth, pane.right) - toolbarWidth - margin);
-		const left = Math.max(minLeft, Math.min(desiredLeft, maxLeft));
-		const above = rect.top - toolbarHeight - margin;
-		const top = above >= margin ? above : Math.min(rect.bottom + margin, ownerWindow.innerHeight - toolbarHeight - margin);
+		const position = resolveToolbarPosition(rect, toolbarWidth, toolbarHeight, pane, ownerWindow.innerWidth, ownerWindow.innerHeight);
+		if (!position) { this.hideToolbar(); return; }
 
-		toolbar.style.left = `${Math.round(left)}px`;
-		toolbar.style.top = `${Math.round(top)}px`;
+		toolbar.style.left = `${Math.round(position.left)}px`;
+		toolbar.style.top = `${position.top}px`;
 		toolbar.style.visibility = 'visible';
 	}
 

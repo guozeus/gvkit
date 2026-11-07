@@ -42,8 +42,8 @@ export function resolveEditorSelectionRect(
         if (start && end && Math.abs(start.top - end.top) < 3 && end.right >= start.left) {
             return rangeRect(start, end);
         }
-        // Keep the toolbar near the caret for a multiline selection.
-        if (end || start) return end ?? start;
+        // Avoid the entire selection, including earlier selected lines.
+        if (start && end) return rangeRect(start, end);
     }
 
     // CM6 may temporarily lack coordinates when Live Preview replaces nodes.
@@ -54,6 +54,29 @@ export function resolveEditorSelectionRect(
     if (!nativeSelection || nativeSelection.isCollapsed || !nativeSelection.rangeCount ||
         !anchor || !container.contains(anchor)) return null;
     const range = nativeSelection.getRangeAt(0);
-    const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+    const rects = Array.from(range.getClientRects());
+    const rect = rects.length ? rects.reduce(rangeRect) : range.getBoundingClientRect();
     return rect && (rect.width || rect.height) ? rect : null;
+}
+
+/** Place the toolbar outside the selection, never clamp it back over the text. */
+export function resolveToolbarPosition(
+    selection: DOMRect,
+    width: number,
+    height: number,
+    pane: DOMRect,
+    viewportWidth: number,
+    viewportHeight: number,
+): { left: number; top: number } | null {
+    const gap = 8;
+    const minLeft = Math.max(gap, pane.left + gap);
+    const maxRight = Math.min(viewportWidth, pane.right) - gap;
+    const maxLeft = maxRight - width;
+    if (maxLeft < minLeft || height > viewportHeight - 2 * gap) return null;
+    const left = Math.max(minLeft, Math.min(selection.left + selection.width / 2 - width / 2, maxLeft));
+    const above = Math.floor(selection.top - height - gap);
+    if (above >= gap && above + height <= viewportHeight - gap) return { left, top: above };
+    const below = Math.ceil(selection.bottom + gap);
+    if (below >= gap && below + height <= viewportHeight - gap) return { left, top: below };
+    return null;
 }
