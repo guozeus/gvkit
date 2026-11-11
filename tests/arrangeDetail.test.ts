@@ -315,6 +315,11 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		let title = root.querySelector<HTMLTextAreaElement>('.gvkit-arrange-detail-title')!;
 		assert.equal(title.value, '第一项完整标题');
 		title.setSelectionRange(3, 3); title.click(); assert.equal(title.selectionStart, 3, 'first title click must not override native hit testing');
+		const pendingPreview = view.editing.preview;
+		pendingPreview.focus();
+		await view.reload('visibility');
+		assert.equal(view.editing.preview, pendingPreview, 'a reload finishing between pointer down and click must retain the focused body preview');
+		assert.equal(pendingPreview.isConnected, true);
 		const previewText = root.querySelector('.gvkit-arrange-body')!.firstChild;
 		title.focus(); title.blur(); await view.saveEdit();
 		assert.equal(root.querySelector('.gvkit-arrange-body')!.firstChild, previewText, 'title blur must not replace the text a pending pointer click is landing on');

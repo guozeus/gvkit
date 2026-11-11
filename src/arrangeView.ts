@@ -1,8 +1,9 @@
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
-import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
+import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
 import { renderGvkitStyles } from './readingView';
@@ -70,7 +71,16 @@ function bodyCaretOffset(preview: HTMLElement, source: string, event: MouseEvent
 }
 
 export function registerArrange(plugin: Plugin): void {
-	const store = new ArrangeStore(plugin.app);
+	const platform = Platform.isIosApp ? 'ios' : Platform.isAndroidApp ? 'android' : Platform.isMobileApp ? 'mobile' : 'desktop';
+	const trace = deviceArrangeTrace(plugin.app.vault.getName(), plugin.manifest.version, platform);
+	trace.record('plugin.initialize');
+	const store = new ArrangeStore(plugin.app, trace);
+	// Vault notifications can be from local code, another plugin, or Sync: no source attribution here.
+	plugin.registerEvent(plugin.app.vault.on('modify', file => {
+		if (file instanceof TFile && file.path === ARRANGE_STATE_PATH) trace.record('vault.modify', {
+			origin: 'unknown', mtime: file.stat?.mtime, size: file.stat?.size,
+		});
+	}));
 	plugin.registerView(ARRANGE_VIEW, leaf => new ArrangeView(leaf, store));
 	const syncChrome = () => document.body.classList.toggle(
 		'gvkit-arrange-active', Platform.isMobileApp && plugin.app.workspace.getActiveViewOfType(ArrangeView) !== null,
@@ -207,6 +217,7 @@ export class ArrangeView extends ItemView {
 			await navigator.clipboard.writeText(JSON.stringify({ time: new Date().toISOString(),
 				ownerIsMainDocument: doc === document, focused: this.focusRole(doc.activeElement),
 				preview: describe(edit?.preview), editor: describe(edit?.body.dom), events: this.interactionLog,
+				configTrace: this.store.trace?.export() ?? null,
 			}, null, 2));
 			new Notice('已复制交互诊断');
 		} catch { new Notice('复制失败，请重试'); }
@@ -230,6 +241,7 @@ export class ArrangeView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.closed = false;
+		this.store.trace?.record('view.open');
 		const root = this.contentEl;
 		root.empty();
 		root.addClass('gvkit-arrange');
@@ -367,7 +379,7 @@ export class ArrangeView extends ItemView {
 			if (this.timer !== null) window.clearTimeout(this.timer);
 			this.timer = window.setTimeout(() => {
 				this.timer = null;
-				if (this.busy) refresh(); else void this.reload();
+				if (this.busy) refresh(); else void this.reload('vault_change');
 			}, 180);
 		};
 		for (const name of ['create', 'modify', 'delete', 'rename'] as const) {
@@ -379,10 +391,10 @@ export class ArrangeView extends ItemView {
 			if (file.path.startsWith('安排/历史/')) refresh();
 		}));
 		this.registerInterval(window.setInterval(() => {
-			if (this.today !== dayKey(new Date(), this.store.state.timezone)) { if (!this.busy) void this.reload(); }
+			if (this.today !== dayKey(new Date(), this.store.state.timezone)) { if (!this.busy) void this.reload('day_tick'); }
 			else this.paintLists();
 		}, 60_000));
-		this.registerDomEvent(root.ownerDocument, 'visibilitychange', () => { if (root.ownerDocument.hidden) void this.saveEdit(); else void this.reload(); });
+		this.registerDomEvent(root.ownerDocument, 'visibilitychange', () => { if (root.ownerDocument.hidden) void this.saveEdit(); else void this.reload('visibility'); });
 		// iOS can keep visualViewport unchanged while Obsidian first adds a CSS
 		// keyboard inset, then shrinks the host. Reserve only the remaining overlap.
 		let restingHeight = ownerWindow.innerHeight;
@@ -471,9 +483,10 @@ export class ArrangeView extends ItemView {
 			bindViewport();
 		}
 		try { await this.store.enableRewards(); } catch (error) { this.error(error); }
-		await this.reload();
+		await this.reload('view_open');
 	}
 	async onClose(): Promise<void> {
+		this.store.trace?.record('view.close');
 		this.closed = true;
 		if (this.caretFrame !== null) this.contentEl.ownerDocument.defaultView?.cancelAnimationFrame(this.caretFrame);
 		this.caretFrame = null;
@@ -492,8 +505,9 @@ export class ArrangeView extends ItemView {
 		await this.saveEdit();
 		this.editing?.body.destroy();
 	}
-	private async reload(): Promise<void> {
-		try { await this.store.load(); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
+	private async reload(trigger = 'view_reload'): Promise<void> {
+		this.store.trace?.record('view.reload', { trigger });
+		try { await this.store.load(trigger); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
 		catch (error) { this.error(error); }
 	}
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
@@ -1452,7 +1466,10 @@ export class ArrangeView extends ItemView {
 	private keepEditor(): boolean {
 		const edit = this.editing;
 		return Boolean(edit && (edit.title.value !== edit.savedTitle || edit.body.value !== edit.savedBody
-			|| edit.composing || edit.title.ownerDocument.activeElement === edit.title || edit.body.focused));
+			|| edit.composing || edit.title.ownerDocument.activeElement === edit.title
+			// Pointer down focuses the preview before click opens the editor. Keep
+			// that target alive if an asynchronous reload finishes in between.
+			|| edit.preview.contains(edit.preview.ownerDocument.activeElement) || edit.body.focused));
 	}
 	private renderBody(): void {
 		const render = ++this.bodyRender;
@@ -1533,8 +1550,8 @@ export class ArrangeView extends ItemView {
 			try { await navigator.clipboard.writeText(`obsidian://gvkit-arrange?vault=${encodeURIComponent(this.app.vault.getName())}`); new Notice('已复制。iPhone 快捷指令使用“打开 URL”，再添加到主屏幕。'); }
 			catch { new Notice('无法复制，请使用命令面板“打开自御安排”'); }
 		}));
-		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { this.tips.start(); void this.reload(); }));
-		menu.addItem(item => item.setTitle('复制交互诊断').setIcon('clipboard-list').onClick(() => { this.tips.start(); void this.copyInteractionDiagnostics(); }));
+		menu.addItem(item => item.setTitle('刷新').setIcon('refresh-cw').onClick(() => { this.tips.start(); void this.reload('manual_refresh'); }));
+		menu.addItem(item => item.setTitle('复制交互诊断（含配置 Trace）').setIcon('clipboard-list').onClick(() => { this.tips.start(); void this.copyInteractionDiagnostics(); }));
 		menu.showAtMouseEvent(event);
 	}
 	private settings(): void {
