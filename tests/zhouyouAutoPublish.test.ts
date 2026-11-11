@@ -19,7 +19,7 @@ const shim = [
   'export const requestUrl = (req) => globalThis.__send(req);',
   'export function getFrontMatterInfo(content) {',
   '  const m = /^(?:\\uFEFF)?---\\r?\\n([\\s\\S]*?)\\r?\\n---\\r?\\n/.exec(content);',
-  '  return m ? { exists: true, frontmatter: m[1], contentStart: m[0].length } : { exists: false, frontmatter: \"\", contentStart: 0 };',
+  '  return m ? { exists: true, frontmatter: m[1], from: m[0].indexOf("\\n") + 1, to: m[0].indexOf("\\n") + 1 + m[1].length, contentStart: m[0].length } : { exists: false, frontmatter: \"\", contentStart: 0 };',
   '}',
   'export function parseYaml(content) { const obj = {}; for (const line of content.split(/\\r?\\n/)) {',
   '  const at = line.indexOf(\":\"); if (at > 0) obj[line.slice(0, at).trim()] = line.slice(at + 1).trim();',
@@ -64,17 +64,24 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   let afterWrite: (body: any) => any = () => undefined;
   let responseForRead: (body: any) => any = () => undefined;
   let responseForProducts: (body: any) => any = () => undefined;
+  let beforeSave: (next: any) => any = () => undefined;
+  let saveTail: Promise<void> = Promise.resolve();
   let disk: any = {};
   let token = TOKEN;
   let autoSync = false;
+  let endpoint = ENDPOINT;
   const files: Record<string, string> = {};
   const settings = {
-    getZhouyouUrl: () => ENDPOINT,
+    getZhouyouUrl: () => endpoint,
     getAutoPublishBindings: () => structuredClone(disk.zhouyouAutoBindings ?? {}),
     getZhouyouAutoSync: () => autoSync,
     getPublishBindingsSnapshot: () => [],
-    updateNonSecret: async (fn: (value: any) => void) => {
-      const next = structuredClone(disk); fn(next); disk = next;
+    updateNonSecret: (fn: (value: any) => void) => {
+      const work = saveTail.then(async () => {
+        const next = structuredClone(disk); fn(next); await beforeSave(next); disk = next;
+      });
+      saveTail = work.catch(() => undefined);
+      return work;
     },
   };
   const app = {
@@ -144,7 +151,7 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     receipts.set(body.operationId, { payload: structuredClone(body), ack: {
       documentId: remote.documentId, recordVersion: remote.recordVersion,
     } });
-    const post = afterWrite(body);
+    const post = await afterWrite(body);
     if (post) return post;
     return { status: 200, json: { code: 0, data: {
       documentId: remote.documentId, recordVersion: remote.recordVersion,
@@ -153,6 +160,7 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   return {
     publisher, settings, app, context, file, requests, notices, files,
     set token(value: string) { token = value; },
+    set endpoint(value: string) { endpoint = value; },
     set autoSync(value: boolean) { autoSync = value; },
     get raw() { return raw; },
     set raw(value: string) { raw = value; },
@@ -165,6 +173,7 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     set afterWrite(fn: (b: any) => any) { afterWrite = fn; },
     set responseForRead(fn: (b: any) => any) { responseForRead = fn; },
     set responseForProducts(fn: (b: any) => any) { responseForProducts = fn; },
+    set beforeSave(fn: (next: any) => any) { beforeSave = fn; },
     restart() { return new Publisher(app, settings, secret, debounceMs); },
   };
 }
@@ -244,7 +253,7 @@ test('an old incomplete pending request is not changed or silently resent after 
     pending: { operationId: '00000000-0000-4000-8000-000000000001', content: '', title: '' } } } };
   await h.publisher.publish(h.context);
   assert.equal(h.writes, 0);
-  assert.deepEqual(h.requests.map(x => x.action), ['list_products', 'read_current']);
+  assert.deepEqual(h.requests, []);
   assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
   assert.ok(h.notices.some(s => s.includes('旧版同步遗留待确认')));
 });
@@ -301,124 +310,39 @@ function approveRecovery(h: ReturnType<typeof makeHarness>) {
   }]);
   return { pending, backupPath, backup };
 }
-test('reviewed legacy recovery preserves full backup and evidence; update/repeat/restart stay on one document', async () => {
+test('old approval files cannot convert incomplete pending into a new operation', async () => {
   const h = makeHarness(), evidence = approveRecovery(h);
-  const raw = h.raw;
-  h.beforeWrite = (body, disk) => {
-    assert.notEqual(body.operationId, OLD_OP);
-    assert.equal(body.sourceId, SOURCE_ID);
-    assert.equal(body.documentId, null);
-    assert.equal(body.recordVersion, null);
-    assert.deepEqual(disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending, evidence.pending);
-    assert.equal(disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.oldOutcome, 'unknown');
-    assert.equal(disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.newOperationId, body.operationId);
-  };
+  const before = structuredClone(h.disk);
   await h.publisher.publish(h.context);
-  assert.equal(h.writes, 1);
-  assert.equal(h.raw, raw);
+  await h.restart().publish(h.context);
+  assert.equal(h.requests.length, 0);
+  assert.deepEqual(h.disk, before);
   assert.equal(h.files[PRIVATE_ROOT + evidence.backupPath], evidence.backup);
-  h.beforeWrite = () => undefined;
-  await h.restart().publish(h.context);
-  assert.equal(h.writes, 1);
-  h.raw += '修改一次\n';
-  await h.restart().publish(h.context);
-  assert.equal(h.writes, 2);
-  assert.equal(h.remote.documentId, 'doc-1');
-  assert.equal(h.remote.currentVersionNo, 1);
-  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending, evidence.pending);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.oldOutcome, 'unknown');
-  assert.deepEqual(h.disk.otherSetting, { retained: true });
+  assert.ok(h.notices.some(s => s.includes('人工核对')));
 });
-test('legacy recovery refuses stale backup, unreviewed source, changed endpoint and prior success', async () => {
+
+test('pending identity or endpoint changes across restart never replay the old request', async () => {
   for (const change of [
-    (h: any) => { h.files[PRIVATE_ROOT + 'zhouyou-legacy-backup-fixture.json'] += ' '; },
-    (h: any) => { h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId = 'different'; },
-    (h: any) => { const p = PRIVATE_ROOT + 'zhouyou-legacy-recovery.json';
-      h.files[p] = h.files[p].replace(ENDPOINT, 'https://other.example.test/sync'); },
-    (h: any) => { h.disk.zhouyouAutoBindings[SOURCE_ID].version = 1; },
+    (h: ReturnType<typeof makeHarness>) => { h.token = 'ANOTHER_FAKE_TOKEN'; },
+    (h: ReturnType<typeof makeHarness>) => { h.endpoint = 'https://other.example.test/api/producer-documents/obsidian-sync'; },
   ]) {
-    const h = makeHarness(); approveRecovery(h); change(h);
-    const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+    const h = makeHarness();
+    h.beforeWrite = () => ({ status: 503, json: { code: 'DOWN' }, headers: {} });
     await h.publisher.publish(h.context);
-    assert.equal(h.writes, 0);
-    assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
-    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence, undefined);
-  }
-});
-test('reviewed legacy recovery pauses if current document appears, even with identical content', async () => {
-  const h = makeHarness(); approveRecovery(h);
-  h.remote = { sourceId: SOURCE_ID, documentId: 'existing', recordVersion: 1, currentVersionNo: 1,
-    title: '原始标题', content: '原始正文', documentStatus: 'active' };
-  await h.publisher.publish(h.context);
-  assert.equal(h.writes, 0);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId, OLD_OP);
-});
-test('recovery conflict stops permanently pending reconciliation, including across restart', async () => {
-  for (const code of ['OBSIDIAN_SYNC_RECORD_VERSION_CONFLICT', 'SOURCE_ALREADY_EXISTS']) {
-    const h = makeHarness(); approveRecovery(h);
-    h.beforeWrite = () => ({ status: 409, json: { code }, headers: {} });
-    await h.publisher.publish(h.context);
-    const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-    assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 1);
-    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.blocked, true);
+    const saved = structuredClone(h.disk), calls = h.requests.length;
+    change(h);
     await h.restart().publish(h.context);
-    assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 1);
-    assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
+    assert.equal(h.requests.length, calls);
+    assert.deepEqual(h.disk, saved);
   }
 });
-test('recovery lost ACK retrieves its receipt and independently verifies publication; never reuses legacy key', async () => {
-  const h = makeHarness(); approveRecovery(h);
-  h.afterWrite = () => { throw Error('lost ACK'); };
-  await h.publisher.publish(h.context);
-  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-  assert.notEqual(pending.operationId, OLD_OP);
-  await h.restart().publish(h.context);
-  assert.equal(h.writes, 1);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending.operationId, OLD_OP);
-});
-test('recovery unsaved response reuses exact new request; changed identity cannot retry or confirm', async () => {
-  const h = makeHarness(); approveRecovery(h);
-  h.beforeWrite = () => ({ status: 503, json: { code: 'DOWN' }, headers: {} });
-  await h.publisher.publish(h.context);
-  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-  h.token = 'ANOTHER_FAKE_TOKEN';
-  const calls = h.requests.length;
-  await h.restart().publish(h.context);
-  assert.equal(h.requests.length, calls);
-  h.token = TOKEN;
-  h.beforeWrite = () => undefined;
-  await h.restart().publish(h.context);
-  assert.equal(h.writes, 1);
-  assert.deepEqual(h.requests.filter(r => r.action === 'sync_smart').map(r => r.operationId),
-    [pending.operationId, pending.operationId]);
-});
-test('identity change while reading stops recovery before any save request', async () => {
-  const h = makeHarness(); approveRecovery(h);
+
+test('identity changes during pre-read cannot start a write', async () => {
+  const h = makeHarness();
   h.responseForRead = () => { h.token = 'ANOTHER_FAKE_TOKEN'; };
   await h.publisher.publish(h.context);
   assert.equal(h.writes, 0);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId, OLD_OP);
-});
-test('recovery rejects archived, forbidden, unknown 404 and content-hash mismatch', async () => {
-  for (const reply of [
-    { status: 403, json: { code: 'FORBIDDEN' }, headers: {} },
-    { status: 404, json: { code: 'UNKNOWN' }, headers: {} },
-    { status: 200, json: { code: 0, data: { sourceId: SOURCE_ID, documentId: 'old',
-      recordVersion: 1, title: 'x', content: 'x', documentStatus: 'archived' } }, headers: {} },
-  ]) {
-    const h = makeHarness(); approveRecovery(h);
-    h.responseForRead = () => reply;
-    await h.publisher.publish(h.context);
-    assert.equal(h.writes, 0);
-    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending.operationId, OLD_OP);
-  }
-  const h = makeHarness(); approveRecovery(h);
-  h.afterWrite = () => { h.remote.contentHash = 'incorrect'; };
-  await h.publisher.publish(h.context);
-  assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
+  assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 0);
 });
 
 test('server recordVersion changed independently: pause even when draft body matches', async () => {
@@ -434,22 +358,6 @@ test('server recordVersion changed independently: pause even when draft body mat
   assert.equal(h.writes, 1);
   assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].blocked);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].recordVersion, 1);
-});
-
-test('complete recovery pending cannot be cleared merely because current draft matches', async () => {
-  const h = makeHarness(); approveRecovery(h);
-  h.beforeWrite = () => ({ status: 503, json: { code: 'DOWN' }, headers: {} });
-  await h.publisher.publish(h.context);
-  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-  h.remote = { sourceId: SOURCE_ID, documentId: 'doc-concurrent', recordVersion: 2,
-    currentVersionNo: 1, title: pending.payload.title, content: pending.payload.content,
-    contentHash: hash(pending.payload.content), publishedContentHash: hash('older publication'),
-    documentStatus: 'active' };
-  const notices = h.notices.length;
-  await h.restart().publish(h.context);
-  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
-  assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 2, 'original receipt is queried by exact replay');
-  assert.ok(!h.notices.slice(notices).some(s => /已发布|原操作成功/.test(s)));
 });
 
 test('fully published same content is a read-only no-op with no new version', async () => {
@@ -576,7 +484,7 @@ test('old smart pending without the original sourceRevision must not be rewritte
   await h.publisher.publish(h.context);
   assert.equal(h.writes, 0);
   assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, old);
-  assert.deepEqual(h.requests.map((x: any) => x.action), ['list_products', 'read_current']);
+  assert.deepEqual(h.requests, []);
 });
 
 test('temporary post-write readback outage retains operation and retries with same UUID', async () => {
@@ -619,4 +527,105 @@ test('legacy binding evidence without a document ID cannot turn into an accident
   assert.equal(h.writes, 0);
   assert.deepEqual(h.requests.map((x: any) => x.action), ['list_products', 'read_current']);
   assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].blocked);
+});
+
+test('multiline metadata is removed as a whole while user properties, comments and body remain', () => {
+  const input = '\uFEFF---\r\nname: keep\r\n# user comment\r\nzhou_operation_id: |\r\n  old-operation\r\n  continuation\r\ndescription: |\r\n  user text\r\n---\r\n正文\r\n';
+  assert.equal(publishBody(input), '\uFEFF---\nname: keep\n# user comment\ndescription: |\n  user text\n---\n正文\n');
+  assert.equal(publishBody('正文\r下一行\r'), '正文\n下一行\n');
+});
+
+test('in-flight rename retains the latest path, binding and confirmed request result', async () => {
+  const h = makeHarness();
+  h.afterWrite = async () => {
+    const oldPath = h.file.path;
+    h.file.path = '项目/研发/同步时改名.md';
+    h.file.basename = '同步时改名';
+    await h.publisher.renamed(h.file, oldPath);
+  };
+  await h.publisher.publish(h.context);
+  let b = h.disk.zhouyouAutoBindings[SOURCE_ID];
+  assert.equal(b.path, h.file.path);
+  assert.equal(b.documentId, 'doc-1');
+  assert.equal(b.pending, undefined);
+  h.afterWrite = () => undefined;
+  await h.restart().publish(h.context);
+  b = h.disk.zhouyouAutoBindings[SOURCE_ID];
+  assert.equal(b.documentId, 'doc-1');
+  assert.equal(h.remote.title, h.file.basename);
+  assert.equal(h.writes, 2);
+});
+
+test('rename queued behind pending persistence does not overwrite that pending with an older snapshot', async () => {
+  const h = makeHarness();
+  let renamed: Promise<void> | undefined;
+  h.beforeSave = next => {
+    if (!renamed && next.zhouyouAutoBindings?.[SOURCE_ID]?.pending) {
+      const oldPath = h.file.path;
+      h.file.path = '项目/研发/保存时改名.md';
+      h.file.basename = '保存时改名';
+      renamed = h.publisher.renamed(h.file, oldPath);
+    }
+  };
+  await h.publisher.publish(h.context);
+  await renamed;
+  const b = h.disk.zhouyouAutoBindings[SOURCE_ID];
+  assert.equal(b.path, h.file.path);
+  assert.ok(b.pending, 'rename must retain the latest persisted immutable request');
+  assert.equal(h.writes, 0, 'a moved file is not sent under stale context');
+});
+
+test('disabling automation or stopping during pre-read or pending persistence prevents unsent writes', async () => {
+  for (const stage of ['read', 'save']) {
+    for (const stop of [false, true]) {
+      const h = makeHarness();
+      h.autoSync = true;
+      const cancel = () => { if (stop) h.publisher.stop(); else h.autoSync = false; };
+      if (stage === 'read') h.responseForProducts = cancel;
+      else h.beforeSave = next => { if (next.zhouyouAutoBindings?.[SOURCE_ID]?.pending) cancel(); };
+      await h.publisher.sync(h.file, undefined, false);
+      assert.equal(h.writes, 0);
+      assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 0);
+    }
+  }
+});
+
+test('known document without a last confirmed recordVersion never overwrites remote content', async () => {
+  const h = makeHarness();
+  await h.publisher.publish(h.context);
+  delete h.disk.zhouyouAutoBindings[SOURCE_ID].recordVersion;
+  h.remote.recordVersion = 9;
+  h.remote.content = '独立远端修改';
+  h.remote.contentHash = hash(h.remote.content);
+  h.raw += '本地新改动';
+  const saved = structuredClone(h.disk), calls = h.requests.length;
+  await h.restart().publish(h.context);
+  assert.equal(h.requests.length, calls);
+  assert.equal(h.remote.content, '独立远端修改');
+  assert.deepEqual(h.disk, saved);
+});
+
+test('complete old pending without identity evidence is retained without replay', async () => {
+  const h = makeHarness();
+  h.beforeWrite = () => ({ status: 503, json: { code: 'DOWN' }, headers: {} });
+  await h.publisher.publish(h.context);
+  delete h.disk.zhouyouAutoBindings[SOURCE_ID].identityHash;
+  const saved = structuredClone(h.disk), calls = h.requests.length;
+  await h.restart().publish(h.context);
+  assert.equal(h.requests.length, calls);
+  assert.deepEqual(h.disk, saved);
+});
+
+test('unsaved editor content is saved before reading, and edits during pre-read are not sent', async () => {
+  const h = makeHarness();
+  let editor = h.raw + '未保存编辑';
+  h.context.view.editor.getValue = () => editor;
+  h.context.view.save = async () => { h.raw = editor; };
+  await h.publisher.publish(h.context);
+  assert.equal(h.remote.content, publishBody(editor));
+  editor += '点击前';
+  h.responseForRead = () => { editor += '读取期间继续编辑'; };
+  const calls = h.requests.filter(r => r.action === 'sync_smart').length;
+  await h.publisher.publish(h.context);
+  assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, calls);
 });
