@@ -93,6 +93,14 @@ export class PublishSettings {
 		return JSON.parse(JSON.stringify(this.data.zhouyouAutoBindings ?? {}));
 	}
 
+	/** Explicit opt-in: upgrades must not start uploading unrelated existing notes. */
+	getZhouyouAutoSync(): boolean { return this.data.zhouyouAutoSync === true; }
+
+	async setZhouyouAutoSync(value: boolean): Promise<void> {
+		this.requireLoaded();
+		await this.updateNonSecret(data => { data.zhouyouAutoSync = value; });
+	}
+
 	getZhouyouUrl(): string { return this.zhouyouUrl; }
 
 	getZhouyouSecretReference(): string { return this.secretReference; }

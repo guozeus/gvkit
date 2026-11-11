@@ -10,6 +10,7 @@ import { Window } from 'happy-dom';
 // Run the production settings handlers and client with DOM/Obsidian storage adapters.
 const shim = `
 export const notices = [];
+export const requestUrl = (req) => globalThis.__settingsRequestUrl(req);
 export class Notice { constructor(message) { notices.push(message); } }
 export class Modal {}
 export class PluginSettingTab {
@@ -31,6 +32,12 @@ export class Setting {
     const buttonEl = this.settingEl.createEl('button');
     const control = { buttonEl, setButtonText(v) { buttonEl.textContent=v; return this; },
       setDisabled(v) { buttonEl.disabled=v; return this; }, onClick(fn) { buttonEl.onclick=fn; return this; } };
+    fn(control); return this;
+  }
+  addToggle(fn) {
+    const inputEl = this.settingEl.createEl('input'); inputEl.type = 'checkbox';
+    const control = { setValue(v) { inputEl.checked=v; return this; },
+      onChange(callback) { inputEl.onchange = () => callback(inputEl.checked); return this; } };
     fn(control); return this;
   }
 }
@@ -82,11 +89,11 @@ test('two explicit saves persist, reload and feed HTTP publishing without exposi
     const render = () => { tab.containerEl.innerHTML = ''; tab.renderZhouyou(prefs); };
     render();
     const root = tab.containerEl;
-    assert.deepEqual([...root.querySelectorAll('label')].map((el: any) => el.textContent), ['地址', 'Key']);
-    assert.deepEqual([...root.querySelectorAll('button')].map((el: any) => el.textContent), ['保存', '保存']);
+    assert.deepEqual([...root.querySelectorAll('label')].map((el: any) => el.textContent), ['地址', '编辑后自动同步', 'Key']);
+    assert.deepEqual([...root.querySelectorAll('button')].map((el: any) => el.textContent), ['保存', '保存', '验证旧令牌']);
     assert.equal(root.querySelectorAll('a,select').length, 0);
-    let [urlInput, keyInput] = root.querySelectorAll('input');
-    let [urlSave, keySave] = root.querySelectorAll('button');
+    let [urlInput, keyInput] = root.querySelectorAll('input:not([type=checkbox])');
+    let [urlSave, keySave, verifyKey] = root.querySelectorAll('button');
     assert.equal(keyInput.type, 'password'); assert.equal(keyInput.value, '');
     assert.ok(keyInput.placeholder.includes('已保存'));
     const endpoint = 'http://192.0.2.5:18769/api/producer-documents/obsidian-sync';
@@ -107,13 +114,27 @@ test('two explicit saves persist, reload and feed HTTP publishing without exposi
     assert.equal(secrets.get(m.DEFAULT_ZHOUYOU_SECRET_REF), 'FAKE_NEW_KEY');
     assert.equal(secrets.get('other-plugin-secret'), 'FAKE_OLD_KEY');
     assert.equal(keyInput.value, ''); assert.equal(m.notices.at(-1), 'Key 已保存');
+    const verifiedRequests: any[] = [];
+    (globalThis as any).__settingsRequestUrl = async (request: any) => {
+      verifiedRequests.push(request);
+      return {status: 200, json: {code: 0, data: {products:[{id:'product-1',name:'测试项目'}]}}};
+    };
+    await verifyKey.onclick();
+    assert.equal(verifiedRequests[0].url, endpoint);
+    assert.deepEqual(JSON.parse(verifiedRequests[0].body), {action:'list_products'});
+    assert.equal(verifiedRequests[0].headers.authorization, 'Bearer FAKE_NEW_KEY');
+    assert.ok(m.notices.at(-1).includes('测试项目'));
+    (globalThis as any).__settingsRequestUrl = async () => ({status: 401, json: {code: 'UNAUTHORIZED'}});
+    await verifyKey.onclick();
+    assert.ok(m.notices.at(-1).includes('HTTP 401'));
+    assert.equal(secrets.get(m.DEFAULT_ZHOUYOU_SECRET_REF), 'FAKE_NEW_KEY');
     keySave.onclick(); assert.equal(secrets.get(m.DEFAULT_ZHOUYOU_SECRET_REF), 'FAKE_NEW_KEY');
     assert.equal(m.notices.at(-1), '请先填写 Key');
     failSecret = true; keyInput.value = 'FAKE_REPLACEMENT'; keySave.onclick();
     assert.ok(m.notices.at(-1).includes('未能保存')); failSecret = false;
     tab.dispose(); assert.equal(keyInput.value, ''); render();
-    [urlInput, keyInput] = root.querySelectorAll('input');
-    [urlSave, keySave] = root.querySelectorAll('button');
+    [urlInput, keyInput] = root.querySelectorAll('input:not([type=checkbox])');
+    [urlSave, keySave, verifyKey] = root.querySelectorAll('button');
     assert.equal(urlInput.value, endpoint); assert.equal(keyInput.value, '');
     const reloaded = new m.PublishSettings(store); await reloaded.load();
     const runtime = new m.DeviceZhouyouSecret(app, () => reloaded.getZhouyouSecretReference());
@@ -130,6 +151,7 @@ test('two explicit saves persist, reload and feed HTTP publishing without exposi
     assert.ok(!JSON.stringify({disk,local,notices:m.notices,html:root.outerHTML}).includes('FAKE_'));
     tab.dispose();
   } finally {
+    delete (globalThis as any).__settingsRequestUrl;
     globalThis.document = previousDocument;
     await win.happyDOM.close(); await rm(dir, {recursive:true,force:true});
   }

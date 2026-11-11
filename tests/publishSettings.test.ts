@@ -196,3 +196,24 @@ test('latest URL interruption rolls back only to confirmed saved value', async (
 	assert.equal(settings.getZhouyouUrl(), disk.zhouyouSyncUrl);
 	assert.equal(settings.getZhouyouUrl(), 'https://one.test/api/producer-documents/obsidian-sync');
 });
+
+test('auto-sync is opt-in and preserves other settings and pending operations across restarts', async () => {
+  let disk: Record<string, unknown> = { publishShortcut: false,
+    zhouyouAutoBindings: { gvid: { sourceId: 'old', pending: { operationId: 'keep' } } },
+    zhouyouSyncUrl: 'https://example.test/api/producer-documents/obsidian-sync' };
+  const store = { loadData: async () => structuredClone(disk),
+    saveData: async (data: Record<string, unknown>) => { disk = structuredClone(data); } };
+  const first = new PublishSettings(store);
+  await first.load();
+  assert.equal(first.getZhouyouAutoSync(), false);
+  await first.setZhouyouAutoSync(true);
+  const second = new PublishSettings(store);
+  await second.load();
+  assert.equal(second.getZhouyouAutoSync(), true);
+  assert.equal(second.getPublishShortcut(), false);
+  assert.deepEqual(second.getAutoPublishBindings().gvid.pending, { operationId: 'keep' });
+  await second.setZhouyouAutoSync(false);
+  const third = new PublishSettings(store); await third.load();
+  assert.equal(third.getZhouyouAutoSync(), false);
+  assert.equal(third.getZhouyouUrl(), disk.zhouyouSyncUrl);
+});

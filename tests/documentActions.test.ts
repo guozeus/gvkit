@@ -150,7 +150,7 @@ test('target selection uses captured file, never another active document', () =>
 	assert.equal(target.item('发布到协作板').disabled, false);
 	target.item('发布到协作板').fire();
 	assert.deepEqual(h.delivered, []);
-	target.item('发布到宙游文档中心').fire();
+	target.item('同步到宙游文档中心').fire();
 	assert.deepEqual(h.delivered, [b.view.file]);
 	assert.notEqual(h.delivered[0], a.view.file);
 });
@@ -167,7 +167,7 @@ test('switch, close and old menu callbacks cannot publish another file', () => {
 	fresh.item('发布').fire();
 	const selected = h.menus.at(-1)!;
 	h.setLeaves([]);
-	selected.item('发布到宙游文档中心').fire();
+	selected.item('同步到宙游文档中心').fire();
 	assert.deepEqual(h.delivered, []);
 });
 
@@ -246,7 +246,7 @@ test('without an injected target handler, the UI only reports local configuratio
 	const h = harness(['项目/游戏/A.md'], false);
 	const a = h.leaves[0]!;
 	h.menu(a.view.file!, 'more-options', a.leaf).item('发布').fire();
-	h.menus.at(-1)!.item('发布到宙游文档中心').fire();
+	h.menus.at(-1)!.item('同步到宙游文档中心').fire();
 	assert.deepEqual(h.delivered, []);
 	assert.deepEqual(h.notices, ['请先配置宙游文档中心。']);
 });

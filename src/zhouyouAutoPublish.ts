@@ -1,17 +1,17 @@
 import { App, Notice, requestUrl, getFrontMatterInfo, parseYaml, type TFile } from 'obsidian';
 import type { PublishSettings } from './publishSettings';
 import type { DeviceZhouyouSecret } from './publishSecretSettings';
-import type { PublishDocumentContext } from './documentActions';
+import { isPublishableMarkdownPath, type PublishDocumentContext } from './documentActions';
 import { sha256Utf8 } from './zhouyouClient';
 
 type SyncPayload = {
   sourceId: string; operationId: string; documentId: string | null;
-  recordVersion: number | null; title: string; content: string;
+  recordVersion: number | null; title: string; content: string; sourceRevision: string;
 };
 type SmartPending = { action: 'sync_smart'; endpoint: string; operationId: string; payload: SyncPayload };
 type OldPending = { operationId: string; content: string; title: string };
 export type AutoBinding = { sourceId: string; documentId?: string; productId?: string; recordVersion?: number;
-  version?: number; content?: string; path: string; pending?: SmartPending | OldPending;
+  version?: number; content?: string; path: string; blocked?: string; pending?: SmartPending | OldPending;
   legacyEvidence?: LegacyEvidence };
 type Binding = AutoBinding;
 type RecoveryApproval = { sourceIdHash: string; oldOperationIdHash: string; endpoint: string;
@@ -50,21 +50,32 @@ export function publishBody(content: string): string {
 
 export class ZhouyouAutoPublisher {
   private busy = new Set<TFile>();
-  constructor(private app: App, private settings: PublishSettings, private secret: DeviceZhouyouSecret) {}
+  private timers = new Map<TFile, ReturnType<typeof setTimeout>>();
+  private queuedDuringWrite = new Set<TFile>();
+  private active = true;
+  constructor(private app: App, private settings: PublishSettings, private secret: DeviceZhouyouSecret,
+    private debounceMs = 2000) {}
   private rows(): Record<string, Binding> { return this.settings.getAutoPublishBindings(); }
   statusLabel(context: PublishDocumentContext): string {
     const b = this.rows()[this.key(context.file)];
-    if (b?.pending) return '🟠 上次发布待确认，点击重试';
-    if (!b?.version) return '';
-    if (b.content === undefined) return '✅ 已发布';
-    return publishBody(context.view.editor.getValue()) === b.content ? '✅ 已发布，无新改动' : '🟠 上次发布后有更新';
+    if (b?.blocked) return '已暂停同步，需核对';
+    if (b?.pending) return '上次同步待确认';
+    if (!b?.documentId) return '';
+    if (b.content === undefined) return '已绑定';
+    return publishBody(context.view.editor.getValue()) === b.content ? '已同步' : '有待同步修改';
   }
   private key(file: TFile): string {
     return String(this.app.metadataCache.getFileCache(file)?.frontmatter?.gvid || file.path);
   }
   private async save(key: string, binding: Binding): Promise<void> {
     await this.settings.updateNonSecret(data => {
-      data.zhouyouAutoBindings = { ...(data.zhouyouAutoBindings as Record<string, Binding> ?? {}), [key]: binding };
+      const rows = { ...(data.zhouyouAutoBindings as Record<string, Binding> ?? {}) };
+      // A note may gain its GVID after it was first seen under its path key.
+      for (const [oldKey, row] of Object.entries(rows)) {
+        if (oldKey !== key && (row.sourceId === binding.sourceId || row.path === binding.path)) delete rows[oldKey];
+      }
+      rows[key] = binding;
+      data.zhouyouAutoBindings = rows;
     });
     this.refreshMarkers();
   }
@@ -129,7 +140,7 @@ export class ZhouyouAutoPublisher {
       throw new Error('旧操作与已核对备份不一致，已暂停发布。');
     return approval;
   }
-  private async call(action: 'read_current' | 'sync_smart', payload: object, endpoint: string, expectedToken?: string): Promise<any> {
+  private async call(action: 'list_products' | 'read_current' | 'sync_smart', payload: object, endpoint: string, expectedToken?: string): Promise<any> {
     const token = this.secret.runtimeCredential();
     if (!token) throw new Error('请在 GVKit 设置中配置个人同步令牌。');
     const checkSession = () => {
@@ -154,7 +165,7 @@ export class ZhouyouAutoPublisher {
       key.toLowerCase() === 'x-obsidian-sync-request-id')?.[1];
     console.info('[GVKit Zhouyou]', { action, time: new Date().toISOString(),
       status: response.status, code: result?.code ?? null, requestId: requestId ?? null });
-    if (response.status !== 200 || result?.code !== 0 || !result.data || typeof result.data !== 'object') {
+    if (response.status < 200 || response.status >= 300 || result?.code !== 0 || !result.data || typeof result.data !== 'object') {
       if (response.status === 401 || response.status === 403)
         throw Object.assign(new Error('个人令牌无效或无权访问文档中心（HTTP ' + response.status + '）。'),
           { status: response.status, code: result?.code });
@@ -180,12 +191,6 @@ export class ZhouyouAutoPublisher {
       throw new Error('原文档正文哈希不一致，已暂停发布。');
     return value as Remote;
   }
-  private isPublished(remote: Remote, content: string, title: string): boolean {
-    // verifiedCurrent has already checked contentHash against the actual body.
-    return remote.content === content && remote.title === title &&
-      typeof remote.contentHash === 'string' && remote.publishedContentHash === remote.contentHash &&
-      typeof remote.currentVersionNo === 'number' && remote.currentVersionNo > 0;
-  }
   private async confirmed(key: string, b: Binding, remote: Remote): Promise<Binding> {
     const updated: Binding = { ...b, documentId: remote.documentId,
       productId: remote.productId ?? b.productId, recordVersion: remote.recordVersion,
@@ -193,131 +198,234 @@ export class ZhouyouAutoPublisher {
     await this.save(key, updated);
     return updated;
   }
+  /** Only native file events after layout-ready are queued: never scan/backfill the Vault. */
+  queue(file: TFile): void {
+    if (!this.active || !this.settings.getZhouyouAutoSync() || file.extension !== 'md'
+      || !isPublishableMarkdownPath(file.path)) return;
+    const old = this.timers.get(file);
+    if (old !== undefined) clearTimeout(old);
+    this.timers.set(file, setTimeout(() => {
+      this.timers.delete(file);
+      if (!this.active || !this.settings.getZhouyouAutoSync()) return;
+      if (this.busy.has(file)) { this.queuedDuringWrite.add(file); return; }
+      void this.sync(file, undefined, false);
+    }, this.debounceMs));
+  }
+
   async publish(context: PublishDocumentContext): Promise<void> {
-    const file = context.file;
-    if (this.busy.has(file)) { new Notice('这篇笔记正在发布，请等待结果。'); return; }
-    this.busy.add(file);
-    const status = new Notice('宙游发布 · ' + file.basename + '\n正在读取当前笔记…', 0);
+    if (!context.isCurrent()) return;
     try {
-      const endpoint = this.settings.getZhouyouUrl();
-      if (!endpoint) throw new Error('请在 GVKit 设置中填写宙游文档中心同步地址。');
       await (context.view as any).save();
-      if (!context.isCurrent()) throw new Error('当前笔记已切换，请重新点击发布。');
-      const raw = await this.app.vault.read(file);
-      const content = publishBody(raw), title = file.basename;
-      let b = await this.binding(file, raw);
-      const key = this.key(file);
-      if (!uuidOrNull(b.sourceId)) throw new Error('来源 ID 不是有效 UUID，已停止发布以免创建错误关联。');
-      if (b.documentId !== undefined && (typeof b.documentId !== 'string' || !b.documentId))
-        throw new Error('历史文档绑定无效，不能当作首次发布。');
+      if (!context.isCurrent()) throw new Error('当前笔记已切换，请重新点击同步。');
+      await this.sync(context.file, context, true);
+    } catch (error) {
+      new Notice(context.file.basename + '\n' + (error instanceof Error ? error.message : '同步结果待核对。'), 10000);
+    }
+  }
+
+  private async sync(file: TFile, context?: PublishDocumentContext, manual = false): Promise<void> {
+    if (this.busy.has(file)) {
+      if (manual) new Notice('这篇笔记正在同步。');
+      else this.queuedDuringWrite.add(file);
+      return;
+    }
+    if (!this.active || file.extension !== 'md' || !isPublishableMarkdownPath(file.path)) return;
+    if (!manual && !this.settings.getZhouyouAutoSync()) return;
+    this.busy.add(file);
+    const status = manual ? new Notice('宙游同步 · ' + file.basename + '\n正在核对原文档…', 0) : null;
+    try {
+      const path = file.path;
+      const endpoint = this.settings.getZhouyouUrl();
       const token = this.secret.runtimeCredential();
-      if (!token) throw new Error('请在 GVKit 设置中配置个人同步令牌。');
-      const identityHash = await sha256Utf8('gvkit-zhouyou-recovery-identity:v1:' + token);
-      const approval = await this.recoveryApproval(b, endpoint);
-      const recovering = b.legacyEvidence && b.pending && isSmartPending(b.pending) &&
-        b.pending.operationId === b.legacyEvidence.newOperationId;
-      if (recovering && (b.legacyEvidence!.blocked || b.legacyEvidence!.endpoint !== endpoint ||
-        b.legacyEvidence!.identityHash !== identityHash))
-        throw new Error('旧笔记恢复操作存在冲突或入口、身份已变化，请先核对；原请求已保留。');
-      await this.save(key, b);
-      status.setMessage('宙游发布 · ' + file.basename + '\n正在核对原文档…');
-
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const pending = b.pending;
-        const expectedId = b.documentId ?? (pending && isSmartPending(pending) ?
-          pending.payload.documentId ?? undefined : undefined);
-        let remote: Remote | null = null;
-        try {
-          const result = await this.call('read_current',
-            { sourceId: b.sourceId, documentId: expectedId ?? null }, endpoint, token);
-          remote = await this.verifiedCurrent(result, b.sourceId, expectedId);
-        } catch (error) {
-          if (!isMissing(error)) throw error;
-          if (expectedId) throw new Error('已绑定的原文档不存在，已暂停发布；不会清空绑定重建。');
-        }
-
-        if (b.pending) {
-          const previous = b.pending;
-          if (!isSmartPending(previous) && approval) {
-            if (remote) throw new Error('旧来源已出现文档，已暂停恢复，请核对原文档。');
-            b = { ...b, pending: undefined, legacyEvidence: {
-              pending: structuredClone(previous), historicalEndpoint: 'unknown', oldOutcome: 'unknown',
-              backupPath: approval.backupPath, endpoint, identityHash, newOperationId: '',
-            } };
-          } else {
-            if (!isSmartPending(previous))
-              throw new Error('旧版发布遗留待确认操作，缺少完整原请求。请核对原文档后再继续，不能变更原操作重发。');
-            if (previous.endpoint !== endpoint || previous.operationId !== previous.payload.operationId ||
-              previous.payload.sourceId !== b.sourceId)
-              throw new Error('上次发布的来源或地址已变化，原请求已保留，请先核对。');
-            // Exact replay retrieves the server's idempotent receipt even after a lost ACK,
-            // a newer draft, or local edits. Never infer the operation's outcome from a draft.
-          }
-        }
-        if (!b.pending && remote && this.isPublished(remote, content, title)) {
-          b = await this.confirmed(key, b, remote);
-          new Notice(file.basename + '\n已发布，正文无新改动。', 6000);
-          return;
-        }
-        if (!b.pending) {
-          const payload: SyncPayload = { sourceId: b.sourceId, operationId: crypto.randomUUID(),
-            documentId: remote?.documentId ?? null, recordVersion: remote?.recordVersion ?? null,
-            title, content };
-          b.pending = { action: 'sync_smart', endpoint, operationId: payload.operationId, payload };
-          if (b.legacyEvidence && !b.legacyEvidence.newOperationId)
-            b.legacyEvidence.newOperationId = payload.operationId;
-        }
-        const toSend = b.pending;
-        if (!isSmartPending(toSend)) throw new Error('待确认操作不完整，已暂停发布。');
-        if (new TextEncoder().encode(JSON.stringify({ action: toSend.action, ...toSend.payload })).length > 2 * 1024 * 1024)
-          throw new Error('请求超过 2MB 限制，未发送文档。');
-        if (!context.isCurrent() || publishBody(context.view.editor.getValue()) !== content)
-          throw new Error('当前文档已变化，未发送；原操作已保留。');
-        await this.save(key, b); // Durable exact endpoint/action/operationId/payload before send.
-        let ack: any;
-        try {
-          ack = await this.call(toSend.action, toSend.payload, toSend.endpoint, token);
-        } catch (error) {
-          if (b.legacyEvidence?.newOperationId === toSend.operationId &&
-            (isVersionConflict(error) || (error as { status?: number })?.status === 409)) {
-            b.legacyEvidence.blocked = true;
-            await this.save(key, b);
-            throw new Error('旧笔记恢复时来源已变化，已暂停；保留新旧操作，请核对原文档。');
-          }
-          if (isVersionConflict(error)) {
-            // A definite CAS rejection is not an ambiguous transport outcome.
-            b = { ...b, pending: undefined };
-            await this.save(key, b);
-            if (attempt < 2) continue;
-            throw new Error('连续三次版本冲突，已停止发布，请核对原文档。');
-          }
-          throw error;
-        }
-        if (typeof ack.documentId !== 'string' || !ack.documentId ||
-          !Number.isSafeInteger(ack.recordVersion) || ack.recordVersion < 1 ||
-          (toSend.payload.documentId !== null && ack.documentId !== toSend.payload.documentId) ||
-          (ack.sourceId !== undefined && ack.sourceId !== b.sourceId) ||
-          (ack.operationId !== undefined && ack.operationId !== toSend.operationId))
-          throw new Error('发布回执不完整，原操作已保留，尚未确认成功。');
-        const verified = await this.verifiedCurrent(await this.call('read_current',
-          { sourceId: b.sourceId, documentId: ack.documentId }, endpoint, token),
-          b.sourceId, ack.documentId);
-        if (verified.recordVersion !== ack.recordVersion ||
-          !this.isPublished(verified, toSend.payload.content, toSend.payload.title))
-          throw new Error('正式发布的正文尚未核对一致，原操作已保留，请重新点击核对。');
-        b = await this.confirmed(key, b, verified);
-        if (toSend.payload.content !== content || toSend.payload.title !== title) continue;
-        const versionText = typeof verified.currentVersionNo === 'number' ?
-          ' · V' + verified.currentVersionNo : '';
-        new Notice(file.basename + '\n已发布到宙游文档中心' + versionText, 6000);
+      if (!endpoint || !token) {
+        if (manual) throw new Error('请先在 GVKit 设置中配置同步地址和个人令牌。');
         return;
       }
+      const raw = await this.app.vault.read(file);
+      if (!this.active || file.path !== path || (context && (!context.isCurrent()
+        || context.view.editor.getValue() !== raw))) throw new Error('当前笔记已变化，稍后重新核对。');
+      const content = publishBody(raw), title = file.basename, hash = await sha256Utf8(content);
+      let b = await this.binding(file, raw);
+      const key = this.key(file);
+      if (b.blocked) throw new Error('这篇笔记的同步已暂停：' + b.blocked + '。请先核对两端内容。');
+      if (!uuidOrNull(b.sourceId)) throw new Error('来源 ID 无效，已停止同步以保护原文档。');
+      if ((b.documentId !== undefined && (!b.documentId || typeof b.documentId !== 'string'))
+        || (b.recordVersion !== undefined && (!Number.isSafeInteger(b.recordVersion) || b.recordVersion < 1)))
+        throw new Error('旧绑定不完整，已暂停同步，请核对。');
+      const identityHash = await sha256Utf8('gvkit-zhouyou-recovery-identity:v1:' + token);
+      const approval = await this.recoveryApproval(b, endpoint);
+      const recovering = b.legacyEvidence && b.pending && isSmartPending(b.pending)
+        && b.pending.operationId === b.legacyEvidence.newOperationId;
+      if (recovering && (b.legacyEvidence!.blocked || b.legacyEvidence!.endpoint !== endpoint
+        || b.legacyEvidence!.identityHash !== identityHash))
+        throw new Error('旧操作的身份或入口发生变化，请先核对。');
+      await this.save(key, b);
+
+      // Read-only credential/permission check, before any write. Never renew a token here.
+      const products = await this.call('list_products', {}, endpoint, token);
+      if (!Array.isArray(products.products) || products.products.length === 0 || (b.productId !== undefined
+        && !products.products.some((p: any) => p && String(p.id) === String(b.productId))))
+        throw new Error('当前令牌不可访问原文档所属项目，请先核对项目和文档权限。');
+
+      const pending = b.pending;
+      const expectedId = b.documentId ?? (pending && isSmartPending(pending)
+        ? pending.payload.documentId ?? undefined : undefined);
+      let remote: Remote | null = null;
+      let remoteRead: unknown = null;
+      try {
+        remoteRead = await this.call('read_current',
+          { sourceId: b.sourceId, documentId: expectedId ?? null }, endpoint, token);
+      } catch (error) {
+        if (!isMissing(error)) throw error;
+        if (expectedId) {
+          b.blocked = '已绑定的服务端原文档不存在';
+          await this.save(key, b);
+          throw new Error('已绑定的原文档不存在，保留绑定，禁止重新建档。');
+        }
+      }
+      if (remoteRead !== null) {
+        try { remote = await this.verifiedCurrent(remoteRead, b.sourceId, expectedId); }
+        catch {
+          b.blocked = '服务端原文档身份或正文核对不一致';
+          await this.save(key, b);
+          throw new Error('服务端原文档身份或正文核对不一致，已暂停。');
+        }
+      }
+      if (remote && b.productId && remote.productId && remote.productId !== b.productId) {
+        b.blocked = '原项目归属发生变化';
+        await this.save(key, b);
+        throw new Error('文档项目归属不一致，已暂停。');
+      }
+      if (b.pending) {
+        if (!isSmartPending(b.pending)) {
+          if (approval && !remote && b.documentId === undefined && b.recordVersion === undefined
+            && b.version === undefined && !b.legacyEvidence) {
+            b = { ...b, pending: undefined, legacyEvidence: {
+              pending: structuredClone(b.pending), historicalEndpoint: 'unknown', oldOutcome: 'unknown',
+              backupPath: approval.backupPath, endpoint, identityHash, newOperationId: '',
+            } };
+            await this.save(key, b);
+          } else {
+            throw new Error('旧版同步遗留待确认操作缺少完整请求，请先人工核对；原记录保持。');
+          }
+        } else if (b.pending.endpoint !== endpoint
+          || b.pending.operationId !== b.pending.payload.operationId
+          || b.pending.payload.sourceId !== b.sourceId) {
+          throw new Error('待确认操作的地址或来源已变化，原操作保持，请先核对。');
+        }
+      }
+      if (b.legacyEvidence?.newOperationId && b.legacyEvidence.blocked)
+        throw new Error('旧操作恢复后出现冲突，需人工核对。');
+      // Any independently changed server version stops this note. Pending operations
+      // are the exception: an ACK may have been lost after that exact operation applied.
+      if (!b.pending && remote && b.recordVersion !== undefined
+        && remote.recordVersion !== b.recordVersion) {
+        b.blocked = '服务端记录版本已变化';
+        await this.save(key, b);
+        throw new Error('服务端记录版本与上次确认值不同，已暂停同步。');
+      }
+      if (!b.pending && remote && b.documentId === undefined
+        && (remote.title !== title || remote.contentHash !== hash)) {
+        b.blocked = '已有相同来源文档，但尚未核对原始绑定';
+        await this.save(key, b);
+        throw new Error('来源 ID 已存在服务端文档，两端内容不同，已暂停自动覆盖。');
+      }
+      if (!b.pending && remote && remote.title === title && remote.contentHash === hash) {
+        await this.confirmed(key, b, remote);
+        if (manual) new Notice(file.basename + '\n已同步，无新改动。', 5000);
+        return;
+      }
+
+      if (!b.pending) {
+        if (!remote && (b.documentId !== undefined || b.recordVersion !== undefined
+          || b.version !== undefined || b.productId !== undefined)) {
+          b.blocked = '旧绑定信息不完整，不能证明这篇笔记是首次同步';
+          await this.save(key, b);
+          throw new Error('旧绑定不完整，不能当作新笔记创建。');
+        }
+        const payload: SyncPayload = {
+          sourceId: b.sourceId, operationId: crypto.randomUUID(),
+          documentId: remote?.documentId ?? null,
+          recordVersion: remote?.recordVersion ?? null,
+          title, content, sourceRevision: hash,
+        };
+        b.pending = { action: 'sync_smart', endpoint, operationId: payload.operationId, payload };
+        if (b.legacyEvidence && !b.legacyEvidence.newOperationId)
+          b.legacyEvidence.newOperationId = payload.operationId;
+      }
+      const operation = b.pending;
+      if (!isSmartPending(operation)) throw new Error('待确认操作不完整，已暂停。');
+      const requestBody = JSON.stringify({ action: operation.action, ...operation.payload });
+      if (new TextEncoder().encode(requestBody).length > 2 * 1024 * 1024)
+        throw new Error('本次 JSON 请求超过 2MB，未发送。');
+      if (operation.payload.sourceRevision !== await sha256Utf8(operation.payload.content))
+        throw new Error('待确认操作的正文哈希与原请求不一致，已暂停。');
+      if (!this.active || file.path !== path || (context && !context.isCurrent()))
+        throw new Error('同步时笔记已移动或插件已退出，原操作保留。');
+      // Persist the entire immutable request BEFORE invoking the transport.
+      await this.save(key, b);
+      let ack: any;
+      try {
+        ack = await this.call(operation.action, operation.payload, operation.endpoint, token);
+      } catch (error) {
+        if (isVersionConflict(error) || (error as { status?: number })?.status === 409) {
+          b.blocked = '服务端版本冲突';
+          if (b.legacyEvidence?.newOperationId === operation.operationId) b.legacyEvidence.blocked = true;
+          await this.save(key, b);
+          throw new Error('409 版本冲突，原操作已保留，请核对两端内容。');
+        }
+        throw error;
+      }
+      if (!ack || typeof ack.documentId !== 'string' || !ack.documentId
+        || !Number.isSafeInteger(ack.recordVersion) || ack.recordVersion < 1
+        || (operation.payload.documentId !== null && ack.documentId !== operation.payload.documentId)
+        || (ack.sourceId !== undefined && ack.sourceId !== b.sourceId)
+        || (ack.operationId !== undefined && ack.operationId !== operation.operationId))
+        throw new Error('写入回执不完整，原操作保持待核对。');
+      let readback: unknown;
+      try {
+        readback = await this.call('read_current',
+          { sourceId: b.sourceId, documentId: ack.documentId }, endpoint, token);
+      } catch (error) {
+        if (isMissing(error)) {
+          b.blocked = '写入后原文档不存在';
+          await this.save(key, b);
+          throw new Error('写入后原文档不存在，已暂停；原操作保留。');
+        }
+        // No response/connection/authorization is not a content mismatch.
+        // Preserve the pending operation and allow the next read-first retry.
+        throw error;
+      }
+      let checked: Remote;
+      try {
+        checked = await this.verifiedCurrent(readback, b.sourceId, ack.documentId);
+        if (checked.recordVersion !== ack.recordVersion
+          || checked.title !== operation.payload.title
+          || checked.contentHash !== operation.payload.sourceRevision
+          || (b.productId && checked.productId && b.productId !== checked.productId)) {
+          throw new Error('写入读回的版本、标题、项目或正文不一致。');
+        }
+      } catch {
+        b.blocked = '写入后独立读回数据不一致';
+        await this.save(key, b);
+        throw new Error('写入后独立读回数据不一致，已暂停；原操作保留。');
+      }
+      await this.confirmed(key, b, checked);
+      const settledOlderEdit = operation.payload.content !== content || operation.payload.title !== title;
+      if (settledOlderEdit && !manual) this.queuedDuringWrite.add(file);
+      if (manual) new Notice(file.basename + (settledOlderEdit
+        ? '\n原操作已确认，新修改请再次点击同步。'
+        : '\n已同步到宙游文档中心。'), 6000);
+      // A later edit must be sent as a separate operation, never mutate the pending payload.
     } catch (error) {
-      new Notice(file.basename + '\n' + (error instanceof Error ? error.message :
-        '发布结果尚不明确，请核对原文档。'), 10000);
+      if (manual) new Notice(file.basename + '\n' + (error instanceof Error ? error.message :
+        '同步结果尚不明确，请核对。'), 10000);
+      else console.info('[GVKit Zhouyou]', { action: 'auto-sync', status: 'held',
+        reason: error instanceof Error ? error.message : 'unknown' });
     } finally {
-      status.hide();
+      status?.hide();
       this.busy.delete(file);
+      if (this.queuedDuringWrite.delete(file) && this.active) this.queue(file);
     }
   }
   refreshMarkers(): void {
@@ -334,5 +442,10 @@ export class ZhouyouAutoPublisher {
     document.querySelectorAll<HTMLElement>('.nav-file-title[data-path]').forEach(el =>
       el.classList.toggle('gvkit-zhouyou-published', !!published(el.dataset.path || '')));
   }
-  stop(): void { document.querySelectorAll('.gvkit-zhouyou-published').forEach(el => el.classList.remove('gvkit-zhouyou-published')); }
+  stop(): void {
+    this.active = false;
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear(); this.queuedDuringWrite.clear();
+    document.querySelectorAll('.gvkit-zhouyou-published').forEach(el => el.classList.remove('gvkit-zhouyou-published'));
+  }
 }

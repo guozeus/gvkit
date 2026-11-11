@@ -51,7 +51,7 @@ after(async () => {
 function hash(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
-function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一段\r\n') {
+function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一段\r\n', debounceMs = 2000) {
   let raw = initialContent;
   const file = { path: '项目/研发/测试.md', basename: '测试', extension: 'md' };
   const notices: string[] = [];
@@ -63,12 +63,15 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   let beforeWrite: (body: any, disk: any) => any = () => undefined;
   let afterWrite: (body: any) => any = () => undefined;
   let responseForRead: (body: any) => any = () => undefined;
+  let responseForProducts: (body: any) => any = () => undefined;
   let disk: any = {};
   let token = TOKEN;
+  let autoSync = false;
   const files: Record<string, string> = {};
   const settings = {
     getZhouyouUrl: () => ENDPOINT,
     getAutoPublishBindings: () => structuredClone(disk.zhouyouAutoBindings ?? {}),
+    getZhouyouAutoSync: () => autoSync,
     getPublishBindingsSnapshot: () => [],
     updateNonSecret: async (fn: (value: any) => void) => {
       const next = structuredClone(disk); fn(next); disk = next;
@@ -88,12 +91,19 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   const secret = { runtimeCredential: () => token };
   const context = { file, view: { save: async () => undefined, editor: { getValue: () => raw } },
     isCurrent: () => true };
-  const publisher = new Publisher(app, settings, secret);
+  const publisher = new Publisher(app, settings, secret, debounceMs);
   g.__send = async (request: any) => {
     assert.equal(request.url, ENDPOINT);
     assert.equal(request.headers.authorization, 'Bearer ' + TOKEN);
     const body = JSON.parse(request.body);
     requests.push(body);
+    if (body.action === 'list_products') {
+      const override = responseForProducts(body);
+      if (override) return override;
+      return { status: 200, json: { code: 0, data: { products: [
+        { id: 'auto-product', name: '自动项目' },
+      ] } }, headers: {} };
+    }
     if (body.action === 'read_current') {
       const override = responseForRead(body);
       if (override) return override;
@@ -102,8 +112,10 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     }
     assert.equal(body.action, 'sync_smart', 'only the documented write action is permitted');
     assert.equal(body.sourceId, SOURCE_ID);
-    assert.equal('sourceRevision' in body, false, 'undocumented fields are not transmitted');
+    assert.equal(body.sourceRevision, hash(body.content), 'hash the actual LF-normalized UTF-8 Markdown');
     assert.equal('productId' in body, false);
+    assert.equal('productVersionIds' in body, false);
+    assert.equal('author' in body, false);
     const pending = disk.zhouyouAutoBindings[SOURCE_ID].pending;
     assert.equal(pending.endpoint, ENDPOINT);
     assert.equal(pending.action, 'sync_smart');
@@ -123,11 +135,11 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
       assert.equal(body.documentId, remote.documentId);
       assert.equal(body.recordVersion, remote.recordVersion);
     }
-    const changed = !remote || remote.content !== body.content || remote.title !== body.title || remote.publishedContentHash !== hash(body.content);
+    const changed = !remote || remote.content !== body.content || remote.title !== body.title;
     remote = { sourceId: body.sourceId, documentId: remote?.documentId ?? 'doc-1',
       recordVersion: (remote?.recordVersion ?? 0) + (changed ? 1 : 0),
-      title: body.title, content: body.content, contentHash: hash(body.content), publishedContentHash: hash(body.content),
-      productId: 'auto-product', productName: '自动项目', currentVersionNo: (remote?.currentVersionNo ?? 0) + (changed ? 1 : 0),
+      title: body.title, content: body.content, contentHash: hash(body.content), publishedContentHash: remote?.publishedContentHash ?? hash('older publication'),
+      productId: 'auto-product', productName: '自动项目', currentVersionNo: remote?.currentVersionNo ?? 1,
       documentStatus: 'active' };
     receipts.set(body.operationId, { payload: structuredClone(body), ack: {
       documentId: remote.documentId, recordVersion: remote.recordVersion,
@@ -141,6 +153,7 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
   return {
     publisher, settings, app, context, file, requests, notices, files,
     set token(value: string) { token = value; },
+    set autoSync(value: boolean) { autoSync = value; },
     get raw() { return raw; },
     set raw(value: string) { raw = value; },
     get disk() { return disk; },
@@ -151,18 +164,19 @@ function makeHarness(initialContent = '---\ngvid: ' + SOURCE_ID + '\n---\n第一
     set beforeWrite(fn: (b: any, d: any) => any) { beforeWrite = fn; },
     set afterWrite(fn: (b: any) => any) { afterWrite = fn; },
     set responseForRead(fn: (b: any) => any) { responseForRead = fn; },
-    restart() { return new Publisher(app, settings, secret); },
+    set responseForProducts(fn: (b: any) => any) { responseForProducts = fn; },
+    restart() { return new Publisher(app, settings, secret, debounceMs); },
   };
 }
 test('first click reads 404, creates via sync_smart and independently reads back; LF is normalized', async () => {
   const h = makeHarness();
   await h.publisher.publish(h.context);
-  assert.deepEqual(h.requests.map(r => r.action), ['read_current', 'sync_smart', 'read_current']);
-  assert.equal(h.requests[1].content, '---\ngvid: ' + SOURCE_ID + '\n---\n第一段\n');
+  assert.deepEqual(h.requests.map(r => r.action), ['list_products', 'read_current', 'sync_smart', 'read_current']);
+  assert.equal(h.requests[2].content, '---\ngvid: ' + SOURCE_ID + '\n---\n第一段\n');
   assert.equal(h.writes, 1);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, 'doc-1');
-  assert.ok(h.notices.some(s => s.includes('已发布到宙游文档中心')));
+  assert.ok(h.notices.some(s => s.includes('已同步到宙游文档中心')));
 });
 test('update sends current document ID/version; repeat and restart do not create duplicates', async () => {
   const h = makeHarness();
@@ -177,15 +191,16 @@ test('update sends current document ID/version; repeat and restart do not create
   const publisherAfterRestart = h.restart();
   const priorCalls = h.requests.length;
   await publisherAfterRestart.publish(h.context);
-  assert.equal(h.requests.length, priorCalls + 1);
+  assert.equal(h.requests.length, priorCalls + 2);
   assert.equal(h.requests.at(-1).action, 'read_current');
   assert.equal(h.writes, 2);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].sourceId, initialSourceId);
   const oldPath = h.file.path;
   h.file.path = '项目/研发/已改名.md';
+  h.file.basename = '已改名';
   await publisherAfterRestart.renamed(h.file, oldPath);
   await publisherAfterRestart.publish(h.context);
-  assert.equal(h.writes, 2);
+  assert.equal(h.writes, 3, 'rename updates the original document title, never creates another');
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, 'doc-1');
 });
 test('lost response retains exact original request and next click retrieves the original receipt without duplicating the write', async () => {
@@ -204,7 +219,7 @@ test('lost response retains exact original request and next click retrieves the 
   assert.equal(h.requests.filter(r => r.action === 'sync_smart').length, 2);
   assert.deepEqual(h.requests.filter(r => r.action === 'sync_smart')[1],
     { action: pending.action, ...pending.payload });
-  assert.ok(h.notices.some(s => s.includes('已发布到宙游文档中心')));
+  assert.ok(h.notices.some(s => s.includes('已同步到宙游文档中心')));
 });
 test('retry after unconfirmed non-applied response reuses exact saved request and operation ID', async () => {
   const h = makeHarness();
@@ -229,16 +244,16 @@ test('an old incomplete pending request is not changed or silently resent after 
     pending: { operationId: '00000000-0000-4000-8000-000000000001', content: '', title: '' } } } };
   await h.publisher.publish(h.context);
   assert.equal(h.writes, 0);
-  assert.deepEqual(h.requests.map(x => x.action), ['read_current']);
+  assert.deepEqual(h.requests.map(x => x.action), ['list_products', 'read_current']);
   assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-  assert.ok(h.notices.some(s => s.includes('旧版发布遗留待确认')));
+  assert.ok(h.notices.some(s => s.includes('旧版同步遗留待确认')));
 });
 test('unknown 404 is not treated as permission to create; missing known document is not recreated', async () => {
   const h = makeHarness();
   h.responseForRead = () => ({ status: 404, json: { code: 'SOMETHING_ELSE' }, headers: {} });
   await h.publisher.publish(h.context);
   assert.equal(h.writes, 0);
-  assert.deepEqual(h.requests.map(x => x.action), ['read_current']);
+  assert.deepEqual(h.requests.map(x => x.action), ['list_products', 'read_current']);
   const other = makeHarness();
   other.disk = { zhouyouAutoBindings: { [SOURCE_ID]: { sourceId: SOURCE_ID, path: other.file.path,
     documentId: 'doc-old', recordVersion: 5 } } };
@@ -246,25 +261,23 @@ test('unknown 404 is not treated as permission to create; missing known document
   assert.equal(other.writes, 0);
   assert.ok(other.notices.some(s => s.includes('原文档不存在')));
 });
-test('a definite version conflict retries with a fresh baseline, no more than 3 attempts', async () => {
+test('409 blocks this note, preserves the exact request and cannot retry or overwrite automatically', async () => {
   const h = makeHarness();
-  let conflictOnce = true;
-  h.beforeWrite = () => {
-    if (conflictOnce) { conflictOnce = false;
-      return { status: 409, json: { code: 'OBSIDIAN_SYNC_RECORD_VERSION_CONFLICT' }, headers: {} };
-    }
-  };
+  h.beforeWrite = () => ({ status: 409, json: { code: 'OBSIDIAN_SYNC_RECORD_VERSION_CONFLICT' }, headers: {} });
   await h.publisher.publish(h.context);
-  assert.deepEqual(h.requests.map(x => x.action),
-    ['read_current', 'sync_smart', 'read_current', 'sync_smart', 'read_current']);
-  assert.notEqual(h.requests[1].operationId, h.requests[3].operationId);
-  assert.equal(h.writes, 1);
+  const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
+  assert.deepEqual(h.requests.map(x => x.action), ['list_products', 'read_current', 'sync_smart']);
+  assert.equal(h.writes, 0);
+  assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].blocked);
+  await h.restart().publish(h.context);
+  assert.equal(h.requests.filter(x => x.action === 'sync_smart').length, 1);
+  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, pending);
 });
 test('oversize payload is rejected locally before a write', async () => {
   const h = makeHarness('X'.repeat(2 * 1024 * 1024));
   await h.publisher.publish(h.context);
   assert.equal(h.writes, 0);
-  assert.deepEqual(h.requests.map(x => x.action), ['read_current']);
+  assert.deepEqual(h.requests.map(x => x.action), ['list_products', 'read_current']);
   assert.ok(h.notices.some(s => s.includes('2MB')));
 });
 test('publishBody strips only legacy metadata and normalizes CRLF', () => {
@@ -311,7 +324,7 @@ test('reviewed legacy recovery preserves full backup and evidence; update/repeat
   await h.restart().publish(h.context);
   assert.equal(h.writes, 2);
   assert.equal(h.remote.documentId, 'doc-1');
-  assert.equal(h.remote.currentVersionNo, 2);
+  assert.equal(h.remote.currentVersionNo, 1);
   assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.pending, evidence.pending);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].legacyEvidence.oldOutcome, 'unknown');
   assert.deepEqual(h.disk.otherSetting, { retained: true });
@@ -408,7 +421,7 @@ test('recovery rejects archived, forbidden, unknown 404 and content-hash mismatc
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
 });
 
-test('saved current draft matching local is published when the published snapshot is older', async () => {
+test('server recordVersion changed independently: pause even when draft body matches', async () => {
   const h = makeHarness();
   await h.publisher.publish(h.context);
   h.raw += '新草稿\n';
@@ -417,10 +430,10 @@ test('saved current draft matching local is published when the published snapsho
   h.remote.recordVersion++;
   const prior = h.requests.length;
   await h.publisher.publish(h.context);
-  assert.deepEqual(h.requests.slice(prior).map(r => r.action), ['read_current', 'sync_smart', 'read_current']);
-  assert.equal(h.remote.currentVersionNo, 2);
-  assert.equal(h.remote.publishedContentHash, hash(publishBody(h.raw)));
-  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
+  assert.deepEqual(h.requests.slice(prior).map(r => r.action), ['list_products', 'read_current']);
+  assert.equal(h.writes, 1);
+  assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].blocked);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].recordVersion, 1);
 });
 
 test('complete recovery pending cannot be cleared merely because current draft matches', async () => {
@@ -443,19 +456,19 @@ test('fully published same content is a read-only no-op with no new version', as
   const h = makeHarness(); await h.publisher.publish(h.context);
   const calls = h.requests.length;
   await h.restart().publish(h.context);
-  assert.equal(h.requests.length, calls + 1);
+  assert.equal(h.requests.length, calls + 2);
   assert.equal(h.writes, 1);
   assert.equal(h.remote.currentVersionNo, 1);
 });
 
-test('ACK followed by an old or missing publication snapshot retains pending and does not claim success', async () => {
+test('sync validates stored content, not published business version snapshots', async () => {
   for (const publishedContentHash of [hash('old'), undefined, null]) {
     const h = makeHarness();
     h.afterWrite = () => { h.remote.publishedContentHash = publishedContentHash; };
     await h.publisher.publish(h.context);
-    assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
-    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].version, undefined);
-    assert.ok(!h.notices.some(s => s.includes('已发布到宙游文档中心')));
+    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
+    assert.equal(h.remote.currentVersionNo, 1);
+    assert.ok(h.notices.some(s => s.includes('已同步到宙游文档中心')));
   }
 });
 
@@ -467,13 +480,143 @@ test('lost ACK followed by local edits settles the original request then publish
   const pending = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID].pending);
   assert.ok(h.restart().statusLabel(h.context).includes('待确认'));
   h.raw += '继续修改\n';
-  await h.restart().publish(h.context);
-  const sent = h.requests.filter(r => r.action === 'sync_smart');
+  const retried = h.restart();
+  await retried.publish(h.context);
+  let sent = h.requests.filter(r => r.action === 'sync_smart');
   assert.deepEqual(sent[1], { action: pending.action, ...pending.payload });
+  assert.equal(sent.length, 2, 'never create a new operation before reconciling the original');
+  assert.ok(h.notices.some(s => s.includes('新修改请再次点击同步')));
+  await retried.publish(h.context);
+  sent = h.requests.filter(r => r.action === 'sync_smart');
   assert.notEqual(sent[2].operationId, pending.operationId);
   assert.equal(sent[2].documentId, 'doc-1');
   assert.equal(h.writes, 2);
-  assert.equal(h.remote.currentVersionNo, 2);
-  assert.equal(h.remote.publishedContentHash, hash(publishBody(h.raw)));
+  assert.equal(h.remote.currentVersionNo, 1);
   assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
+});
+
+// No automation is started by an upgrade, a mounted Vault, or by an inactive toggle.
+test('auto-sync is opt-in, debounces multiple edits and never uploads before a file event', async () => {
+  const h = makeHarness(undefined, 15);
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(h.requests.length, 0);
+  h.publisher.queue(h.file);
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.equal(h.requests.length, 0, 'default disabled');
+  h.autoSync = true;
+  h.publisher.queue(h.file);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  h.raw += '第二次改动\n';
+  h.publisher.queue(h.file);
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal(h.writes, 1, 'one final revision after rapid edits');
+  assert.equal(h.remote.content, publishBody(h.raw));
+  assert.deepEqual(h.requests.map((x: any) => x.action),
+    ['list_products', 'read_current', 'sync_smart', 'read_current']);
+  h.publisher.queue(h.file);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(h.writes, 1, 'duplicate file event only reads, does not rewrite');
+  h.publisher.stop();
+});
+
+test('stopping the plugin cancels unsent automatic writes', async () => {
+  const h = makeHarness(undefined, 30);
+  h.autoSync = true;
+  h.publisher.queue(h.file);
+  h.publisher.stop();
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal(h.requests.length, 0);
+});
+
+test('list_products is read-only and lack of authorized projects prevents writes', async () => {
+  for (const reply of [
+    { status: 401, json: { code: 'UNAUTHORIZED' }, headers: {} },
+    { status: 403, json: { code: 'FORBIDDEN' }, headers: {} },
+    { status: 200, json: { code: 0, data: { products: [] } }, headers: {} },
+  ]) {
+    const h = makeHarness();
+    h.responseForProducts = () => reply;
+    await h.publisher.publish(h.context);
+    assert.deepEqual(h.requests.map((x: any) => x.action), ['list_products']);
+    assert.equal(h.writes, 0);
+    assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].documentId, undefined);
+  }
+  const h = makeHarness();
+  h.disk = { zhouyouAutoBindings: { [SOURCE_ID]: {
+    sourceId: SOURCE_ID, path: h.file.path, productId: 'not-in-list',
+    documentId: 'doc-old', recordVersion: 3,
+  } } };
+  await h.publisher.publish(h.context);
+  assert.deepEqual(h.requests.map((x: any) => x.action), ['list_products']);
+  assert.equal(h.writes, 0);
+});
+
+test('post-write readback title mismatch pauses this note and preserves the original request', async () => {
+  const h = makeHarness();
+  h.afterWrite = () => { h.remote.title = '意外服务端标题'; };
+  await h.publisher.publish(h.context);
+  const saved = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID]);
+  assert.equal(h.writes, 1);
+  assert.ok(saved.pending);
+  assert.ok(saved.blocked);
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, 1);
+  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, saved.pending);
+});
+
+test('old smart pending without the original sourceRevision must not be rewritten', async () => {
+  const h = makeHarness();
+  const op = '00000000-0000-4000-8000-000000000002';
+  const old = { action: 'sync_smart', endpoint: ENDPOINT, operationId: op,
+    payload: { sourceId: SOURCE_ID, operationId: op, documentId: null,
+      recordVersion: null, content: publishBody(h.raw), title: h.file.basename } };
+  h.disk = { zhouyouAutoBindings: { [SOURCE_ID]: {
+    sourceId: SOURCE_ID, path: h.file.path, pending: old,
+  } } };
+  await h.publisher.publish(h.context);
+  assert.equal(h.writes, 0);
+  assert.deepEqual(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, old);
+  assert.deepEqual(h.requests.map((x: any) => x.action), ['list_products', 'read_current']);
+});
+
+test('temporary post-write readback outage retains operation and retries with same UUID', async () => {
+  const h = makeHarness();
+  let readCount = 0;
+  h.responseForRead = () => {
+    readCount++;
+    if (readCount === 2) throw new Error('readback transport interruption');
+  };
+  await h.publisher.publish(h.context);
+  assert.equal(h.writes, 1);
+  const binding = structuredClone(h.disk.zhouyouAutoBindings[SOURCE_ID]);
+  assert.ok(binding.pending);
+  assert.equal(binding.blocked, undefined, 'outage is not a confirmed content conflict');
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, 1, 'idempotent receipt, not a second remote write');
+  const requests = h.requests.filter((x: any) => x.action === 'sync_smart');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], requests[1]);
+  assert.equal(h.disk.zhouyouAutoBindings[SOURCE_ID].pending, undefined);
+});
+
+test('corrupt remote hash on pre-read pauses a previously bound note without rewriting', async () => {
+  const h = makeHarness();
+  await h.publisher.publish(h.context);
+  h.remote.contentHash = hash('another-content');
+  h.raw += '最新改动\n';
+  const before = h.writes;
+  await h.restart().publish(h.context);
+  assert.equal(h.writes, before);
+  assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].blocked);
+});
+
+test('legacy binding evidence without a document ID cannot turn into an accidental duplicate', async () => {
+  const h = makeHarness();
+  h.disk = { zhouyouAutoBindings: { [SOURCE_ID]: {
+    sourceId: SOURCE_ID, path: h.file.path, version: 7,
+  } } };
+  await h.publisher.publish(h.context);
+  assert.equal(h.writes, 0);
+  assert.deepEqual(h.requests.map((x: any) => x.action), ['list_products', 'read_current']);
+  assert.ok(h.disk.zhouyouAutoBindings[SOURCE_ID].blocked);
 });

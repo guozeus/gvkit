@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TextComponent } from 'obsidian';
+import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TextComponent, requestUrl } from 'obsidian';
 import { requiresLargeBackfillConfirmation } from './fileIdCore';
 import { FileIdManager } from './fileIds';
 import { SafeMoveManager } from './safeMove';
@@ -262,6 +262,12 @@ export class GvkitSettingTab extends PluginSettingTab {
 				button.buttonEl.style.touchAction = 'manipulation';
 			});
 
+		new Setting(root).setName('编辑后自动同步')
+			.setDesc('默认关闭。先用专用测试笔记手动验证；开启后仅同步之后新建、编辑或改名的可发布 Markdown，不补发旧笔记。')
+			.addToggle(toggle => toggle.setValue(prefs.getZhouyouAutoSync()).onChange(async value => {
+				try { await prefs.setZhouyouAutoSync(value); }
+				catch { toggle.setValue(prefs.getZhouyouAutoSync()); new Notice('自动同步设置未能保存'); }
+			}));
 		const supported = local.supported();
 		new Setting(root).setName('Key')
 			.setDesc(supported ? '仅保存在本设备。' : '当前 Obsidian 不支持机密存储，请更新后保存 Key。')
@@ -289,6 +295,40 @@ export class GvkitSettingTab extends PluginSettingTab {
 					} catch { new Notice('Key 未能保存，请重试'); }
 				});
 				button.buttonEl.style.touchAction = 'manipulation';
+			})
+			.addButton(button => {
+				button.setButtonText('验证旧令牌').setDisabled(!supported).onClick(async () => {
+					if (!live || button.buttonEl.disabled) return;
+					const endpoint = checkZhouyouUrl(prefs.getZhouyouUrl());
+					const token = local.runtimeCredential();
+					if (!endpoint.ok || !endpoint.value || !token) {
+						new Notice('请先保存正式同步地址和原个人令牌。'); return;
+					}
+					button.setDisabled(true);
+					try {
+						// Read-only list_products: never upload/create a note or replace the token.
+						const response = await requestUrl({ url: endpoint.value, method: 'POST',
+							headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token },
+							body: JSON.stringify({ action: 'list_products' }), throw: false });
+						if (!live) return;
+						if (response.status === 401) {
+							new Notice('HTTP 401：请先核对地址、原令牌及本人账号资格；确认失效后再更换令牌。', 9000);
+						} else if (response.status === 403) {
+							new Notice('HTTP 403：请核对项目及文档访问权限，勿立即重置令牌。', 9000);
+						} else if (response.status >= 200 && response.status < 300
+							&& response.json?.code === 0 && Array.isArray(response.json.data?.products)) {
+							const list = response.json.data.products as Array<{ name?: unknown }>;
+							const names = list.map(p => typeof p?.name === 'string' ? p.name : '').filter(Boolean);
+							new Notice('旧令牌可用。请确认目标项目在可访问列表中：'
+								+ (names.slice(0, 12).join('、') || '当前无可用项目')
+								+ (names.length > 12 ? '（另有更多项目）' : ''), 12000);
+						} else {
+							new Notice('只读检查未确认（HTTP ' + response.status + '），请核对同步地址与账号权限。', 9000);
+						}
+					} catch {
+						if (live) new Notice('只读检查暂未完成：网络或接口无响应，原令牌未更改。', 9000);
+					} finally { if (live) button.setDisabled(false); }
+				});
 			});
 	}
 }

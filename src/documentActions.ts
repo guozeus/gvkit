@@ -186,7 +186,7 @@ export class DocumentActions {
             });
         }));
 		const status = this.host.zhouyouStatusLabel?.(this.context(entry)) ?? '';
-		menu.addItem((item) => item.setTitle('发布到宙游文档中心' + (status ? ' · ' + status : '')).onClick(() => {
+		menu.addItem((item) => item.setTitle('同步到宙游文档中心' + (status ? ' · ' + status : '')).onClick(() => {
 			if (!this.isCurrent(entry)) return;
 			const handler = this.host.onZhouyouTarget;
 			if (!handler) {

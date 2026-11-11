@@ -421,9 +421,25 @@ export default class GvkitPlugin extends Plugin {
 			this.publishSecretRuntime = device;
 			const autoPublisher = new ZhouyouAutoPublisher(this.app, settings, device);
 			this.autoPublisher = autoPublisher;
+			// Keep rename binding maintenance, but do not queue start-up file changes.
+			let autoEventsReady = false;
 			this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
-				if (file instanceof TFile) void autoPublisher.renamed(file, oldPath);
+				if (file instanceof TFile) void autoPublisher.renamed(file, oldPath)
+					.then(() => { if (autoEventsReady) autoPublisher.queue(file); })
+					.catch(() => new Notice('宙游同步的旧路径绑定未能保存，请核对。'));
 			}));
+			// Obsidian may emit create/modify for existing files during start-up.
+			// Register both only after layout-ready. Never enumerate/backfill old notes.
+			this.app.workspace.onLayoutReady(() => {
+				if (!this.publishLifecycleActive || this.autoPublisher !== autoPublisher) return;
+				this.registerEvent(this.app.vault.on('modify', file => {
+					if (file instanceof TFile) autoPublisher.queue(file);
+				}));
+				this.registerEvent(this.app.vault.on('create', file => {
+					if (file instanceof TFile) autoPublisher.queue(file);
+				}));
+				autoEventsReady = true;
+			});
 			this.registerEvent(this.app.workspace.on('layout-change', () => autoPublisher.refreshMarkers()));
 			this.registerEvent(this.app.workspace.on('file-open', () => autoPublisher.refreshMarkers()));
 			this.registerEvent(this.app.metadataCache.on('changed', () => autoPublisher.refreshMarkers()));
