@@ -1,12 +1,11 @@
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
-import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore } from './arrangeStore';
 import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
-import { renderGvkitStyles } from './readingView';
 import { ArrangeTips, renderArrangeTipsSettings } from './arrangeTips';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
@@ -42,32 +41,6 @@ function titleCaretRect(input: HTMLTextAreaElement): DOMRect | null {
 	const range = doc.createRange(); range.setStart(marker.firstChild!, 0); range.setEnd(marker.firstChild!, 1);
 	const rect = range.getClientRects()[0] ?? null;
 	mirror.remove(); return rect;
-}
-
-/** WebKit/Chromium caret hit → original Markdown offset. No Markdown is rewritten.
- * Ordinary rendered text nodes match source spans; transformed embeds/entities
- * fall back to the nearest preceding source span rather than the end of the note. */
-function bodyCaretOffset(preview: HTMLElement, source: string, event: MouseEvent): number {
-	const doc = preview.ownerDocument as Document & {
-		caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-		caretRangeFromPoint?: (x: number, y: number) => Range | null;
-	};
-	const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
-	const range = position ? null : doc.caretRangeFromPoint?.(event.clientX, event.clientY);
-	const node = position?.offsetNode ?? range?.startContainer;
-	const offset = position?.offset ?? range?.startOffset ?? 0;
-	const target = node && preview.contains(node) ? node : event.target as Node;
-	const walker = doc.createTreeWalker(preview, 4 /* SHOW_TEXT */);
-	let cursor = 0;
-	while (walker.nextNode()) {
-		const text = walker.currentNode.textContent ?? '';
-		const index = source.indexOf(text, cursor);
-		if (walker.currentNode === target || target.contains?.(walker.currentNode)) {
-			return index < 0 ? cursor : Math.min(source.length, index + (walker.currentNode === node ? offset : 0));
-		}
-		if (index >= 0) cursor = index + text.length;
-	}
-	return 0;
 }
 
 export function registerArrange(plugin: Plugin): void {
@@ -197,7 +170,6 @@ export class ArrangeView extends ItemView {
 			else if (caret.bottom > bottom) scroll.scrollTop += caret.bottom - bottom;
 		});
 	}
-	private bodyRender = 0;
 	private interactionLog: { time: string; event: string; detail: Record<string, unknown> }[] = [];
 	private trace(event: string, detail: Record<string, unknown> = {}): void {
 		this.interactionLog.push({ time: new Date().toISOString(), event, detail });
@@ -583,9 +555,6 @@ export class ArrangeView extends ItemView {
 		if (edit) {
 			edit.title.style.height = '0'; edit.title.style.height = `${edit.title.scrollHeight}px`;
 			edit.body.placeholder = this.store.state.bodyPlaceholder;
-			// Update only the empty hint; never replace an editor or its unsaved text.
-			const hint = edit.preview.querySelector<HTMLElement>('.gvkit-arrange-body-placeholder');
-			if (hint) hint.textContent = this.store.state.bodyPlaceholder;
 		}
 	}
 	private updateComposer(): void {
@@ -1298,21 +1267,20 @@ export class ArrangeView extends ItemView {
 		const error = this.detailScroll.createDiv({ cls: 'gvkit-arrange-edit-error', attr: { role: 'status', 'aria-live': 'polite' } });
 		error.hidden = true;
 		const preview = this.detailScroll.createDiv({ cls: 'gvkit-arrange-body', attr: { tabindex: '0', 'aria-label': '编辑事项正文' } });
-		const body = new ArrangeBodyEditor(this.detailScroll, item.body, this.store.state.bodyPlaceholder, this.app, item.path, this, () => {
+		const body = new ArrangeBodyEditor(preview, item.body, this.store.state.bodyPlaceholder, this.app, item.path, this, () => {
 			error.hidden = true; this.scheduleEdit();
-		}, () => this.fitDetailCaret());
-		body.hidden = true;
+		}, () => this.fitDetailCaret(), () => { void this.copyItem(item, true); });
 		const edit = this.editing = { id: item.id, title, body, preview, error, savedTitle: item.title, savedBody: item.body, composing: false as boolean };
 		this.renderBody();
 		const resize = (input: HTMLTextAreaElement) => { input.style.height = '0'; input.style.height = `${input.scrollHeight}px`; };
 		resize(title);
 		// Native textarea hit testing handles the title, including its very first tap.
 		const openBody = (offset = 0) => {
-			preview.hidden = true; body.hidden = false; body.focus(offset);
+			body.focus(offset);
 		};
 		preview.onclick = event => {
-			if ((event.target as HTMLElement).closest('a, button') || window.getSelection()?.toString()) return;
-			openBody(bodyCaretOffset(preview, body.value, event));
+			// CodeMirror owns hit testing, source mapping, links and selection.
+			if (event.target === preview && !window.getSelection()?.toString()) openBody();
 		};
 		preview.onkeydown = event => { if (event.target === preview && event.key === 'Enter') { event.preventDefault(); openBody(); } };
 		this.detailScroll.onclick = event => { if (event.target === this.detailScroll && !window.getSelection()?.toString()) openBody(); };
@@ -1320,10 +1288,7 @@ export class ArrangeView extends ItemView {
 			input.addEventListener('compositionstart', () => { edit.composing = true; });
 			input.addEventListener('compositionend', () => { edit.composing = false; this.scheduleEdit(); });
 			if (input === title) input.oninput = () => { resize(title); error.hidden = true; title.removeAttribute('aria-invalid'); this.scheduleEdit(); this.fitDetailCaret(); };
-			input.onblur = () => { void this.saveEdit().then(ok => {
-				// Replacing preview text on title blur can swallow the click landing on it.
-				if (ok && input !== title && this.editing === edit && !body.focused) this.renderBody();
-			}); };
+			input.onblur = () => { void this.saveEdit(); };
 		}
 		this.children = this.detailScroll.createDiv('gvkit-arrange-children');
 		for (const child of this.directChildren(item.id)) this.row(this.children, child);
@@ -1471,32 +1436,14 @@ export class ArrangeView extends ItemView {
 		const edit = this.editing;
 		return Boolean(edit && (edit.title.value !== edit.savedTitle || edit.body.value !== edit.savedBody
 			|| edit.composing || edit.title.ownerDocument.activeElement === edit.title
-			// Pointer down focuses the preview before click opens the editor. Keep
-			// that target alive if an asynchronous reload finishes in between.
+			// Keep the body surface (including a pending pointer target) alive
+			// when an asynchronous reload finishes during an interaction.
 			|| edit.preview.contains(edit.preview.ownerDocument.activeElement) || edit.body.focused));
 	}
 	private renderBody(): void {
-		const render = ++this.bodyRender;
-		const edit = this.editing;
-		if (!edit) return;
-		edit.body.hidden = true; edit.preview.hidden = false; edit.preview.empty();
-		if (edit.body.value) {
-			const item = this.store.items.find(item => item.id === edit.id);
-			void MarkdownRenderer.render(this.app, edit.body.value, edit.preview, item?.path ?? '', this).then(() => {
-				if (render !== this.bodyRender || this.editing !== edit || edit.preview.hidden || !item || !edit.body.value.trim()) return;
-				// A focus switch creates a fresh preview. Finish its color rendering here
-				// instead of waiting for the plugin's lazy reading-view observer.
-				renderGvkitStyles(edit.preview);
-				const walker = edit.preview.ownerDocument.createTreeWalker(edit.preview, 4 /* SHOW_TEXT */);
-				let last: Node | null = null;
-				while (walker.nextNode()) if (walker.currentNode.textContent?.trim()) last = walker.currentNode;
-				const link = last?.parentElement?.closest('a');
-				const end = link?.parentElement ?? last?.parentElement ?? edit.preview;
-				const copy = iconButton(end, '复制标题及附注', 'copy', () => { void this.copyItem(item, true); });
-				copy.addClass('gvkit-arrange-body-copy');
-				if (link) link.after(copy);
-			});
-		} else edit.preview.createSpan({ cls: 'gvkit-arrange-body-placeholder', text: this.store.state.bodyPlaceholder });
+		// One parsed Markdown surface remains mounted before, during and after
+		// editing. Focus changes only the caret, never the rendered document.
+		if (this.editing) { this.editing.preview.hidden = false; this.editing.body.hidden = false; }
 	}
 	private scheduleEdit(): void {
 		if (this.editTimer !== null) window.clearTimeout(this.editTimer);

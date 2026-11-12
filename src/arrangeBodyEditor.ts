@@ -2,7 +2,7 @@ import { EditorState, StateField, type Range } from '@codemirror/state';
 import { Decoration, EditorView, keymap, placeholder, WidgetType, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { parser, GFM } from '@lezer/markdown';
-import { MarkdownRenderer, sanitizeHTMLToDom, type App, type Component } from 'obsidian';
+import { MarkdownRenderer, sanitizeHTMLToDom, setIcon, type App, type Component } from 'obsidian';
 
 // This editor belongs only to Arrange. Its document is always the original
 // Markdown, including syntax hidden by decorations; no HTML round-trip occurs.
@@ -22,6 +22,9 @@ const markdown = parser.configure([GFM, {
 		return cx.addElement(cx.elt(embed ? 'ArrangeEmbed' : 'ArrangeWikiLink', pos, to));
 	} }],
 }]);
+
+// HTML blocks treat Markdown punctuation as literal; reuse Lezer's HTML tokens.
+const htmlInline = parser.configure({ remove: ['Emphasis', 'Link', 'Image', 'InlineCode', 'Escape', 'Entity', 'Autolink'] });
 
 function linkTarget(raw: string, auto = false): string {
 	if (raw.startsWith('<') && raw.endsWith('>')) raw = raw.slice(1, -1);
@@ -87,14 +90,35 @@ class Rendered extends WidgetType {
 	ignoreEvent(): boolean { return false; }
 }
 
-function parsedDocument(state: EditorState, app: App, path: string, component: Component): DecorationSet {
+function parsedDocument(state: EditorState, app: App, path: string, component: Component, copy?: () => void): DecorationSet {
 	const source = state.doc.toString(), ranges: Range<Decoration>[] = [];
+	let copyAt = source.trimEnd().length;
 	const tags: { tag: HTMLElement; from: number }[] = [];
 	const hide = (from: number, to: number) => { if (to > from) ranges.push(Decoration.replace({}).range(from, to)); };
 	const mark = (from: number, to: number, tagName: string, attributes?: Record<string, string>) => {
 		if (to > from) ranges.push(Decoration.mark({ tagName, attributes }).range(from, to));
 	};
 	const rendered = (from: number, to: number) => ranges.push(Decoration.replace({ widget: new Rendered(source.slice(from, to), app, path, component) }).range(from, to));
+	const htmlTag = (from: number, to: number, block = false) => {
+		const raw = source.slice(from, to);
+		if (raw.startsWith('</')) {
+			const open = tags.pop();
+			// An unstyled div is already represented by the source's block lines.
+			if (open && (open.tag.tagName !== 'DIV' || open.tag.attributes.length))
+				mark(open.from, from, open.tag.tagName.toLowerCase(), Object.fromEntries(Array.from(open.tag.attributes).map(a => [a.name, a.value])));
+		} else {
+			const tag = sanitizeHTMLToDom(raw).firstElementChild as HTMLElement | null;
+			if (tag && !raw.endsWith('/>') && tag.tagName !== 'BR' && tag.tagName !== 'IMG') tags.push({ tag, from: to });
+			else { rendered(from, to); return; }
+		}
+		const line = state.doc.lineAt(from);
+		if (block && !source.slice(line.from, from).trim() && !source.slice(to, line.to).trim()) {
+			if (raw.startsWith('</') && !source.slice(to).trim()) {
+				// Hide structural-only closing lines without adding empty rendered rows.
+				hide(Math.max(0, line.from - 1), source.length); copyAt = source.length;
+			} else hide(line.from, Math.min(source.length, line.to + 1));
+		} else hide(from, to);
+	};
 	markdown.parse(source).iterate({ enter(ref) {
 		const { name, from, to, node } = ref;
 		if (name === 'ArrangeEmbed' || name === 'Image' || name === 'Entity' || name === 'Escape' || name === 'HorizontalRule') {
@@ -129,20 +153,19 @@ function parsedDocument(state: EditorState, app: App, path: string, component: C
 			mark(from + 2 + (color ? 2 : 0), to - 2, 'mark', color ? { class: `gvkit-bg-${color}` } : undefined);
 			if (color) hide(from + 2, from + 4);
 		}
-		if (name === 'HTMLTag') {
-			const raw = source.slice(from, to);
-			if (raw.startsWith('</')) {
-				const open = tags.pop();
-				if (open) mark(open.from, from, open.tag.tagName.toLowerCase(), Object.fromEntries(Array.from(open.tag.attributes).map(a => [a.name, a.value])));
-			} else {
-				const tag = sanitizeHTMLToDom(raw).firstElementChild as HTMLElement | null;
-				if (tag && !raw.endsWith('/>') && tag.tagName !== 'BR' && tag.tagName !== 'IMG') tags.push({ tag, from: to });
-				else { rendered(from, to); return false; }
-			}
-			hide(from, to); return false;
+		if (name === 'HTMLTag') { htmlTag(from, to); return false; }
+		if (name === 'HTMLBlock') {
+			// The same Markdown parser exposes HTML tokens inside a block. Preserve
+			// editable source text and reuse the existing sanitized tag decorations.
+			for (const element of htmlInline.parseInline(source.slice(from, to), from))
+				if (htmlInline.nodeSet.types[element.type]?.name === 'HTMLTag') htmlTag(element.from, element.to, true);
+			return false;
 		}
+		if (name === 'TableHeader' || name === 'TableRow')
+			ranges.push(Decoration.line({ class: `gvkit-arrange-table-row${name === 'TableHeader' ? ' gvkit-arrange-table-header' : ''}` }).range(state.doc.lineAt(from).from));
+		if (name === 'TableDelimiter' && node.parent?.name === 'Table')
+			ranges.push(Decoration.line({ class: 'gvkit-arrange-table-separator' }).range(state.doc.lineAt(from).from));
 		if (name === 'TableCell') mark(from, to, 'span', { class: 'gvkit-arrange-table-cell' });
-		if (name === 'TableHeader') mark(from, to, 'strong');
 		if (name === 'Link' || name === 'Autolink') {
 			const children = node.getChildren('LinkMark'), url = node.getChild('URL');
 			const labelFrom = children[0]?.to ?? from;
@@ -174,12 +197,17 @@ function parsedDocument(state: EditorState, app: App, path: string, component: C
 			if ((name === 'HeaderMark' || name === 'QuoteMark') && source[end] === ' ') end++;
 			hide(from, end);
 		}
-		if (name === 'ListMark' && node.parent?.parent?.name === 'BulletList') {
-			// A bullet is a parsed list marker, not editable Markdown punctuation.
-			class Bullet extends WidgetType { toDOM() { const el = document.createElement('span'); el.textContent = '•'; return el; } }
-			ranges.push(Decoration.replace({ widget: new Bullet() }).range(from, to));
+		if (name === 'ListMark' && ['BulletList', 'OrderedList'].includes(node.parent?.parent?.name ?? '')) {
+			const list = node.parent!.parent!;
+			if (node.parent!.getChild('Task')) { hide(from, to + (source[to] === ' ' ? 1 : 0)); return false; }
+			const items = list.getChildren('ListItem'), first = items[0]?.getChild('ListMark');
+			const label = list.name === 'OrderedList' && first
+				? `${Number.parseInt(source.slice(first.from, first.to), 10) + items.findIndex(item => item.from === node.parent!.from)}.` : '•';
+			class ListMarker extends WidgetType { toDOM() { const el = document.createElement('span'); el.className = 'gvkit-arrange-list-marker'; el.textContent = label; return el; } }
+			ranges.push(Decoration.replace({ widget: new ListMarker() }).range(from, to));
 		}
 		if (name === 'TaskMarker') {
+			if (source[from + 1]?.toLowerCase() === 'x') mark(to, node.parent!.to, 'span', { class: 'gvkit-arrange-task-done' });
 			class Checkbox extends WidgetType {
 				toDOM(view: EditorView) {
 					const el = document.createElement('input'); el.type = 'checkbox'; el.checked = source[from + 1]?.toLowerCase() === 'x';
@@ -194,6 +222,22 @@ function parsedDocument(state: EditorState, app: App, path: string, component: C
 		}
 		return true;
 	} });
+	if (copy && source.trim()) {
+		class Copy extends WidgetType {
+			toDOM(): HTMLElement {
+				const button = document.createElement('button');
+				button.type = 'button'; button.className = 'gvkit-arrange-icon gvkit-arrange-body-copy';
+				button.setAttribute('aria-label', '复制标题及附注'); button.title = '复制标题及附注';
+				setIcon(button, 'copy');
+				button.onmousedown = event => event.preventDefault();
+				button.onclick = event => { event.preventDefault(); event.stopPropagation(); copy?.(); };
+				return button;
+			}
+			ignoreEvent(): boolean { return true; }
+		}
+		// A point widget follows the last source character, outside link marks.
+		ranges.push(Decoration.widget({ widget: new Copy(), side: 1 }).range(copyAt));
+	}
 	return Decoration.set(ranges, true);
 }
 
@@ -201,11 +245,11 @@ export class ArrangeBodyEditor {
 	readonly editor: EditorView;
 	readonly dom: HTMLElement;
 	private hint: string;
-	constructor(parent: HTMLElement, value: string, hint: string, app: App, path: string, component: Component, changed: () => void, caretChanged: () => void = () => {}) {
+	constructor(parent: HTMLElement, value: string, hint: string, app: App, path: string, component: Component, changed: () => void, caretChanged: () => void = () => {}, copy?: () => void) {
 		this.hint = hint;
 		const parsed = StateField.define<DecorationSet>({
-			create: state => parsedDocument(state, app, path, component),
-			update: (value, tr) => tr.docChanged ? parsedDocument(tr.state, app, path, component) : value,
+			create: state => parsedDocument(state, app, path, component, copy),
+			update: (value, tr) => tr.docChanged ? parsedDocument(tr.state, app, path, component, copy) : value,
 			provide: field => [EditorView.decorations.from(field), EditorView.atomicRanges.of(view => view.state.field(field).update({
 				filter: (_from, _to, value) => !value.spec.tagName && !value.spec.class,
 			}))],

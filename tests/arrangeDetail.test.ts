@@ -243,10 +243,13 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const css = window.document.createElement('style');
 		css.textContent = await readFile(join(process.cwd(), 'styles.css'), 'utf8');
 		window.document.head.append(css);
-		assert.equal(window.getComputedStyle(view.editing.body.dom).display, 'none', 'preview must not also display the hidden Markdown editor');
+		const parsedSurface = view.editing.body.dom;
+		assert.notEqual(window.getComputedStyle(parsedSurface).display, 'none', 'parsed Markdown is visible before focus');
 		view.editing.preview.click();
-		assert.equal(window.getComputedStyle(view.editing.preview).display, 'none');
-		assert.notEqual(window.getComputedStyle(view.editing.body.dom).display, 'none', 'editor becomes the only visible body when editing');
+		assert.notEqual(window.getComputedStyle(view.editing.preview).display, 'none');
+		assert.equal(view.editing.body.dom, parsedSurface, 'focus uses the same rendered body tree');
+		view.input.focus(); await view.saveEdit();
+		assert.equal(view.editing.body.dom, parsedSurface); assert.equal(parsedSurface.hidden, false, 'blur retains the same Markdown surface');
 		css.remove();
 		await store.setDate(first, store.facts().day); await view.reload();
 		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-overdue'), null);
@@ -332,7 +335,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		for (const hint of ['写下下一步', '']) {
 			await store.configure({ detailShadow: 0, bodyPlaceholder: hint }); view.applyComposerSettings();
 			assert.equal(body.placeholder, hint);
-			assert.equal(root.querySelector('.gvkit-arrange-body-placeholder')?.textContent, hint);
+			assert.equal(root.querySelector('.cm-placeholder')?.textContent, hint);
 			assert.equal(body.hidden, false); assert.equal(body.value, '');
 			assert.equal(root.style.getPropertyValue('--gvkit-arrange-detail-shadow'), 'none');
 		}
@@ -677,19 +680,51 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		coloredEditor.editor.dispatch({ selection: { anchor: 0 } });
 		coloredEditor.editor.contentDOM.blur(); await view.saveEdit(); await view.select(null);
 		window.document.getSelection()?.removeAllRanges();
-		// First body click maps a rendered text node to its Markdown source offset.
-		await store.edit(family, '光标标题', '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字', null);
-		await view.select(family);
-		const preview = view.editing.preview;
-		preview.innerHTML = '<h2>标题</h2><p>第一段 <strong>加粗文字</strong> 尾部</p><p>第二行文字</p>';
-		const textNode = preview.querySelectorAll('p')[1].firstChild;
-		(window.document as any).caretRangeFromPoint = () => ({ startContainer: textNode, startOffset: 2 });
-		textNode.parentElement.dispatchEvent(new window.MouseEvent('click', { bubbles: true, clientX: 40, clientY: 80 }));
-		assert.equal(view.editing.body.editor.state.selection.main.head, view.editing.body.value.indexOf('第二行文字') + 2);
-		assert.equal(view.editing.body.value, '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字');
-		delete (window.document as any).caretRangeFromPoint;
-		view.renderBody(); const link = preview.createEl('a', { text: '链接', attr: { href: '#target' } }); link.click();
-		assert.equal(view.editing.body.hidden, true, 'links do not enter the editor');
+		// One live Markdown tree owns native caret hit testing before and after blur.
+		const originalMarkdown = '## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字';
+		await store.edit(family, '光标标题', originalMarkdown, null); await view.select(family);
+		const editorSurface = view.editing.body.editor.contentDOM;
+		const parsedMarkup = editorSurface.innerHTML;
+		view.editing.body.focus(originalMarkdown.indexOf('第二行文字') + 2);
+		assert.equal(view.editing.body.editor.state.selection.main.head, originalMarkdown.indexOf('第二行文字') + 2);
+		view.input.focus(); await view.saveEdit();
+		assert.equal(view.editing.body.editor.contentDOM, editorSurface);
+		assert.equal(editorSurface.innerHTML, parsedMarkup, 'focus and blur keep headings/emphasis/layout markup intact');
+		assert.equal(view.editing.body.value, originalMarkdown);
+		view.editing.body.value = '- [x] 完成清单\n- [ ] 待办清单';
+		assert.equal(editorSurface.querySelectorAll('input[type=checkbox]').length, 2);
+		assert.equal(editorSurface.textContent.includes('•'), false, 'task checkboxes do not gain an extra list bullet');
+		assert.match(editorSurface.querySelector('.gvkit-arrange-task-done').textContent, /完成清单/);
+		// E correction: preserve real Markdown semantics, not just equal focus states.
+		for (const [source, labels] of [
+			['1. 第一步\n1. 第二步\n1. 第三步', ['1.', '2.', '3.']],
+			['7. 第一步\n1. 第二步', ['7.', '8.']],
+		] as const) {
+			view.editing.body.value = source;
+			assert.deepEqual([...editorSurface.querySelectorAll('.gvkit-arrange-list-marker')].map(el => el.textContent), labels);
+			assert.equal(view.editing.body.value, source);
+		}
+		const tableSource = '| 项目 | 结果 |\n| --- | --- |\n| 很长很长的第一列中文内容 | 甲 |\n| 短 | 乙 |';
+		view.editing.body.value = tableSource;
+		assert.equal(editorSurface.querySelectorAll('.gvkit-arrange-table-row').length, 3);
+		assert.deepEqual([...editorSurface.querySelectorAll('.gvkit-arrange-table-cell')].map(el => el.textContent), ['项目', '结果', '很长很长的第一列中文内容', '甲', '短', '乙']);
+		assert.equal(view.editing.body.value, tableSource);
+		for (const html of ['<div>\n<strong>加粗文字</strong>\n</div>', '<div>\n<strong>加粗文字</strong>\n</div>\n']) {
+			view.editing.body.value = html;
+			assert.equal(editorSurface.querySelector('strong')?.textContent, '加粗文字');
+			assert.equal(editorSurface.textContent.trim(), '加粗文字');
+			assert.ok(editorSurface.querySelector('.gvkit-arrange-body-copy'), 'structural HTML closing lines do not hide the existing copy action');
+			const markup = editorSurface.innerHTML;
+			view.editing.body.focus(html.indexOf('加粗文字')); view.input.focus();
+			assert.equal(editorSurface.innerHTML, markup); assert.equal(view.editing.body.value, html);
+		}
+		const opened: string[] = [], oldOpen = window.open;
+		window.open = ((href: string) => { opened.push(href); return null; }) as any;
+		view.editing.body.value = '[链接](https://example.com)'; view.input.focus();
+		const link = view.editing.body.editor.contentDOM.querySelector('a'); assert.ok(link);
+		link.click(); assert.equal(opened.at(-1), 'https://example.com');
+		assert.equal(view.editing.body.focused, false, 'link activation does not demand an editing step');
+		window.open = oldOpen; view.editing.body.value = originalMarkdown; await view.saveEdit();
 		// Batch four: the date region reuses the date operation; copying never edits the item.
 		const originalCopyDate = store.items.find((x: any) => x.id === family).date;
 		await store.setDate(family, '2026-10-28'); await view.reload();
@@ -708,18 +743,18 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		let copyBody = root.querySelector<HTMLButtonElement>('.gvkit-arrange-body-copy')!;
 		assert.ok(copyBody); copyBody.click(); await new Promise(resolve => setTimeout(resolve, 0));
 		assert.equal(copied.at(-1), '光标标题\n\n## 标题\n\n第一段 **加粗文字** 尾部\n\n第二行文字');
-		assert.equal(view.editing.body.hidden, true, 'copy does not enter the body editor');
+		assert.equal(view.editing.body.hidden, false, 'copy leaves the shared Markdown surface visible');
 		view.renderBody(); view.renderBody();
 		await new Promise(resolve => setTimeout(resolve, 0));
-		assert.equal(root.querySelectorAll('.gvkit-arrange-body-copy').length, 1, 'overlapping renders append only one copy icon');
+		assert.equal(root.querySelectorAll('.gvkit-arrange-body-copy').length, 1, 'repeated body refreshes retain only one copy widget');
 		assert.equal(await vault.read(files.get(store.items.find((x: any) => x.id === family).path)), beforeCopy);
-		// Rendered block/inline markup keeps the icon at the final word, outside links.
-		for (const html of ['<p>段落<strong>最后字</strong></p>', '<ul><li>列表最后字</li></ul>', '<p>末尾<a href="#x">链接</a></p>']) {
-			view.renderBody(); view.editing.preview.innerHTML = html;
+		// Copy stays at the final rendered word and outside real Markdown links.
+		for (const markdown of ['段落**最后字**', '- 列表最后字', '末尾[链接](https://example.com)']) {
+			view.editing.body.value = markdown; view.renderBody();
 			await new Promise(resolve => setTimeout(resolve, 0));
 			copyBody = root.querySelector<HTMLButtonElement>('.gvkit-arrange-body-copy')!;
 			assert.ok(copyBody); assert.equal(copyBody.closest('a'), null);
-			assert.equal(copyBody.parentElement!.lastChild, copyBody);
+			assert.equal(view.editing.body.editor.posAtDOM(copyBody), markdown.trimEnd().length);
 		}
 		copyFails = true; copyBody.click(); await new Promise(resolve => setTimeout(resolve, 0));
 		assert.equal((window as any).notices.at(-1), '复制失败，请重试'); copyFails = false;
@@ -1308,6 +1343,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);
 	} finally {
+		if (view && !view.closed) await view.onClose();
 		view?.disposers.forEach((fn: () => void) => fn());
 		await window.happyDOM.close();
 		for (const [key, descriptor] of globals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
