@@ -2,7 +2,7 @@ import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
-import { ARRANGE_STATE_PATH, ArrangeStore } from './arrangeStore';
+import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore } from './arrangeStore';
 import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
@@ -135,6 +135,8 @@ export class ArrangeView extends ItemView {
 	private area!: HTMLElement;
 	private input!: HTMLTextAreaElement;
 	private createButton!: HTMLButtonElement;
+	private createTip!: HTMLElement;
+	private createTipTimer: number | null = null;
 	private createDateButton!: HTMLButtonElement;
 	private draftDate: string | null = null;
 	private keyboardBackdrop: HTMLElement | null = null;
@@ -346,6 +348,9 @@ export class ArrangeView extends ItemView {
 		this.detail = this.area.createDiv('gvkit-arrange-detail');
 		this.detail.hidden = true;
 		const composer = root.createDiv('gvkit-arrange-composer');
+		this.createTip = composer.createDiv({ cls: 'gvkit-arrange-create-tip', attr: { role: 'status', 'aria-live': 'polite' } });
+		this.createTip.hidden = true;
+		this.register(() => { if (this.createTipTimer !== null) window.clearTimeout(this.createTipTimer); });
 		this.input = composer.createEl('textarea', { attr: { rows: '1', placeholder: '想到就记…', 'aria-label': '新增事项' } });
 		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
 		this.createButton.addClass('gvkit-arrange-submit');
@@ -1525,18 +1530,35 @@ export class ArrangeView extends ItemView {
 			// A slow write must not swallow characters typed while it was pending.
 		}
 	}
+	private showCreateTip(text: string, error = false): void {
+		if (this.createTipTimer !== null) window.clearTimeout(this.createTipTimer);
+		this.createTip.textContent = text;
+		this.createTip.hidden = !text;
+		this.createTip.toggleClass('is-error', error);
+		this.createTipTimer = text && !error ? window.setTimeout(() => { this.createTip.hidden = true; this.createTipTimer = null; }, 6000) : null;
+	}
 	private async create(): Promise<void> {
-		if (this.choosingParent) return;
+		if (this.choosingParent || this.busy) return;
 		const draft = this.input.value;
 		if (!draft.trim()) return;
 		const parent = this.selected;
-		let id: string | undefined;
+		let id: string | undefined, parentRestored = false;
 		const date = this.draftDate;
-		if (await this.run(async () => { id = await this.store.create(draft, parent, date); })) {
+		this.showCreateTip('');
+		const saved = await this.run(async () => {
+			try { id = await this.store.create(draft, parent, date, () => { parentRestored = true; }); }
+			catch (error) {
+				if (error instanceof ArrangeCreateError) id = error.createdId;
+				this.showCreateTip(error instanceof Error ? error.message : '新增失败，输入已保留，请重试', true);
+				throw error;
+			}
+		});
+		if (saved || id) {
 			if (this.input.value === draft) { this.input.value = ''; this.draftDate = null; }
 			this.updateComposer();
 			if (id) this.reveal(id);
 		}
+		if (saved && parentRestored) this.showCreateTip('已新增下级，上级事项已恢复未完成');
 	}
 	private headerMenu(event: MouseEvent): void {
 		const facts = todayFacts(this.store.items, this.store.state);

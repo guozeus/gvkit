@@ -19,6 +19,10 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 	return `---\n${stringifyYaml(fields)}---\n${body}`;
 }
 
+export class ArrangeCreateError extends Error {
+	constructor(message: string, readonly createdId: string) { super(message); }
+}
+
 export class ArrangeStore {
 	items: ArrangeItem[] = [];
 	rewards: RewardRecord[] = [];
@@ -242,18 +246,46 @@ export class ArrangeStore {
 		});
 	}
 
-	create(title: string, parent: string | null, date: string | null = null): Promise<string> {
+	create(title: string, parent: string | null, date: string | null = null, onParentRestored?: () => void): Promise<string> {
 		return this.serial('create', async () => {
 			if (!title.trim()) throw Error('请填写事项');
 			await this.requireFolder(TODO);
 			await this.requireFolder('settings/gvkit');
 			const id = createGvid();
 			if (!validParent(this.items, id, parent)) throw Error('上级事项已不存在');
-			this.state.order = moveInOrder(this.state.order, this.items, id);
-			await this.saveState('create');
-			await this.app.vault.create(`${TODO}/${id}.md`, markdown({ gvid: id, gvkit_arrange: true,
-				title: title.trim(), parent, date, completed_at: null, pinned: false }, ''));
-			await this.load();
+			const completedParent = this.items.find(item => item.id === parent && item.completedAt);
+			// Only the direct parent follows the existing manual undo contract.
+			const parentFile = completedParent ? this.file(completedParent.id) : null;
+			const parentSource = parentFile ? await this.app.vault.read(parentFile) : null;
+			const oldOrder = [...this.state.order];
+			const path = `${TODO}/${id}.md`;
+			try {
+				if (completedParent) await this.changeCompletion(completedParent.id, false);
+				this.state.order = moveInOrder(this.state.order, this.items, id);
+				await this.saveState('create');
+				// Commit the child last: preceding failures cannot leave an extra child.
+				await this.app.vault.create(path, markdown({ gvid: id, gvkit_arrange: true,
+					title: title.trim(), parent, date, completed_at: null, pinned: false }, ''));
+				await this.load();
+			} catch (error) {
+				if (!completedParent) throw error;
+				if (this.app.vault.getAbstractFileByPath(path) instanceof TFile)
+					throw new ArrangeCreateError('下级已保存，上级已恢复未完成；刷新失败，请刷新查看，勿重复提交', id);
+				// Restore this parent's exact original bytes and path if child creation failed.
+				try {
+					if (parentFile && parentSource !== null) {
+						await this.app.vault.process(parentFile, () => parentSource);
+						if (parentFile.path !== completedParent.path) await this.app.fileManager.renameFile(parentFile, completedParent.path);
+					}
+					this.state.order = oldOrder;
+					await this.saveState('create_restore');
+					await this.load();
+				} catch {
+					throw Error('新增失败，未创建下级；上级状态恢复失败，请刷新检查；输入已保留');
+				}
+				throw error;
+			}
+			if (completedParent) onParentRestored?.();
 			return id;
 		});
 	}
@@ -273,37 +305,39 @@ export class ArrangeStore {
 		});
 	}
 	complete(id: string, done: boolean): Promise<boolean> {
-		return this.serial('complete', async () => {
-			const folder = done ? DONE : TODO;
-			await this.requireFolder(folder);
-			const item = this.items.find(item => item.id === id);
-			if (!item || Boolean(item.completedAt) === done) return false;
-			if (done) {
-				const parents = [id], visited = new Set(parents);
-				for (const parent of parents) {
-					for (const child of this.items.filter(value => value.parent === parent)) {
-						if (visited.has(child.id)) continue;
-						if (!child.completedAt) throw Error('需先完成所有下级事项');
-						visited.add(child.id); parents.push(child.id);
-					}
+		return this.serial('complete', () => this.changeCompletion(id, done));
+	}
+	private async changeCompletion(id: string, done: boolean): Promise<boolean> {
+		const folder = done ? DONE : TODO;
+		await this.requireFolder(folder);
+		const item = this.items.find(item => item.id === id);
+		if (!item || Boolean(item.completedAt) === done) return false;
+		if (done) {
+			const parents = [id], visited = new Set(parents);
+			for (const parent of parents) {
+				for (const child of this.items.filter(value => value.parent === parent)) {
+					if (visited.has(child.id)) continue;
+					if (!child.completedAt) throw Error('需先完成所有下级事项');
+					visited.add(child.id); parents.push(child.id);
 				}
 			}
-			const destination = `${folder}/${this.file(id).name}`;
-			if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
-			if (done && !this.state.rewardsEnabledAt) {
-				this.state.rewardsEnabledAt = new Date().toISOString();
-				await this.saveState('complete_enable_rewards');
-			}
-			const completedAt = done ? new Date().toISOString() : null;
-			await this.patch(id, { completed_at: completedAt, pinned: false,
-				reward_completed_at: completedAt, reward_awarded: done ? rewardValue(item.rewardPoints) : null });
-			const file = this.file(id);
-			await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
-			await this.load();
-			await this.saveState('complete');
-			return true;
-		});
+		}
+		const destination = `${folder}/${this.file(id).name}`;
+		if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
+		if (done && !this.state.rewardsEnabledAt) {
+			this.state.rewardsEnabledAt = new Date().toISOString();
+			await this.saveState('complete_enable_rewards');
+		}
+		const completedAt = done ? new Date().toISOString() : null;
+		await this.patch(id, { completed_at: completedAt, pinned: false,
+			reward_completed_at: completedAt, reward_awarded: done ? rewardValue(item.rewardPoints) : null });
+		const file = this.file(id);
+		await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
+		await this.load();
+		await this.saveState('complete');
+		return true;
 	}
+
  enableRewards(): Promise<void> {
   return this.serial('enableRewards', async () => {
    if (!this.state.rewardsEnabledAt) { this.state.rewardsEnabledAt = new Date().toISOString(); await this.saveState('enable_rewards'); }

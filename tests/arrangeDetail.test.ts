@@ -1223,6 +1223,87 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.ok(revealed.at(-1)?.parent === view.list, 'existing root creation still reveals the main list');
 		proto.scrollIntoView = () => {};
 
+		// C: the real composer reopens exactly its completed direct parent.
+		const cGrand = await store.create('C祖先', null);
+		const cParent = await store.create('C已完成父', cGrand, '2026-11-12');
+		const cSibling = await store.create('C无关兄弟', cGrand);
+		await store.edit(cParent, 'C已完成父', '原正文 [[保留]]', cGrand);
+		await store.toggleDevelopmentCompleted(cParent); await store.setReward(cParent, 5);
+		await store.setDailyGoal(cParent);
+		await store.complete(cParent, true); await store.complete(cSibling, true); await store.complete(cGrand, true);
+		const cGrandFile = files.get(store.items.find((x: any) => x.id === cGrand).path);
+		const cGrandBytes = await vault.read(cGrandFile);
+		const siblingFile = files.get(store.items.find((x: any) => x.id === cSibling).path);
+		const siblingBytes = await vault.read(siblingFile);
+		const cBefore = store.facts(), cRewardBefore = store.rewards.reduce((n: number, r: any) => n + r.points, 0);
+		await view.reload(); await view.select(cParent);
+		view.input.value = 'C提交一次'; view.draftDate = '2026-12-01'; view.updateComposer();
+		let cRelease!: () => void;
+		const cGate = new Promise<void>(resolve => { cRelease = resolve; });
+		const cCreate = vault.create;
+		vault.create = async (path: string, source: string) => { if (source.includes('C提交一次')) await cGate; return cCreate(path, source); };
+		const cPending = view.create(); await new Promise(resolve => setTimeout(resolve, 0));
+		await view.create(); view.createButton.click();
+		assert.equal(view.createTip.hidden, true, 'no premature success while pending');
+		cRelease(); await cPending; vault.create = cCreate;
+		const cChildren = store.items.filter((x: any) => x.title === 'C提交一次');
+		assert.equal(cChildren.length, 1); assert.equal(cChildren[0].parent, cParent); assert.equal(cChildren[0].date, '2026-12-01');
+		const cRestored = store.items.find((x: any) => x.id === cParent);
+		assert.equal(cRestored.completedAt, null); assert.ok(cRestored.path.startsWith('安排/待执行/'));
+		assert.equal(cRestored.body, '原正文 [[保留]]'); assert.equal(cRestored.developmentCompleted, true);
+		assert.equal(cRestored.parent, cGrand); assert.equal(cRestored.rewardPoints, 5);
+		assert.equal(await vault.read(cGrandFile), cGrandBytes, 'manual undo contract does not cascade ancestors');
+		assert.equal(await vault.read(siblingFile), siblingBytes);
+		assert.equal(store.facts().x, cBefore.x - 1);
+		assert.equal(store.rewards.reduce((n: number, r: any) => n + r.points, 0), cRewardBefore - 5);
+		assert.equal(store.state.dailyGoal.id, cParent);
+		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-title-row input').checked, false);
+		assert.equal(view.createTip.hidden, false); assert.match(view.createTip.textContent, /已新增下级.*上级.*恢复未完成/);
+		assert.equal(view.createTip.parentElement, view.input.parentElement); assert.equal(view.input.value, '');
+		await view.reload();
+		assert.equal(store.items.find((x: any) => x.id === cParent).completedAt, null);
+		assert.equal(store.items.filter((x: any) => x.title === 'C提交一次').length, 1);
+		view.input.value = 'C普通父新子'; await view.create();
+		assert.equal(view.createTip.hidden, true, 'ordinary pending parent adds no reopen tip');
+
+		// Failures before the child commit restore exact parent bytes/path and retain the draft.
+		for (const stage of ['rename', 'state', 'child']) {
+			const cp = await store.create('C失败父' + stage, null);
+			await store.setReward(cp, 3); await store.complete(cp, true);
+			const original = store.items.find((x: any) => x.id === cp), originalFile = files.get(original.path);
+			const bytes = await vault.read(originalFile), order = [...store.state.order], rewards = JSON.stringify(store.rewards);
+			await view.reload(); await view.select(cp);
+			const createFn = vault.create, processFn = vault.process, renameFn = app.fileManager.renameFile;
+			let fired = false;
+			const trip = () => { if (!fired) { fired = true; throw Error('C模拟' + stage + '失败'); } };
+			if (stage === 'rename') app.fileManager.renameFile = async (...args: any[]) => { trip(); return (renameFn as any)(...args); };
+			if (stage === 'state') vault.process = async (file: any, change: any) => { if (file.path === 'settings/gvkit/arrange.md') trip(); return processFn(file, change); };
+			if (stage === 'child') vault.create = async (path: string, source: string) => { if (source.includes('C失败草稿')) trip(); return createFn(path, source); };
+			view.input.value = 'C失败草稿' + stage; view.draftDate = '2026-12-02';
+			await view.create(); vault.create = createFn; vault.process = processFn; app.fileManager.renameFile = renameFn;
+			assert.ok(fired); assert.equal(view.input.value, 'C失败草稿' + stage); assert.equal(view.draftDate, '2026-12-02');
+			assert.equal(store.items.filter((x: any) => x.title === 'C失败草稿' + stage).length, 0);
+			assert.equal(originalFile.path, original.path); assert.equal(await vault.read(originalFile), bytes);
+			assert.deepEqual(store.state.order, order); assert.equal(JSON.stringify(store.rewards), rewards);
+			assert.equal(view.createTip.hidden, false); assert.ok(view.createTip.classList.contains('is-error'));
+			await view.create();
+			assert.equal(store.items.filter((x: any) => x.title === 'C失败草稿' + stage).length, 1, 'retry creates exactly one child');
+			assert.equal(store.items.find((x: any) => x.id === cp).completedAt, null);
+		}
+		// A read failure after actual child commit must not invite duplicate creation.
+		const cReadParent = await store.create('C读回失败父', null); await store.complete(cReadParent, true);
+		await view.reload(); await view.select(cReadParent);
+		const readFn = vault.read; let failedRead = false;
+		vault.read = async (file: any) => {
+			const source = await readFn(file);
+			if (!failedRead && source.includes('C已落盘读回失败子')) { failedRead = true; throw Error('模拟读回失败'); }
+			return source;
+		};
+		view.input.value = 'C已落盘读回失败子'; await view.create(); vault.read = readFn;
+		assert.ok(failedRead); assert.equal(view.input.value, ''); assert.match(view.createTip.textContent, /已保存.*刷新失败/);
+		assert.ok(view.createTip.classList.contains('is-error')); assert.equal(store.items.filter((x: any) => x.title === 'C已落盘读回失败子').length, 1);
+		await view.create(); assert.equal(store.items.filter((x: any) => x.title === 'C已落盘读回失败子').length, 1);
+
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
 		assert.equal(slot.querySelector('.gvkit-arrange-header'), null);

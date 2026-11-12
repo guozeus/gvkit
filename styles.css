@@ -182,6 +182,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-row.is-drop-target::after { content: ''; position: absolute; left: 6px; right: 2px; top: 0; height: 2px; background: var(--color-blue, #448aff); pointer-events: none; }
 .gvkit-arrange-row.is-drop-target[data-drop-after="true"]::after { top: auto; bottom: -1px; }
 .gvkit-arrange-composer { --gvkit-arrange-composer-inset: max(7px, env(safe-area-inset-bottom)); flex: 0 0 auto; position: relative; padding: 0 0 var(--gvkit-arrange-composer-inset); border: 0; z-index: 3; }
+.gvkit-arrange-create-tip { margin: 6px 8px 0; padding: 10px 12px; border-left: 4px solid #b96a00; border-radius: 8px; background: #fff0bf; color: #613900; font-size: 16px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.gvkit-arrange-create-tip[hidden] { display: none; }
+.gvkit-arrange-create-tip.is-error { border-color: var(--text-error); background: var(--background-primary); color: var(--text-error); }
 .gvkit-arrange-composer, .gvkit-arrange-keyboard-backdrop { background: color-mix(in srgb, var(--background-primary) 92%, #4098ef); }
 /* The keyboard covers the home-indicator area; keep only the normal row inset. */
 .gvkit-arrange-keyboard-open .gvkit-arrange-composer { --gvkit-arrange-composer-inset: var(--gvkit-arrange-keyboard-gap, 7px); }
