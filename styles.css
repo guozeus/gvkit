@@ -421,3 +421,15 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 @keyframes gvkit-reward-glow { 0% { opacity:0; } 12%,85% { opacity:1; } 100% { opacity:0; } }
 @media (max-width:380px) { .gvkit-reward-next { display:none; } }
 @media (prefers-reduced-motion:reduce) { .gvkit-reward-float, .gvkit-reward-celebration { animation:none; } }
+
+.gvkit-arrange-repeat-entry { width: 100%; min-height: 44px; margin-bottom: 8px; }
+.gvkit-arrange-repeat > select { width: 100%; min-height: 44px; }
+.gvkit-arrange-repeat-custom { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.gvkit-arrange-repeat-custom input { width: 90px; min-height: 44px; font-size: 16px; }
+.gvkit-arrange-repeat-custom select { min-height: 44px; }
+.gvkit-arrange-repeat-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-top: 12px; }
+.gvkit-arrange-repeat-weekdays button { min-width: 0; min-height: 44px; padding: 0; }
+.gvkit-arrange-repeat-weekdays [aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
+.gvkit-arrange-repeat-error { color: var(--text-error); margin-top: 10px; }
+.gvkit-arrange-repeat [hidden] { display: none; }
+.gvkit-arrange-repeat button, .gvkit-arrange-repeat select, .gvkit-arrange-repeat-entry { touch-action: manipulation; }

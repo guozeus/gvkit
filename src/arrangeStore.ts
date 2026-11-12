@@ -1,3 +1,4 @@
+import { nextRepeatDate, repeatRule, sameRepeatCadence, validDate, type RepeatRule, type RepeatCompletion } from './arrangeRepeat';
 import { rewardRecord, rewardValue, type RewardRecord } from './arrangeRewards';
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
@@ -123,6 +124,7 @@ export class ArrangeStore {
 		} else this.trace?.record('config.missing', { run: context.run });
 		context.stage = 'scan_items';
 		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
+		const identities=new Set<string>();
 		const rewards: RewardRecord[] = [];
 		let archivedDailyGoalCompletedAt: string | null = null;
 		const today = dayKey(new Date(), state.timezone);
@@ -138,9 +140,17 @@ export class ArrangeStore {
 					const source = await this.app.vault.read(file);
 					fields = getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange') ? documentParts(source).fields : undefined;
 				}
+				const history = fields?.repeat_history as RepeatCompletion[] | undefined;
+				for (const occurrence of history ?? []) {
+					rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded});
+					if (dayKey(new Date(occurrence.completed_at), state.timezone) === today) {
+						archivedCompletions.push(occurrence.completed_at);
+						if(state.dailyGoal?.day===today && (fields?.gvid===state.dailyGoal.id || occurrence.id===state.dailyGoal.id)) archivedDailyGoalCompletedAt=occurrence.completed_at;
+					}
+				}
 				const record = fields && rewardRecord(fields);
 				if (record) rewards.push(record);
-				const completed = fields?.completed_at;
+				const completed = Array.isArray(fields?.repeat_history) ? null : fields?.completed_at;
 				if (fields?.gvkit_arrange === true && typeof completed === 'string' && Number.isFinite(Date.parse(completed))
 					&& dayKey(new Date(completed), state.timezone) === today) {
 					archivedCompletions.push(completed);
@@ -156,8 +166,25 @@ export class ArrangeStore {
 			const record = rewardRecord(fields);
 			if (record) rewards.push(record);
 			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
-			if (items.some(item => item.id === fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
-			items.push({ id: fields.gvid, path: file.path,
+			if (identities.has(fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
+			identities.add(fields.gvid);
+			const history = (fields.repeat_history ?? []) as RepeatCompletion[];
+			const rule = repeatRule(fields.repeat);
+			const closed = fields.repeat_closed === true;
+			const visible = history.filter(value => !value.archived);
+			const last = closed ? visible[visible.length-1] : undefined;
+			for (const occurrence of history) {
+				rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded});
+				if (occurrence.archived) { archivedCompletions.push(occurrence.completed_at); continue; }
+				items.push({id:occurrence === last ? fields.gvid : occurrence.id, path:file.path,
+					title:occurrence.title, body:occurrence.body, parent:occurrence.parent, date:occurrence.date,
+					completedAt:occurrence.completed_at, rewardPoints:occurrence.reward_points, pinned:false,
+					occurrenceOf:fields.gvid, occurrenceId:occurrence.id});
+			}
+			if (closed) continue;
+			items.push({ id: fields.gvid, path: file.path, repeat: rule,
+				repeatInstance:typeof fields.repeat_instance === 'string' ? fields.repeat_instance : undefined,
+				reopened:Array.isArray(fields.repeat_reopened) && fields.repeat_reopened.length > 0,
 				title: typeof fields.title === 'string' ? fields.title : file.basename, body,
 				parent: typeof fields.parent === 'string' ? fields.parent : null,
 				date: typeof fields.date === 'string' ? fields.date : null,
@@ -175,7 +202,7 @@ export class ArrangeStore {
 		if (state.dailyGoal && state.dailyGoal.day < today) {
 			context.stage = 'day_rollover';
 			this.trace?.record('day_rollover.start', { run: context.run, trigger: 'dailyGoal_day_changed' });
-			const previous = items.find(item => item.id === state.dailyGoal!.id);
+			const previous = items.find(item => item.occurrenceOf === state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),state.timezone)===state.dailyGoal!.day) ?? items.find(item => item.id === state.dailyGoal!.id);
 			if (previous && !previous.completedAt) {
 				// This explicit daily return is an insertion at the very front, not
 				// ordinary top. All other items keep their relative order and pins;
@@ -242,18 +269,30 @@ export class ArrangeStore {
 	private async patch(id: string, changes: Record<string, unknown>, body?: string): Promise<void> {
 		await this.app.vault.process(this.file(id), source => {
 			const current = documentParts(source);
+			const item = this.items.find(value => value.id === id);
+			if (item?.occurrenceId) {
+				const history = current.fields.repeat_history as RepeatCompletion[];
+				const occurrence = history.find(value => value.id === item.occurrenceId);
+				if (!occurrence) throw Error('这次完成已被撤销，请刷新');
+				Object.assign(occurrence, changes, body !== undefined ? {body} : {});
+				return markdown(current.fields, current.body);
+			}
 			return markdown({ ...current.fields, ...changes }, body ?? current.body);
 		});
 	}
 
-	create(title: string, parent: string | null, date: string | null = null, onParentRestored?: () => void): Promise<string> {
+	create(title: string, parent: string | null, date: string | null = null, onParentRestored?: () => void, repeat: RepeatRule | null = null): Promise<string> {
 		return this.serial('create', async () => {
 			if (!title.trim()) throw Error('请填写事项');
+			const chosenParent = this.items.find(value => value.id === parent);
+			if (chosenParent?.occurrenceOf) parent = chosenParent.occurrenceOf;
 			await this.requireFolder(TODO);
 			await this.requireFolder('settings/gvkit');
+			repeat=repeatRule(repeat);
+			if (repeat) {if(!validDate(date)) throw Error('请选择重复日期');nextRepeatDate(date,repeat);}
 			const id = createGvid();
 			if (!validParent(this.items, id, parent)) throw Error('上级事项已不存在');
-			const completedParent = this.items.find(item => item.id === parent && item.completedAt);
+			const completedParent = chosenParent?.completedAt ? chosenParent : this.items.find(item => item.id === parent && item.completedAt);
 			// Only the direct parent follows the existing manual undo contract.
 			const parentFile = completedParent ? this.file(completedParent.id) : null;
 			const parentSource = parentFile ? await this.app.vault.read(parentFile) : null;
@@ -265,7 +304,7 @@ export class ArrangeStore {
 				await this.saveState('create');
 				// Commit the child last: preceding failures cannot leave an extra child.
 				await this.app.vault.create(path, markdown({ gvid: id, gvkit_arrange: true,
-					title: title.trim(), parent, date, completed_at: null, pinned: false }, ''));
+					title: title.trim(), parent, date, completed_at: null, pinned: false, ...(repeat ? {repeat,repeat_instance:createGvid()} : {}) }, ''));
 				await this.load();
 			} catch (error) {
 				if (!completedParent) throw error;
@@ -292,6 +331,7 @@ export class ArrangeStore {
 	edit(id: string, title: string, body: string, parent: string | null): Promise<void> {
 		return this.serial('edit', async () => {
 			if (!title.trim()) throw Error('标题不能为空');
+			parent=this.items.find(value=>value.id===parent)?.occurrenceOf ?? parent;
 			if (!validParent(this.items, id, parent)) throw Error('不能将自己或自己的下级设为上级');
 			await this.patch(id, { title: title.trim(), parent }, body);
 			await this.load();
@@ -299,19 +339,22 @@ export class ArrangeStore {
 	}
 	setParent(id: string, parent: string | null): Promise<void> {
 		return this.serial('setParent', async () => {
+			parent=this.items.find(value=>value.id===parent)?.occurrenceOf ?? parent;
 			if (!validParent(this.items, id, parent)) throw Error('不能将自己或自己的下级设为上级');
 			await this.patch(id, { parent });
 			await this.load();
 		});
 	}
 	complete(id: string, done: boolean): Promise<boolean> {
-		return this.serial('complete', () => this.changeCompletion(id, done));
+		const expected = this.items.find(item => item.id === id);
+		return this.serial('complete', () => this.changeCompletion(id, done, expected));
 	}
-	private async changeCompletion(id: string, done: boolean): Promise<boolean> {
+	private async changeCompletion(id: string, done: boolean, expected?: ArrangeItem): Promise<boolean> {
 		const folder = done ? DONE : TODO;
 		await this.requireFolder(folder);
 		const item = this.items.find(item => item.id === id);
 		if (!item || Boolean(item.completedAt) === done) return false;
+		if (expected && (expected.date !== item.date || expected.occurrenceId !== item.occurrenceId || expected.repeatInstance !== item.repeatInstance)) return false;
 		if (done) {
 			const parents = [id], visited = new Set(parents);
 			for (const parent of parents) {
@@ -321,6 +364,10 @@ export class ArrangeStore {
 					visited.add(child.id); parents.push(child.id);
 				}
 			}
+		}
+		const sourceFields = documentParts(await this.app.vault.read(this.file(id))).fields;
+		if (item.repeat || item.occurrenceId || Array.isArray(sourceFields.repeat_history)) {
+			return this.changeRepeatCompletion(item, done);
 		}
 		const destination = `${folder}/${this.file(id).name}`;
 		if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
@@ -338,6 +385,100 @@ export class ArrangeStore {
 		return true;
 	}
 
+	/** One atomic Markdown process commits both the completion and its successor. */
+	private async changeRepeatCompletion(item: ArrangeItem, done: boolean): Promise<boolean> {
+		if (done && !this.state.rewardsEnabledAt) {
+			this.state.rewardsEnabledAt = new Date().toISOString();
+			await this.saveState('complete_enable_rewards');
+		}
+		let changed = false;
+		await this.app.vault.process(this.file(item.id), source => {
+			const {fields, body} = documentParts(source);
+			const history = (fields.repeat_history ?? []) as RepeatCompletion[];
+			const reopened = (fields.repeat_reopened ?? []) as RepeatCompletion[];
+			if (!done) {
+				const index = history.findIndex(value => value.id === item.occurrenceId);
+				if (index < 0) return source;
+				if (!reopened.length && fields.repeat_closed !== true) {
+					fields.repeat_resume = fields.date ?? null;
+					fields.repeat_resume_instance=fields.repeat_instance ?? createGvid();
+				}
+				reopened.push(history.splice(index,1)[0]!);
+				reopened.sort((a,b)=>(a.date ?? '').localeCompare(b.date ?? ''));
+				fields.date = reopened[0]!.date;
+				fields.repeat_instance=reopened[0]!.id;
+				fields.repeat_closed = false;
+			} else {
+				if (fields.repeat_closed || fields.date !== item.date || fields.repeat_instance !== item.repeatInstance) return source;
+				const rule = repeatRule(fields.repeat);
+				const prior = reopened.shift();
+				const completedAt = new Date().toISOString();
+				const occurrence: RepeatCompletion = {id:prior?.id ?? (typeof fields.repeat_instance === 'string' ? fields.repeat_instance : createGvid()), date:item.date,
+					title:prior?.title ?? item.title, body:prior?.body ?? body, parent:prior ? prior.parent : item.parent, completed_at:completedAt,
+					reward_points:prior?.reward_points ?? rewardValue(item.rewardPoints), reward_awarded:prior?.reward_awarded ?? rewardValue(item.rewardPoints)};
+				if (history.some(value => value.id === occurrence.id)) throw Error('这次完成已存在，请刷新后检查完成记录');
+				history.push(occurrence);
+				if (prior) {
+					if (reopened.length) {fields.date = reopened[0]!.date;fields.repeat_instance=reopened[0]!.id;}
+					else if (Object.prototype.hasOwnProperty.call(fields,'repeat_resume')) {
+						fields.date=fields.repeat_resume;
+						fields.repeat_instance=fields.repeat_resume_instance ?? createGvid();
+						delete fields.repeat_resume; delete fields.repeat_resume_instance;
+					} else fields.repeat_closed=true;
+				} else if (rule && validDate(item.date)) {fields.date=nextRepeatDate(item.date,rule);fields.repeat_instance=createGvid();}
+				else fields.repeat_closed=true;
+			}
+			fields.repeat_history=history;
+			fields.repeat_reopened=reopened;
+			fields.completed_at=fields.repeat_closed ? history[history.length-1]?.completed_at ?? null : null;
+			if(fields.repeat_closed) {fields.date=history[history.length-1]?.date ?? null;fields.pinned=false;delete fields.repeat_instance;}
+			fields.reward_completed_at=null; fields.reward_awarded=null;
+			const file=this.file(item.id), destination=`${fields.repeat_closed ? DONE : TODO}/${file.name}`;
+			if(destination!==file.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
+			changed=true;
+			return markdown(fields,body);
+		});
+		if(changed) {
+			const file=this.file(item.id);
+			const fields=documentParts(await this.app.vault.read(file)).fields;
+			const destination=`${fields.repeat_closed ? DONE : TODO}/${file.name}`;
+			if(file.path!==destination) await this.app.fileManager.renameFile(file,destination);
+		}
+		await this.load();
+		return changed;
+	}
+	/** Explicit edits replace future cadence, while real undone occurrences remain to be corrected. */
+	private reschedule(fields: Record<string, unknown>, date: string | null, rule: RepeatRule | null): boolean {
+		const previous=repeatRule(fields.repeat);
+		if (fields.date===date && sameRepeatCadence(previous,rule)) return false;
+		fields.date=date;
+		if (rule || previous || 'repeat' in fields) fields.repeat=rule ? {...rule,anchor:date!} : null;
+		const reopened=(fields.repeat_reopened ?? []) as RepeatCompletion[];
+		if (reopened.length) {
+			reopened[0]!.date=date;
+			if (rule && validDate(date)) {
+				fields.repeat_resume=nextRepeatDate(date,fields.repeat as RepeatRule);
+				fields.repeat_resume_instance ??=createGvid();
+			} else {delete fields.repeat_resume;delete fields.repeat_resume_instance;}
+		}
+		if (rule) fields.repeat_instance ??=createGvid();
+		return true;
+	}
+	setRepeat(id: string, value: RepeatRule | null, date: string | null): Promise<void> {
+		return this.serial('setRepeat', async () => {
+			const rule=repeatRule(value);
+			if (rule && !validDate(date)) throw Error('请先选择日期');
+			if (rule) nextRepeatDate(date!,rule);
+			const item=this.items.find(item=>item.id===id);
+			if (!item || item.completedAt) throw Error('请在待执行事项上设置重复');
+			await this.app.vault.process(this.file(id),source=>{
+				const {fields,body}=documentParts(source);
+				return this.reschedule(fields,date,rule) ? markdown(fields,body) : source;
+			});
+			await this.load();
+		});
+	}
+
  enableRewards(): Promise<void> {
   return this.serial('enableRewards', async () => {
    if (!this.state.rewardsEnabledAt) { this.state.rewardsEnabledAt = new Date().toISOString(); await this.saveState('enable_rewards'); }
@@ -348,6 +489,13 @@ export class ArrangeStore {
    if (![0, 1, 2, 3, 5, 8].includes(points)) throw Error('请选择奖励点数');
    await this.app.vault.process(this.file(id), source => {
     const { fields, body } = documentParts(source);
+    const item=this.items.find(value=>value.id===id);
+    if (item?.occurrenceId) {
+     const occurrence=(fields.repeat_history as RepeatCompletion[]).find(value=>value.id===item.occurrenceId);
+     if (!occurrence) throw Error('这次完成已被撤销，请刷新');
+     occurrence.reward_points=points; occurrence.reward_awarded=points;
+     return markdown(fields,body);
+    }
     // Correct only this explicit award. Old completed notes are never backfilled.
     const changes = rewardRecord(fields) ? { reward_awarded: points } : {};
     return markdown({ ...fields, reward_points: points, ...changes }, body);
@@ -356,8 +504,19 @@ export class ArrangeStore {
   });
  }
 
+	private async changeDate(id: string, date: string | null): Promise<void> {
+		if (date!==null && !validDate(date)) throw Error('请选择有效日期');
+		const item=this.items.find(value=>value.id===id);
+		if (item?.occurrenceId) await this.patch(id,{date});
+		else await this.app.vault.process(this.file(id),source=>{
+			const {fields,body}=documentParts(source);
+			const rule=date ? repeatRule(fields.repeat) : null;
+			return this.reschedule(fields,date,rule) ? markdown(fields,body) : source;
+		});
+		await this.load();
+	}
 	setDate(id: string, date: string | null): Promise<void> {
-		return this.serial('setDate', async () => { await this.patch(id, { date }); await this.load(); });
+		return this.serial('setDate',()=>this.changeDate(id,date));
 	}
 	setDailyGoal(id: string): Promise<void> {
 		return this.serial('setDailyGoal', async () => {
@@ -365,14 +524,17 @@ export class ArrangeStore {
 			const day = dayKey(new Date(), this.state.timezone);
 			if (!item || (item.completedAt && dayKey(new Date(item.completedAt), this.state.timezone) !== day))
 				throw Error('请选择未完成或今天完成的事项');
-			await this.patch(id, { date: day });
-			this.state.dailyGoal = { ...this.state.dailyGoal, day, id };
+			const completedOccurrence=item.occurrenceId ? item : this.items.find(value=>value.occurrenceOf===id && value.completedAt && dayKey(new Date(value.completedAt),this.state.timezone)===day);
+			if (!completedOccurrence) await this.changeDate(id,day);
+			this.state.dailyGoal = { ...this.state.dailyGoal, day, id:item.occurrenceOf ?? id };
 			await this.saveState('set_daily_goal');
 			await this.load();
 		});
 	}
 	archive(id: string): Promise<void> {
 		return this.serial('archive', async () => {
+			const item=this.items.find(value=>value.id===id);
+			if (item?.occurrenceId) { await this.patch(id,{archived:true}); await this.load(); return; }
 			const file = this.file(id);
 			const day = dayKey(new Date(), this.state.timezone);
 			const year = `${HISTORY}/${day.slice(0, 4)}`, month = `${year}/${day.slice(5, 7)}`;

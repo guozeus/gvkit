@@ -1,3 +1,4 @@
+import { repeatLabel, repeatRule, nextRepeatDate, sameRepeatCadence, type RepeatRule } from './arrangeRepeat';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
@@ -112,6 +113,8 @@ export class ArrangeView extends ItemView {
 	private createTipTimer: number | null = null;
 	private createDateButton!: HTMLButtonElement;
 	private draftDate: string | null = null;
+	private draftRepeat: RepeatRule | null = null;
+	private repeatNotice: Notice | null = null;
 	private keyboardBackdrop: HTMLElement | null = null;
 	private headline!: HTMLButtonElement;
 	private tips!: ArrangeTips;
@@ -327,7 +330,7 @@ export class ArrangeView extends ItemView {
 		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
 		this.createButton.addClass('gvkit-arrange-submit');
 		this.createDateButton = iconButton(composer, '设置新事项日期', 'calendar', event => {
-			this.chooseDate(this.draftDate, async date => { this.draftDate = date; this.updateComposer(); return true; }, event);
+			this.chooseDate(this.draftDate, async date => { this.draftDate = date; if(this.draftRepeat) this.draftRepeat=date ? {...this.draftRepeat,anchor:date} : null; this.updateComposer(); return true; }, event, {rule:this.draftRepeat,save:async(rule,date)=>{this.draftRepeat=rule;this.draftDate=date;this.updateComposer();return true;}});
 		});
 		this.createDateButton.addClass('gvkit-arrange-composer-date');
 		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
@@ -574,7 +577,7 @@ export class ArrangeView extends ItemView {
 		this.createDateButton.hidden = empty;
 		this.createDateButton.disabled = this.busy || Boolean(this.choosingParent);
 		this.createDateButton.toggleClass('is-active', Boolean(this.draftDate));
-		this.createDateButton.title = this.draftDate ? `新事项日期：${this.draftDate}` : '设置新事项日期';
+		this.createDateButton.title = this.draftDate ? `新事项日期：${this.draftDate}${this.draftRepeat ? ` · ${repeatLabel(this.draftRepeat)}` : ''}` : '设置新事项日期';
 		this.input.disabled = Boolean(this.choosingParent);
 		this.createButton.disabled = this.busy || empty || Boolean(this.choosingParent);
 	}
@@ -619,7 +622,7 @@ export class ArrangeView extends ItemView {
 		const scroll = this.list.scrollTop;
 		this.list.empty();
 		const goal = this.store.state.dailyGoal?.day === facts.day
-			? this.store.items.find(item => item.id === this.store.state.dailyGoal!.id) : undefined;
+			? (this.store.items.find(item => item.occurrenceOf === this.store.state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),this.store.state.timezone)===facts.day) ?? this.store.items.find(item => item.id === this.store.state.dailyGoal!.id)) : undefined;
 		if (!this.choosingParent) {
 			if (goal) this.row(this.list, goal, true);
 			else {
@@ -804,7 +807,7 @@ export class ArrangeView extends ItemView {
 			label.title = `${item.title} · ${item.date}${item.date < this.today && !item.completedAt ? ' · 逾期' : ''}`;
 			if (!item.completedAt && item.date < this.today) label.addClass('is-overdue');
 		}
-		const dateText = rowDateLabel(item, this.today);
+		const dateText = item.occurrenceId && item.date ? item.date : rowDateLabel(item, this.today);
 		if (dateText) {
 			const hint = row.createEl('button', { cls: 'gvkit-arrange-row-date', text: dateText, attr: { type: 'button', title: item.date!, 'aria-label': `设置日期：${item.date}` } });
 			hint.onclick = event => { event.stopPropagation(); this.dateMenu(item, event); };
@@ -1071,15 +1074,16 @@ export class ArrangeView extends ItemView {
 		modal.open();
 	}
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
-		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event);
+		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event, item.completedAt ? undefined : {rule:item.repeat ?? null, save:(rule,date)=>this.run(()=>this.store.setRepeat(item.id,rule,date))});
 	}
-	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, _event: MouseEvent): void {
+	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, _event: MouseEvent, repeat?: {rule:RepeatRule | null; save:(rule:RepeatRule | null,date:string|null)=>Promise<boolean>}): void {
 		const day = todayFacts(this.store.items, this.store.state).day;
 		const menu = new Modal(this.app);
 		menu.setTitle('设置日期');
 		menu.contentEl.addClass('gvkit-arrange-date-menu');
 		const status = menu.contentEl.createDiv({ cls: 'gvkit-arrange-date-current', attr: { 'aria-live': 'polite' } });
-		const paint = () => { status.textContent = current ? `${relativeDate(current, day, true)} · ${current}` : '未设置日期'; };
+		let repeatButton: HTMLButtonElement | undefined;
+		const paint = () => { if(repeatButton) repeatButton.textContent=`重复 · ${repeatLabel(repeat?.rule)}`; status.textContent = (current ? `${relativeDate(current, day, true)} · ${current}` : '未设置日期') + (repeat?.rule ? ` · ${repeatLabel(repeat.rule)}` : ''); };
 		paint();
 		let saved = current;
 		let pending = Promise.resolve();
@@ -1088,7 +1092,7 @@ export class ArrangeView extends ItemView {
 			// Keep every rapid tap; the Store write and view refresh run in order.
 			const result = pending.then(async () => {
 				const ok = await save(date);
-				if (ok) saved = date;
+				if (ok) { const changed=date!==saved;saved = date; if (repeat?.rule && changed) repeat.rule=date ? {...repeat.rule,anchor:date} : null; paint(); }
 				else if (current === date) { current = saved; paint(); }
 				return ok;
 			});
@@ -1131,6 +1135,48 @@ export class ArrangeView extends ItemView {
 				}));
 			modal.open();
 		};
+		if (repeat) {
+			const button = repeatButton = menu.contentEl.createEl('button', {text:`重复 · ${repeatLabel(repeat.rule)}`,cls:'gvkit-arrange-repeat-entry',attr:{type:'button'}});
+			button.onclick = () => {
+				const modal=new Modal(this.app); modal.setTitle('重复');
+				modal.contentEl.addClass('gvkit-arrange-repeat');
+				const rule=repeat.rule;
+				const preset=modal.contentEl.createEl('select',{attr:{'aria-label':'重复规律'}});
+				for (const [value,text] of [['none','不重复'],['day','每天'],['week','每周'],['month','每月'],['year','每年'],['custom','自定间隔']]) preset.createEl('option',{value,text});
+				preset.value=rule ? (rule.interval===1 ? rule.unit : 'custom') : 'none';
+				const custom=modal.contentEl.createDiv('gvkit-arrange-repeat-custom');
+				custom.createSpan({text:'每'});
+				const interval=custom.createEl('input',{type:'number',value:String(rule?.interval ?? 1),attr:{min:'1',step:'1',inputmode:'numeric','aria-label':'重复间隔'}});
+				const unit=custom.createEl('select',{attr:{'aria-label':'间隔单位'}});
+				for (const [value,text] of [['day','天'],['week','周'],['month','个月'],['year','年']]) unit.createEl('option',{value,text});
+				unit.value=rule?.unit ?? 'day';
+				const days=modal.contentEl.createDiv('gvkit-arrange-repeat-weekdays');
+				const selected=new Set(rule?.weekdays ?? [new Date(((rule?.unit==='week' ? rule.anchor : current) ?? day)+'T12:00:00Z').getUTCDay()]);
+				for (const n of [1,2,3,4,5,6,0]) {
+					const b=days.createEl('button',{text:'一二三四五六日'[(n+6)%7],attr:{type:'button','aria-label':`周${'一二三四五六日'[(n+6)%7]}`,'aria-pressed':String(selected.has(n))}});
+					b.onclick=()=>{if(selected.has(n)) selected.delete(n); else selected.add(n);b.setAttribute('aria-pressed',String(selected.has(n)));};
+				}
+				const render=()=>{custom.hidden=preset.value!=='custom';days.hidden=preset.value!=='week' && !(preset.value==='custom' && unit.value==='week');};
+				preset.onchange=render;unit.onchange=render;render();
+				const error=modal.contentEl.createDiv({cls:'gvkit-arrange-repeat-error',attr:{role:'alert'}});error.hidden=true;
+				new Setting(modal.contentEl).addButton(b=>b.setButtonText('取消').onClick(()=>modal.close())).addButton(b=>b.setButtonText('完成').setCta().onClick(async()=>{
+					b.setDisabled(true);
+					try {
+						await pending;
+						const date=current ?? day;
+						const kind=preset.value==='custom' ? unit.value : preset.value;
+						const edited=preset.value==='none' ? null : repeatRule({unit:kind,interval:preset.value==='custom'?Number(interval.value):1,anchor:date,...(kind==='week'?{weekdays:[...selected]}:{})});
+						const proposed=sameRepeatCadence(rule,edited) ? rule : edited;
+						let first=current;
+						if (proposed) { first=date; if(!sameRepeatCadence(rule,proposed) && proposed.weekdays && !proposed.weekdays.includes(new Date(date+'T12:00:00Z').getUTCDay())) first=nextRepeatDate(offsetDay(date,-1),proposed); }
+						if (await repeat.save(proposed,first)) { repeat.rule=proposed;current=first;saved=first;paint();button.textContent=`重复 · ${repeatLabel(proposed)}`;modal.close(); }
+						else {error.textContent='保存失败，请重试';error.hidden=false;}
+					} catch(e) {error.textContent=e instanceof Error?e.message:'保存失败，请重试';error.hidden=false;}
+					b.setDisabled(false);
+				}));
+				modal.open();
+			};
+		}
 		const grid = menu.contentEl.createDiv('gvkit-arrange-date-actions');
 		for (const [label, icon, action] of [
 			['今天', 'calendar-check', () => apply(day)],
@@ -1169,11 +1215,15 @@ export class ArrangeView extends ItemView {
 			if (item) {
 				const done = !item.completedAt;
 				const before = this.rewardsView?.levels() ?? [];
+				const beforeIds=new Set(this.store.rewards.map(record=>record.id));
 				const changed = await this.store.complete(id, done);
 				if (changed && done && !this.closed) {
      this.feedback.play(this.store.state.completionSound);
-     const award = this.store.rewards.find(record => record.id === id);
+     const awards = this.store.rewards.filter(record => record.id === id || !beforeIds.has(record.id));
+     const award=awards[awards.length-1];
      if (award) this.rewardsView?.celebrate(award.points, before, rect);
+     const next=this.store.items.find(value=>value.id===id && !value.completedAt);
+     if (next && (item.repeat || next.reopened)) {this.repeatNotice?.hide();this.repeatNotice=new Notice(`本次已完成，${next.reopened ? '待重新完成' : '下次'}${next.date ? ' '+relativeDate(next.date,this.today,true) : ''}`);}
     }
 			}
 		});
@@ -1186,7 +1236,7 @@ export class ArrangeView extends ItemView {
 		const label = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-date');
 		if (label) {
 			label.hidden = !item.date;
-			const text = item.date ? relativeDate(item.date, this.today, Boolean(item.completedAt)) : '';
+			const text = item.date ? relativeDate(item.date, this.today, Boolean(item.completedAt)) + (item.reopened ? ' · 待重新完成' : '') + (item.repeat ? ` · ${repeatLabel(item.repeat)}` : item.occurrenceId ? ' · 本次' : '') : '';
 			const overdue = text.indexOf('已逾期');
 			label.empty();
 			if (overdue >= 0) {
@@ -1489,11 +1539,15 @@ export class ArrangeView extends ItemView {
 		const draft = this.input.value;
 		if (!draft.trim()) return;
 		const parent = this.selected;
+		const parentSeries=this.store.items.find(item=>item.id===parent)?.occurrenceOf ?? parent;
 		let id: string | undefined, parentRestored = false;
 		const date = this.draftDate;
 		this.showCreateTip('');
 		const saved = await this.run(async () => {
-			try { id = await this.store.create(draft, parent, date, () => { parentRestored = true; }); }
+			try {
+				id = await this.store.create(draft, parent, date, () => { parentRestored = true; }, this.draftRepeat);
+				if(parentRestored && parentSeries!==parent) {this.editing?.body.destroy();this.editing=null;this.selected=parentSeries;}
+			}
 			catch (error) {
 				if (error instanceof ArrangeCreateError) id = error.createdId;
 				this.showCreateTip(error instanceof Error ? error.message : '新增失败，输入已保留，请重试', true);
@@ -1501,7 +1555,7 @@ export class ArrangeView extends ItemView {
 			}
 		});
 		if (saved || id) {
-			if (this.input.value === draft) { this.input.value = ''; this.draftDate = null; }
+			if (this.input.value === draft) { this.input.value = ''; this.draftDate = null; this.draftRepeat=null; }
 			this.updateComposer();
 			if (id) this.reveal(id);
 		}

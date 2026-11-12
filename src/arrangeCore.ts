@@ -1,3 +1,5 @@
+import type { RepeatRule } from './arrangeRepeat';
+
 export interface ArrangeItem {
 	id: string;
 	path: string;
@@ -8,6 +10,12 @@ export interface ArrangeItem {
 	completedAt: string | null;
 	pinned: boolean;
 	rewardPoints?: number;
+	repeat?: RepeatRule | null;
+	repeatInstance?: string;
+	reopened?: boolean;
+	/** A completed occurrence projected from its original Markdown. */
+	occurrenceOf?: string;
+	occurrenceId?: string;
 	developmentCompleted?: boolean;
 	developmentProject?: boolean;
 }

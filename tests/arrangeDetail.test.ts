@@ -841,7 +841,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			const menu = window.document.querySelectorAll('.gvkit-arrange-date-menu');
 			const panel = menu[menu.length - 1];
 			const button = (label: string) => panel.querySelector(`[aria-label="${label}"]`) as any;
-			assert.deepEqual([...panel.querySelectorAll('button')].map(x => x.textContent), ['今天','明天','后天','下周','选择日期','推一天','提前一天','推一周','推一月','清除日期']);
+			assert.deepEqual([...panel.querySelectorAll('button')].map(x => x.textContent), ['重复 · 不重复','今天','明天','后天','下周','选择日期','推一天','提前一天','推一周','推一月','清除日期']);
 			const waitDate = async (date: string | null) => {
 				for(let n=0;n<200 && (store.items.find((x:any)=>x.id===second).date!==date || view.busy);n++) await new Promise(r=>setTimeout(r,2));
 				assert.equal(store.items.find((x:any)=>x.id===second).date,date);
