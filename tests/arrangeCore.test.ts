@@ -38,7 +38,7 @@ test('only third pinned stays third under inserts and reorder, completion closes
 	assert.deepEqual(after, ['b','c','d','e']);
 	assert.deepEqual(moveInOrder(after, items, 'new'), ['new','c','b','d','e']);
 });
-test('explicit pinned top reorders sparse pinned slots; unpin and reload do not move rows', () => {
+test('ordinary pinned-slot move reorders only pinned slots; unpin and reload keep rows', () => {
 	const items = ['a','b','c','d','e'].map(id => item(id, { pinned: id === 'b' || id === 'd' }));
 	let order = pendingOrder(items, ['a','b','c','d','e','a','stale']);
 	assert.deepEqual(order, ['a','b','c','d','e']);

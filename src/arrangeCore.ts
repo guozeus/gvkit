@@ -105,7 +105,7 @@ export function pendingOrder(items: ArrangeItem[], order: string[]): string[] {
 	return result;
 }
 
-/** Ordinary moves preserve pinned slots; explicit pinned top reorders only those slots. */
+/** Ordinary moves protect pinned slots; moving a pinned ID permutes only pinned slots. */
 export function moveInOrder(order: string[], items: ArrangeItem[], id: string, before?: string, after = false): string[] {
 	const pinned = new Set(items.filter(item => item.pinned && !item.completedAt).map(item => item.id));
 	if (before === id) return [...order];

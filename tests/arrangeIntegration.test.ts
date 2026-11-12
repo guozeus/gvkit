@@ -127,7 +127,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		const pinSlots = beforeMorePins.map((id: string, index: number) => [parent, child1, child2].includes(id) ? index : -1).filter((index: number) => index >= 0);
 		await store.move(child2); await store.move(child1);
 		assert.deepEqual(pinSlots.map((index: number) => store.state.order[index]), [child1, child2, parent]);
-		assert.equal(store.state.order[0], added, 'explicit pinned top leaves ordinary slots alone');
+		assert.equal(store.state.order[0], added, 'ordinary pinned move leaves ordinary slots alone');
 		const pinReload = new ArrangeStore(app); await pinReload.load();
 		assert.deepEqual(pinReload.state.order, store.state.order);
 		const beforeUnpin = [...store.state.order];
@@ -382,6 +382,33 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		const afterPinnedReturn = [...reopened.state.order];
 		const afterReturnNew = await reopened.create('全钉住后新增仍在末尾', null);
 		assert.deepEqual(reopened.state.order, [...afterPinnedReturn, afterReturnNew]);
+		// Explicit Top overrides even sparse pinned slots, without changing their Markdown.
+		const ids: string[] = [];
+		for (const name of ['a', 'b', 'c', 'd', 'e']) ids.push(await reopened.create('置顶B_' + name, null));
+		const [a, b, c, d, e] = ids;
+		assert.deepEqual(reopened.state.order.filter(id => ids.includes(id)), [e, d, c, b, a]);
+		await reopened.togglePin(b); await reopened.togglePin(d);
+		const pinnedFiles = [b, d].map(id => entries.get(reopened.items.find((item: any) => item.id === id).path));
+		const pinnedMarkdown = await Promise.all(pinnedFiles.map(file => vault.read(file)));
+		const beforeExplicitTop = [...reopened.state.order];
+		assert.ok(beforeExplicitTop.indexOf(d) > 0);
+		await reopened.top(d);
+		assert.deepEqual(reopened.state.order, [d, ...beforeExplicitTop.filter(id => id !== d)]);
+		const beforeSecondTop = [...reopened.state.order];
+		await reopened.top(b);
+		assert.deepEqual(reopened.state.order, [b, ...beforeSecondTop.filter(id => id !== b)]);
+		assert.deepEqual(await Promise.all(pinnedFiles.map(file => vault.read(file))), pinnedMarkdown);
+		assert.ok([b, d].every(id => reopened.items.find((item: any) => item.id === id).pinned));
+		const afterTopBytes = await vault.read(stateFile);
+		await reopened.top(b);
+		assert.equal(await vault.read(stateFile), afterTopBytes, 'top of first row is a no-op');
+		const persisted = new ArrangeStore(app); await persisted.load();
+		assert.deepEqual(persisted.state.order, reopened.state.order);
+		const pinnedSlots = new Map(reopened.items.filter((item: any) => item.pinned && !item.completedAt)
+			.map((item: any) => [item.id, reopened.state.order.indexOf(item.id)]));
+		await reopened.move(e); await reopened.create('置顶B_普通新增', null);
+		for (const [id, slot] of pinnedSlots) assert.equal(reopened.state.order[slot], id, 'ordinary reorder/insert protects pinned positions');
+		assert.equal(new Set(reopened.state.order).size, reopened.state.order.length);
 		t.mock.timers.reset();
 
 	} finally { await rm(root, { recursive: true, force: true }); }

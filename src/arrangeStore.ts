@@ -386,6 +386,14 @@ export class ArrangeStore {
 			await this.saveState('move');
 		});
 	}
+	/** A clicked Top action overrides pinned slots; ordinary moves still protect them. */
+	top(id: string): Promise<void> {
+		return this.serial('top', async () => {
+			if (!this.state.order.includes(id) || this.state.order[0] === id) return;
+			this.state.order = [id, ...this.state.order.filter(value => value !== id)];
+			await this.saveState('top');
+		});
+	}
 	configure(changes: Partial<Omit<ArrangeState, 'order' | 'achievedDays'>>): Promise<void> {
 		return this.serial('configure', async () => { Object.assign(this.state, changes); await this.saveState('configure'); });
 	}

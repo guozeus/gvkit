@@ -839,7 +839,7 @@ export class ArrangeView extends ItemView {
 		const actionArea = row.createDiv('gvkit-arrange-actions');
 		for (const key of this.store.state.rowActions) {
 			if (dailyGoal && key === 'top' || !this.actionAvailable(key, item)) continue;
-			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event));
+			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event, parent !== this.list));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'date' && item.date) button.addClass('is-active');
 			if (key === 'developmentCompleted') button.toggleClass('is-active', Boolean(item.developmentCompleted));
@@ -944,7 +944,7 @@ export class ArrangeView extends ItemView {
 				if (dragging && (topDrop || targetId)) void this.run(() => this.store.move(item.id, topDrop ? undefined : targetId, after));
 				else if (swipe && key !== 'none' && !this.busy) {
 					this.tips.start();
-					this.action(key, item, new win.MouseEvent('click', { clientX: lastX, clientY: lastY, view: win }));
+					this.action(key, item, new win.MouseEvent('click', { clientX: lastX, clientY: lastY, view: win }), row.parentElement !== this.list);
 				}
 			};
 			const extraTouch = (e: TouchEvent) => { if (e.touches.length !== 1) cancel(); };
@@ -1012,7 +1012,7 @@ export class ArrangeView extends ItemView {
 		if (key === 'pin' || key === 'developmentCompleted') return !item.completedAt;
 		return true;
 	}
-	private action(key: RowAction, item: ArrangeItem, event: MouseEvent): void {
+	private action(key: RowAction, item: ArrangeItem, event: MouseEvent, fromChildren = false): void {
 		if (!this.store.items.some(value => value.id === item.id)) return;
 		if (!this.actionAvailable(key, item)) return;
 		if (key === 'parent' && item.parent) {
@@ -1021,7 +1021,7 @@ export class ArrangeView extends ItemView {
 				row?.scrollIntoView({ block: 'nearest' }); row?.addClass('is-located');
 			});
 		} else if (key === 'date') this.dateMenu(item, event);
-		else if (key === 'top') void this.run(() => this.store.move(item.id)).then(() => this.reveal(item.id));
+		else if (key === 'top') void this.run(() => this.store.top(item.id)).then(ok => { if (ok) this.reveal(item.id, fromChildren ? this.children : this.list); });
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
 		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
 		else if (key === 'developmentProject') void this.run(() => this.store.toggleDevelopmentProject(item.id));
@@ -1044,8 +1044,7 @@ export class ArrangeView extends ItemView {
 			new Notice(includeBody ? '已复制标题及附注' : '已复制标题');
 		} catch { new Notice('复制失败，请重试'); }
 	}
-	private reveal(id: string): void {
-		const parent = this.selected ? this.children : this.list;
+	private reveal(id: string, parent = this.selected ? this.children : this.list): void {
 		parent?.querySelector<HTMLElement>(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
 	}
 	private itemMenu(item: ArrangeItem, event: MouseEvent): void {
