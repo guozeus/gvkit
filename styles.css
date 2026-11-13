@@ -395,6 +395,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
  margin-left:var(--gvkit-mobile-header-gap, 8px); background:transparent; box-shadow:none;
 }
 .gvkit-arrange-header-mobile .gvkit-arrange-icon { transform:translateX(10px); }
+/* Tablet's local toolbar must keep the trailing action fully on screen. */
+.gvkit-arrange-header-tablet .gvkit-arrange-icon { transform:none; }
 .gvkit-reward-bar { position:relative; flex:1; min-width:0; overflow:hidden; border-radius:7px; background:color-mix(in srgb, #378ce7 14%, var(--background-primary)); color:var(--text-normal); height:27px; display:flex; align-items:center; justify-content:center; }
 .gvkit-reward-bar::before { content:''; position:absolute; inset:0 auto 0 0; width:var(--reward-fill); background:color-mix(in srgb, #378ce7 40%, transparent); }
 .gvkit-reward-bar.is-high::before { background:color-mix(in srgb, #dfb644 45%, transparent); }

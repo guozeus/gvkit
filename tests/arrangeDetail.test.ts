@@ -16,7 +16,7 @@ export class ItemView {
  registerInterval(id) { this.register(()=>window.clearInterval(id)); }
  registerDomEvent(el,type,fn,options) { el.addEventListener(type,fn,options); this.register(()=>el.removeEventListener(type,fn,options)); }
 }
-export const Platform={isMobileApp:true,isIosApp:false};
+export const Platform={isMobileApp:true,isIosApp:false,isTablet:false};
 export class Scope {
  constructor(parent) { this.parent=parent;this.handlers=[]; }
  register(modifiers,key,func) { const handler={modifiers,key,func};this.handlers.push(handler);return handler; }
@@ -80,7 +80,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			b.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'shim' }));
 			b.onLoad({ filter: /.*/, namespace: 'shim' }, () => ({ contents: shim, loader: 'js' }));
 		} }] });
-		const { ArrangeView, ArrangeStore, TFile, TFolder } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
+		const { ArrangeView, ArrangeStore, TFile, TFolder, Platform: tabletPlatform } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
 		const files = new Map<string, any>();
 		for (const path of ['安排/待执行', '安排/已完成', '安排/历史', 'settings/gvkit']) files.set(path, new TFolder());
 		const disk = (path: string) => join(dir, encodeURIComponent(path));
@@ -126,9 +126,92 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		host.innerHTML = '<div class="view-header"><button id="nav">导航</button><div class="view-header-title-container"><div class="view-header-title">自御安排</div></div><button id="native-more">宿主更多</button></div>';
 		const hostHeader = host.querySelector<HTMLElement>('.view-header')!;
 		hostHeader.getBoundingClientRect = () => ({ height: 44 } as any);
-		Object.defineProperty(host.querySelector('.view-header-title-container'), 'clientWidth', { value: 600 });
+		Object.defineProperty(host.querySelector('.view-header-title-container'), 'clientWidth', { value: 600, configurable: true });
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		// Real ArrangeView: tablet keeps exactly one operable toolbar in the content,
+		// even if the native title host reports height but is visually hidden.
+		const toolbarSlot = host.querySelector('.view-header-title-container')!;
+		const toolbarHeader = toolbarSlot.querySelector('.gvkit-arrange-header')!;
+		assert.equal(root.querySelector('.gvkit-arrange-header'), null, 'non-tablet wide-slot host path remains in use');
+		hostHeader.style.opacity = '0'; hostHeader.style.transform = 'translateY(-100px)'; tabletPlatform.isTablet = true;
+		events.get('layout-change')!();
+		assert.equal(root.querySelector('.gvkit-arrange-header'), toolbarHeader, 'tablet controls stay inside Arrange content');
+		assert.equal(toolbarSlot.querySelector('.gvkit-arrange-header'), null, 'no controls lost in invisible native title');
+		assert.equal(toolbarSlot.classList.contains('gvkit-arrange-host-title'), false);
+		assert.equal(root.querySelectorAll('.gvkit-arrange-header').length, 1, 'no duplicate toolbar');
+		assert.equal(toolbarHeader.classList.contains('gvkit-arrange-header-tablet'), false, 'runtime platform flip in this legacy fixture does not change the creation-time class');
+		const wasSearching = view.searchOpen;
+		(root.querySelector('[aria-label="搜索事项"]') as HTMLButtonElement).click();
+		assert.equal(view.searchOpen, !wasSearching); assert.equal(view.searchBar.hidden, wasSearching);
+		(root.querySelector('[aria-label="搜索事项"]') as HTMLButtonElement).click();
+		assert.equal(view.searchOpen, wasSearching);
+		const toolbarMenuCount = window.menus?.length ?? 0;
+		(root.querySelector('[aria-label="安排更多"]') as HTMLButtonElement).click();
+		assert.equal(window.menus?.length, toolbarMenuCount + 1);
+		assert.ok(window.menus.at(-1).entries.some((entry: any) => entry.title === '安排界面设置'));
+		const rewardTop = root.querySelector<HTMLButtonElement>('.gvkit-reward-top')!;
+		rewardTop.click(); assert.equal(root.querySelector<HTMLElement>('.gvkit-reward-panel')!.hidden, false);
+		rewardTop.click(); assert.equal(root.querySelector<HTMLElement>('.gvkit-reward-panel')!.hidden, true);
+		const wasToday = view.filter;
+		await view.headline.onclick(); assert.notEqual(view.filter, wasToday);
+		await view.headline.onclick(); assert.equal(view.filter, wasToday);
+		tabletPlatform.isTablet = false; hostHeader.style.removeProperty('opacity'); hostHeader.style.removeProperty('transform');
+		events.get('layout-change')!();
+		assert.equal(toolbarSlot.querySelector('.gvkit-arrange-header'), toolbarHeader, 'non-tablet native title-slot path is retained');
+		assert.equal(toolbarHeader.classList.contains('gvkit-arrange-header-tablet'), false, 'phone and desktop retain their previous icon styling');
+		Object.defineProperty(toolbarSlot, 'clientWidth', { value: 10, configurable: true });
+		events.get('layout-change')!();
+		assert.equal(root.querySelector('.gvkit-arrange-header'), toolbarHeader, 'non-tablet narrow native slot keeps the existing local header');
+		Object.defineProperty(toolbarSlot, 'clientWidth', { value: 600, configurable: true });
+		events.get('layout-change')!();
+		assert.equal(toolbarSlot.querySelector('.gvkit-arrange-header'), toolbarHeader, 'non-tablet title host still restores when space returns');
+		if (process.env.GVKIT_TOOLBAR_FOCUS === '1') {
+			// Obsidian's tablet flag is fixed at view creation, not flipped at runtime.
+			await view.onClose(); view.disposers.forEach((fn: () => void) => fn()); host.remove();
+			tabletPlatform.isTablet = true;
+			const css = await readFile(join(process.cwd(), 'styles.css'), 'utf8');
+			for (const [withSlot, nativeVisible] of [[true, true], [true, false], [false, false]] as const) {
+				const tabletHost = window.document.createElement('div');
+				tabletHost.innerHTML = withSlot
+					? '<div class="view-header"><button>导航</button><div class="view-header-title-container"></div><button>宿主更多</button></div>'
+					: '<div class="view-header"><button>导航</button><button>宿主更多</button></div>';
+				const nativeHeader = tabletHost.querySelector<HTMLElement>('.view-header')!;
+				nativeHeader.getBoundingClientRect = () => ({ height: 44 } as any);
+				if (!nativeVisible) { nativeHeader.style.opacity = '0'; nativeHeader.style.transform = 'translateY(-100px)'; }
+				if (withSlot) Object.defineProperty(tabletHost.querySelector('.view-header-title-container'), 'clientWidth', { value: 600, configurable: true });
+				const tabletRoot = window.document.createElement('main');
+				tabletHost.append(tabletRoot); window.document.body.append(tabletHost);
+				view = new ArrangeView({ app, contentEl: tabletRoot, containerEl: tabletHost }, store);
+				await view.onOpen();
+				const liveHeader = tabletRoot.querySelector<HTMLElement>('.gvkit-arrange-header')!;
+				assert.ok(liveHeader, 'tablet header must be local with or without title slot');
+				assert.equal(window.document.querySelectorAll('.gvkit-arrange-header').length, 1);
+				assert.ok(liveHeader.classList.contains('gvkit-arrange-header-tablet'));
+				assert.ok(liveHeader.classList.contains('gvkit-arrange-header-mobile'));
+				assert.equal(tabletHost.querySelector('.view-header-title-container .gvkit-arrange-header'), null);
+				const search = liveHeader.querySelector<HTMLButtonElement>('[aria-label="搜索事项"]')!;
+				const initialSearch = view.searchOpen; search.click(); assert.notEqual(view.searchOpen, initialSearch);
+				search.click(); assert.equal(view.searchOpen, initialSearch);
+				const menuBefore = window.menus?.length ?? 0;
+				liveHeader.querySelector<HTMLButtonElement>('[aria-label="安排更多"]')!.click();
+				assert.equal(window.menus?.length, menuBefore + 1);
+				assert.ok(window.menus.at(-1).entries.some((entry: any) => entry.title === '安排界面设置'));
+				const reward = liveHeader.querySelector<HTMLButtonElement>('.gvkit-reward-top')!;
+				reward.click(); assert.equal(tabletRoot.querySelector<HTMLElement>('.gvkit-reward-panel')!.hidden, false);
+				reward.click(); assert.equal(tabletRoot.querySelector<HTMLElement>('.gvkit-reward-panel')!.hidden, true);
+				const todayBefore = view.filter; await view.headline.onclick(); assert.notEqual(view.filter, todayBefore);
+				await view.headline.onclick(); assert.equal(view.filter, todayBefore);
+				const snapshot = '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+					+ '<style>body{margin:0}.view-header{height:44px;display:flex}.view-header-title-container{width:640px}.gvkit-arrange{height:650px}</style>'
+					+ '<style>' + css + '</style><body class="is-mobile">' + tabletHost.outerHTML + '</body>';
+				await writeFile(join(process.cwd(), '.local/director-20261111/ipad-toolbar-20261113/correction',
+					withSlot ? (nativeVisible ? 'tablet-with-slot-visible-real-view.html' : 'tablet-with-slot-hidden-real-view.html') : 'tablet-no-slot-real-view.html'), snapshot);
+				await view.onClose(); view.disposers.forEach((fn: () => void) => fn()); tabletHost.remove();
+			}
+			return; // Focused run; normal suite continues below.
+		}
+
 		// The shortcut measures the rendered panel against the visible screen,
 		// not the full class or the smaller area beneath the header/Tips/composer.
 		{

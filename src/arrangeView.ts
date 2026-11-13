@@ -235,6 +235,7 @@ export class ArrangeView extends ItemView {
 		if (Platform.isIosApp) this.guardSmallEditorZoom(root);
 		const header = root.createDiv('gvkit-arrange-header');
 		header.toggleClass('gvkit-arrange-header-mobile', Platform.isMobileApp);
+		header.toggleClass('gvkit-arrange-header-tablet', Platform.isTablet);
 		header.dataset.ignoreSwipe = 'true';
 		this.headline = header.createEl('button', { cls: 'gvkit-arrange-today' });
 		this.headline.onclick = async () => {
@@ -272,7 +273,9 @@ export class ArrangeView extends ItemView {
 					const text = child.querySelector<HTMLElement>('.gvkit-reward-bar-text');
 					return sum + (text ? Math.max(44, text.scrollWidth + 2) : child.getBoundingClientRect().width);
 				}, 0) + (Platform.isMobileApp ? this.store.state.mobileHeaderGap + 10 : 0);
-				const fits = active && visible && titleSlot.clientWidth >= needed;
+				// Mobile tablet title bars may be hidden without losing their height.
+				// Keep the existing controls in Arrange's content instead of that host.
+				const fits = active && !Platform.isTablet && visible && titleSlot.clientWidth >= needed;
 				titleSlot.classList.toggle('gvkit-arrange-host-title', fits);
 				if (fits) { if (header.parentElement !== titleSlot) titleSlot.append(header); }
 				else if (header.parentElement !== root) root.prepend(header);
