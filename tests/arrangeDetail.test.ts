@@ -774,7 +774,25 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(view.editing.body.editor.contentDOM, editorSurface);
 		assert.equal(editorSurface.innerHTML, parsedMarkup, 'focus and blur keep headings/emphasis/layout markup intact');
 		assert.equal(view.editing.body.value, originalMarkdown);
-		view.editing.body.value = '- [x] 完成清单\n- [ ] 待办清单';
+		// The live parsed surface must also own Markdown editing commands:
+		// a decorative bullet alone must never replace actual list continuation.
+		const live = view.editing.body;
+		const pressLiveEnter = () => {
+			const event = new window.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+			live.editor.contentDOM.dispatchEvent(event);
+			assert.equal(event.defaultPrevented, true, 'Markdown Enter command is registered on the real edit surface');
+		};
+		for (const [source, next] of [
+			['- 香蕉', '- 香蕉\n- '], ['* 香蕉', '* 香蕉\n* '], ['+ 香蕉', '+ 香蕉\n+ '],
+			['  - 香蕉', '  - 香蕉\n  - '], ['- [ ] 香蕉', '- [ ] 香蕉\n- [ ] '],
+			['7. 香蕉', '7. 香蕉\n8. '], ['普通香蕉', '普通香蕉\n'],
+		] as const) {
+			live.value = source; live.focus(source.length); pressLiveEnter();
+			assert.equal(live.value, next, `visible Markdown Enter: ${source}`);
+		}
+		live.value = '- 香蕉\n- '; live.focus(live.value.length); pressLiveEnter();
+		assert.equal(live.value, '- 香蕉\n', 'an empty list item exits the list instead of appending an empty marker');
+		live.value = '- [x] 完成清单\n- [ ] 待办清单';
 		assert.equal(editorSurface.querySelectorAll('input[type=checkbox]').length, 2);
 		assert.equal(editorSurface.textContent.includes('•'), false, 'task checkboxes do not gain an extra list bullet');
 		assert.match(editorSurface.querySelector('.gvkit-arrange-task-done').textContent, /完成清单/);

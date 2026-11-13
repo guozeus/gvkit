@@ -1,13 +1,14 @@
 import { EditorState, StateField, type Range } from '@codemirror/state';
 import { Decoration, EditorView, keymap, placeholder, WidgetType, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { parser, GFM } from '@lezer/markdown';
+import { markdown as markdownSupport, insertNewlineContinueMarkupCommand, deleteMarkupBackward } from '@codemirror/lang-markdown';
+import { parser, GFM, type MarkdownExtension } from '@lezer/markdown';
 import { MarkdownRenderer, sanitizeHTMLToDom, setIcon, type App, type Component } from 'obsidian';
 
 // This editor belongs only to Arrange. Its document is always the original
 // Markdown, including syntax hidden by decorations; no HTML round-trip occurs.
 const highlightDelimiter = { resolve: 'ArrangeHighlight', mark: 'ArrangeHighlightMark' };
-const markdown = parser.configure([GFM, {
+const arrangeSyntax: MarkdownExtension = {
 	defineNodes: ['ArrangeWikiLink', 'ArrangeEmbed', 'ArrangeHighlight', 'ArrangeHighlightMark'],
 	parseInline: [{ name: 'ArrangeHighlight', before: 'Emphasis', parse(cx, next, pos) {
 		if (next !== 61 || cx.char(pos + 1) !== 61) return -1;
@@ -21,7 +22,8 @@ const markdown = parser.configure([GFM, {
 		const to = cx.offset + end + 2;
 		return cx.addElement(cx.elt(embed ? 'ArrangeEmbed' : 'ArrangeWikiLink', pos, to));
 	} }],
-}]);
+};
+const markdown = parser.configure([GFM, arrangeSyntax]);
 
 // HTML blocks treat Markdown punctuation as literal; reuse Lezer's HTML tokens.
 const htmlInline = parser.configure({ remove: ['Emphasis', 'Link', 'Image', 'InlineCode', 'Escape', 'Entity', 'Autolink'] });
@@ -255,7 +257,12 @@ export class ArrangeBodyEditor {
 			}))],
 		});
 		this.editor = new EditorView({ parent, state: EditorState.create({ doc: value, extensions: [
-			parsed, history(), keymap.of([...defaultKeymap, ...historyKeymap]), EditorView.lineWrapping, colors,
+			parsed, markdownSupport({ extensions: [GFM, arrangeSyntax], addKeymap: false, completeHTMLTags: false, pasteURLAsLink: false }),
+			history(), keymap.of([
+				{ key: 'Enter', run: insertNewlineContinueMarkupCommand({ nonTightLists: false }) },
+				{ key: 'Backspace', run: deleteMarkupBackward },
+				...defaultKeymap, ...historyKeymap,
+			]), EditorView.lineWrapping, colors,
 			EditorView.editorAttributes.of({ class: 'gvkit-arrange-inline-body is-live-preview' }),
 			placeholder(() => { const el = document.createElement('span'); el.textContent = this.hint; return el; }), EditorView.contentAttributes.of({ 'aria-label': '事项正文', 'aria-multiline': 'true' }),
 			EditorView.updateListener.of(update => {
