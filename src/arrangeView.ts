@@ -801,7 +801,10 @@ export class ArrangeView extends ItemView {
 			label.addClass('gvkit-arrange-goal-achieved');
 			row.addClass('gvkit-arrange-goal-done');
 		}
-		label.onclick = () => { void this.select(this.selected === item.id ? null : item.id); };
+		label.onclick = () => {
+			const selecting = this.selected !== item.id;
+			void this.select(selecting ? item.id : null, selecting && parent === this.children && !Platform.isMobileApp);
+		};
 		if (this.store.items.some(child => child.parent === item.id)) {
 			const indicator = row.createSpan({ cls: 'gvkit-arrange-has-children', attr: { title: '有直接下级事项', 'aria-label': '有直接下级事项' } });
 			setIcon(indicator, 'list-tree');
@@ -1084,7 +1087,7 @@ export class ArrangeView extends ItemView {
 		new ArrangeDatePicker(this.app, current, todayFacts(this.store.items, this.store.state).day, save, repeat, event => this.tips.interaction(event)).open();
 	}
 
-	private async select(id: string | null): Promise<void> {
+	private async select(id: string | null, locateInMain = false): Promise<void> {
 		if (this.choosingParent) return;
 		if (!(await this.saveEdit())) return;
 		this.editing?.body.destroy(); this.editing = null;
@@ -1093,6 +1096,7 @@ export class ArrangeView extends ItemView {
 		this.detail.style.height = '';
 		this.detail.style.maxHeight = '';
 		this.paintLists(); this.paintDetail();
+		if (locateInMain && id) this.reveal(id, this.list);
 	}
 	private async toggleComplete(id: string, rect?: DOMRect): Promise<void> {
 		if (this.busy) return;

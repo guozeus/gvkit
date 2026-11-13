@@ -154,6 +154,14 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-row > input[type="checkbox"] { flex: 0 0 var(--gvkit-arrange-checkbox, 22px); width: var(--gvkit-arrange-checkbox, 22px); height: var(--gvkit-arrange-checkbox, 22px); margin: 0 var(--gvkit-arrange-check-gap, 9px) 0 5px; }
 .gvkit-arrange[data-row-dividers="false"] .gvkit-arrange-row { border-bottom-color: transparent; }
 .gvkit-arrange-row.is-selected { background: color-mix(in srgb, var(--color-blue) 18%, transparent); }
+@keyframes gvkit-arrange-selected-breathe {
+  0%, 100% { background-color: color-mix(in srgb, var(--color-blue) 18%, transparent); }
+  50% { background-color: color-mix(in srgb, var(--color-blue) 35%, transparent); }
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-row.is-selected { animation: gvkit-arrange-selected-breathe 4.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-row.is-selected { animation: none; }
+}
 .gvkit-arrange-row.is-located { outline: 1px dashed var(--text-muted); outline-offset: -2px; }
 .gvkit-arrange-row.is-pinned { box-shadow: inset 3px 0 var(--gvkit-arrange-pin-color, #bb8c18); }
 .gvkit-arrange-has-children { display: flex; flex: 0 0 12px; margin-left: 4px; color: var(--text-muted); opacity: .65; }

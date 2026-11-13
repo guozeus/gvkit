@@ -1358,6 +1358,36 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.select(null);
 		view.input.value = '新建主项定位回归'; await view.create();
 		assert.ok(revealed.at(-1)?.parent === view.list, 'existing root creation still reveals the main list');
+		// Desktop: selecting a visible child from the detail must locate the existing main-list row.
+		tabletPlatform.isMobileApp = false;
+		await view.select(topParent);
+		assert.ok(view.list.querySelector(`[data-id="${topD}"]`));
+		view.list.scrollTop = 188;
+		const beforeLocate = revealed.length;
+		view.children.querySelector<HTMLElement>(`[data-id="${topD}"] .gvkit-arrange-title`)!.click();
+		await new Promise(resolve => setTimeout(resolve, 0)); await settle();
+		assert.equal(view.selected, topD);
+		assert.equal(view.list.scrollTop, 188, 'the list retains its own scroll state before targeted reveal');
+		assert.equal(revealed.length, beforeLocate + 1);
+		assert.equal(revealed.at(-1)?.id, topD);
+		assert.equal(revealed.at(-1)?.parent, view.list);
+		// A filtered-out child still opens its detail, without expanding the main list.
+		await view.select(topParent); view.hierarchyFilter = 'roots'; view.paintLists();
+		assert.equal(view.list.querySelector(`[data-id="${topD}"]`), null);
+		const beforeHidden = revealed.length;
+		view.children.querySelector<HTMLElement>(`[data-id="${topD}"] .gvkit-arrange-title`)!.click();
+		await new Promise(resolve => setTimeout(resolve, 0)); await settle();
+		assert.equal(view.selected, topD);
+		assert.equal(revealed.length, beforeHidden);
+		assert.equal(view.hierarchyFilter, 'roots', 'locate never changes the active filter');
+		view.hierarchyFilter = 'all'; view.paintLists();
+		// Mobile keeps its existing navigation, with no automatic main-list jump.
+		await view.select(topParent); tabletPlatform.isMobileApp = true;
+		const beforeMobile = revealed.length;
+		view.children.querySelector<HTMLElement>(`[data-id="${topD}"] .gvkit-arrange-title`)!.click();
+		await new Promise(resolve => setTimeout(resolve, 0)); await settle();
+		assert.equal(view.selected, topD);
+		assert.equal(revealed.length, beforeMobile);
 		proto.scrollIntoView = () => {};
 
 		// C: the real composer reopens exactly its completed direct parent.
