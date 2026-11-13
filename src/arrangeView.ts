@@ -1,8 +1,9 @@
-import { repeatLabel, repeatRule, nextRepeatDate, sameRepeatCadence, type RepeatRule } from './arrangeRepeat';
+import { repeatLabel, type RepeatRule } from './arrangeRepeat';
+import { ArrangeDatePicker } from './arrangeDatePicker';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, offsetDay, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore } from './arrangeStore';
 import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
@@ -1080,125 +1081,9 @@ export class ArrangeView extends ItemView {
 		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event, item.completedAt ? undefined : {rule:item.repeat ?? null, save:(rule,date)=>this.run(()=>this.store.setRepeat(item.id,rule,date))});
 	}
 	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, _event: MouseEvent, repeat?: {rule:RepeatRule | null; save:(rule:RepeatRule | null,date:string|null)=>Promise<boolean>}): void {
-		const day = todayFacts(this.store.items, this.store.state).day;
-		const menu = new Modal(this.app);
-		menu.setTitle('设置日期');
-		menu.contentEl.addClass('gvkit-arrange-date-menu');
-		const status = menu.contentEl.createDiv({ cls: 'gvkit-arrange-date-current', attr: { 'aria-live': 'polite' } });
-		let repeatButton: HTMLButtonElement | undefined;
-		const paint = () => { if(repeatButton) repeatButton.textContent=`重复 · ${repeatLabel(repeat?.rule)}`; status.textContent = (current ? `${relativeDate(current, day, true)} · ${current}` : '未设置日期') + (repeat?.rule ? ` · ${repeatLabel(repeat.rule)}` : ''); };
-		paint();
-		let saved = current;
-		let pending = Promise.resolve();
-		const apply = (date: string | null) => {
-			current = date; paint();
-			// Keep every rapid tap; the Store write and view refresh run in order.
-			const result = pending.then(async () => {
-				const ok = await save(date);
-				if (ok) { const changed=date!==saved;saved = date; if (repeat?.rule && changed) repeat.rule=date ? {...repeat.rule,anchor:date} : null; paint(); }
-				else if (current === date) { current = saved; paint(); }
-				return ok;
-			});
-			pending = result.then(() => {});
-			return result;
-		};
-		const calendar = () => {
-			const modal = new Modal(this.app);
-			modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
-			modal.contentEl.addEventListener('input', event => this.tips.interaction(event), true);
-			modal.contentEl.addEventListener('change', event => this.tips.interaction(event), true);
-			modal.setTitle('选择日期');
-			let selectedDate = current ?? day;
-			{
-				let month = selectedDate.slice(0, 7);
-				const calendar = modal.contentEl.createDiv('gvkit-arrange-calendar');
-				const paint = () => {
-					calendar.empty();
-					const header = calendar.createDiv('gvkit-arrange-calendar-header');
-					const shift = (direction: -1 | 1) => { month = shiftPeriod(`${month}-01`, 'month', direction).slice(0, 7); paint(); };
-					iconButton(header, '上个月', 'chevron-left', () => shift(-1));
-					header.createSpan({ text: month.replace('-', '年') + '月', attr: { 'aria-live': 'polite' } });
-					iconButton(header, '下个月', 'chevron-right', () => shift(1));
-					const grid = calendar.createDiv('gvkit-arrange-calendar-days');
-					for (const name of '一二三四五六日') grid.createSpan({ text: name });
-					const start = new Date(`${month}-01T12:00:00Z`);
-					for (let i = 0; i < (start.getUTCDay() + 6) % 7; i++) grid.createSpan();
-					const count = Number(dateRange(`${month}-01`, 'month').end.slice(8));
-					for (let n = 1; n <= count; n++) {
-						const date = `${month}-${String(n).padStart(2, '0')}`;
-						const button = grid.createEl('button', { text: String(n), attr: { type: 'button', 'aria-label': date, 'aria-pressed': String(selectedDate === date) } });
-						button.onclick = () => { selectedDate = date; paint(); };
-					}
-				};
-				paint();
-			}
-			new Setting(modal.contentEl).addButton(button => button.setButtonText('取消').onClick(() => modal.close()))
-				.addButton(button => button.setButtonText('完成').setCta().onClick(async () => {
-					if (await apply(selectedDate)) modal.close();
-				}));
-			modal.open();
-		};
-		if (repeat) {
-			const button = repeatButton = menu.contentEl.createEl('button', {text:`重复 · ${repeatLabel(repeat.rule)}`,cls:'gvkit-arrange-repeat-entry',attr:{type:'button'}});
-			button.onclick = () => {
-				const modal=new Modal(this.app); modal.setTitle('重复');
-				modal.contentEl.addClass('gvkit-arrange-repeat');
-				const rule=repeat.rule;
-				const preset=modal.contentEl.createEl('select',{attr:{'aria-label':'重复规律'}});
-				for (const [value,text] of [['none','不重复'],['day','每天'],['week','每周'],['month','每月'],['year','每年'],['custom','自定间隔']]) preset.createEl('option',{value,text});
-				preset.value=rule ? (rule.interval===1 ? rule.unit : 'custom') : 'none';
-				const custom=modal.contentEl.createDiv('gvkit-arrange-repeat-custom');
-				custom.createSpan({text:'每'});
-				const interval=custom.createEl('input',{type:'number',value:String(rule?.interval ?? 1),attr:{min:'1',step:'1',inputmode:'numeric','aria-label':'重复间隔'}});
-				const unit=custom.createEl('select',{attr:{'aria-label':'间隔单位'}});
-				for (const [value,text] of [['day','天'],['week','周'],['month','个月'],['year','年']]) unit.createEl('option',{value,text});
-				unit.value=rule?.unit ?? 'day';
-				const days=modal.contentEl.createDiv('gvkit-arrange-repeat-weekdays');
-				const selected=new Set(rule?.weekdays ?? [new Date(((rule?.unit==='week' ? rule.anchor : current) ?? day)+'T12:00:00Z').getUTCDay()]);
-				for (const n of [1,2,3,4,5,6,0]) {
-					const b=days.createEl('button',{text:'一二三四五六日'[(n+6)%7],attr:{type:'button','aria-label':`周${'一二三四五六日'[(n+6)%7]}`,'aria-pressed':String(selected.has(n))}});
-					b.onclick=()=>{if(selected.has(n)) selected.delete(n); else selected.add(n);b.setAttribute('aria-pressed',String(selected.has(n)));};
-				}
-				const render=()=>{custom.hidden=preset.value!=='custom';days.hidden=preset.value!=='week' && !(preset.value==='custom' && unit.value==='week');};
-				preset.onchange=render;unit.onchange=render;render();
-				const error=modal.contentEl.createDiv({cls:'gvkit-arrange-repeat-error',attr:{role:'alert'}});error.hidden=true;
-				new Setting(modal.contentEl).addButton(b=>b.setButtonText('取消').onClick(()=>modal.close())).addButton(b=>b.setButtonText('完成').setCta().onClick(async()=>{
-					b.setDisabled(true);
-					try {
-						await pending;
-						const date=current ?? day;
-						const kind=preset.value==='custom' ? unit.value : preset.value;
-						const edited=preset.value==='none' ? null : repeatRule({unit:kind,interval:preset.value==='custom'?Number(interval.value):1,anchor:date,...(kind==='week'?{weekdays:[...selected]}:{})});
-						const proposed=sameRepeatCadence(rule,edited) ? rule : edited;
-						let first=current;
-						if (proposed) { first=date; if(!sameRepeatCadence(rule,proposed) && proposed.weekdays && !proposed.weekdays.includes(new Date(date+'T12:00:00Z').getUTCDay())) first=nextRepeatDate(offsetDay(date,-1),proposed); }
-						if (await repeat.save(proposed,first)) { repeat.rule=proposed;current=first;saved=first;paint();button.textContent=`重复 · ${repeatLabel(proposed)}`;modal.close(); }
-						else {error.textContent='保存失败，请重试';error.hidden=false;}
-					} catch(e) {error.textContent=e instanceof Error?e.message:'保存失败，请重试';error.hidden=false;}
-					b.setDisabled(false);
-				}));
-				modal.open();
-			};
-		}
-		const grid = menu.contentEl.createDiv('gvkit-arrange-date-actions');
-		for (const [label, icon, action] of [
-			['今天', 'calendar-check', () => apply(day)],
-			['明天', 'calendar-plus', () => apply(offsetDay(day, 1))],
-			['后天', 'calendar-days', () => apply(offsetDay(day, 2))],
-			['下周', 'calendar-range', () => apply(offsetDay(day, 7))],
-			['选择日期', 'calendar', calendar],
-			['推一天', 'arrow-right', () => apply(offsetDay(current ?? day, 1))],
-			['提前一天', 'arrow-left', () => apply(offsetDay(current ?? day, -1))],
-			['推一周', 'chevrons-right', () => apply(offsetDay(current ?? day, 7))],
-			['推一月', 'calendar-forward', () => apply(shiftDateMonth(current ?? day, 1))],
-			['清除日期', 'calendar-x', () => apply(null)],
-		] as const) {
-			const button = grid.createEl('button', { attr: { type: 'button', 'aria-label': label } });
-			setIcon(button.createSpan(), icon); button.createSpan({ text: label });
-			button.onclick = action;
-		}
-		menu.open();
+		new ArrangeDatePicker(this.app, current, todayFacts(this.store.items, this.store.state).day, save, repeat, event => this.tips.interaction(event)).open();
 	}
+
 	private async select(id: string | null): Promise<void> {
 		if (this.choosingParent) return;
 		if (!(await this.saveEdit())) return;

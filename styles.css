@@ -358,12 +358,32 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
   .gvkit-index-auto > ul { grid-template-columns: 1fr; }
 }
 
-.gvkit-arrange-date-menu { width: 340px; max-width: 100%; }
-.gvkit-arrange-date-current { text-align: center; color: var(--color-blue); margin-bottom: 8px; }
-.gvkit-arrange-date-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
-.gvkit-arrange-date-actions > button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; min-height: 56px; height: auto; padding: 4px 0; font-size: 12px; white-space: nowrap; border: 0; box-shadow: none; background: transparent; touch-action: manipulation; }
-.gvkit-arrange-date-actions > button > span:first-child { display: flex; }
-.gvkit-arrange-date-actions svg { width: 20px; height: 20px; }
+/* Date/repeat controls are scoped to their own modal, never the Arrange shell. */
+.gvkit-arrange-date-dialog { width: 440px; max-width: calc(100vw - 24px); }
+.gvkit-arrange-date-dialog .modal-title { display: none; }
+.gvkit-arrange-date-menu { width: 100%; max-width: 100%; --gvkit-picker-blue: #2563c6; }
+.gvkit-arrange-date-menu [hidden] { display: none !important; }
+.gvkit-arrange-date-menu button, .gvkit-arrange-date-menu select, .gvkit-arrange-date-menu input { touch-action: manipulation; }
+.gvkit-arrange-date-heading { display: grid; grid-template-columns: minmax(0,1fr) max-content minmax(0,1fr); align-items: center; min-height: 62px; padding-top: 4px; margin-bottom: 18px; gap: 6px; }
+.gvkit-arrange-date-current { display: contents; line-height: 1.65; }
+.gvkit-arrange-date-value { grid-column: 2; grid-row: 1; color: var(--gvkit-picker-blue); font-size: 18px; font-weight: 600; white-space: nowrap; }
+.gvkit-arrange-date-value.is-empty { color: var(--text-muted); font-weight: 400; }
+.gvkit-arrange-date-rule { grid-column: 3; grid-row: 1; min-width: 0; color: var(--text-muted); font-size: 13px; text-align: left; overflow-wrap: anywhere; }
+.gvkit-arrange-date-clear, .gvkit-arrange-date-actions > button, .gvkit-arrange-date-menu .gvkit-arrange-repeat-entry { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; height: auto; gap: 5px; padding: 5px 0; border: 0; box-shadow: none; background: transparent; font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.gvkit-arrange-date-menu .gvkit-arrange-date-clear { grid-column: 1; grid-row: 1; justify-self: start; width: 44px; min-height: 48px; border: 0; box-shadow: none; background: transparent; }
+.gvkit-arrange-date-spacer { display: none; }
+.gvkit-arrange-date-clear > span:first-child, .gvkit-arrange-date-actions > button > span:first-child, .gvkit-arrange-repeat-entry > span:first-child { display: flex; color: var(--gvkit-picker-blue); }
+.gvkit-arrange-date-clear svg, .gvkit-arrange-repeat-entry svg { width: 28px; height: 28px; }
+.gvkit-arrange-date-actions { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 6px; }
+.gvkit-arrange-date-actions > button { min-height: 70px; }
+.gvkit-arrange-date-actions svg { width: 36px; height: 36px; stroke-width: 1.8; }
+.gvkit-arrange-date-shifts { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); align-items: center; gap: 6px; margin-top: 16px; }
+.gvkit-arrange-date-menu .gvkit-arrange-date-shift { min-width: 0; height: 44px; padding: 0 2px; border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: none; background: transparent; font-size: 13px; }
+.gvkit-arrange-date-menu button:active { transform: scale(.96); }
+.gvkit-arrange-date-menu button:focus-visible { outline: 2px solid var(--gvkit-picker-blue); outline-offset: 2px; }
+.gvkit-arrange-date-feedback { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 24px; margin-top: 12px; font-size: 13px; color: var(--text-muted); }
+.gvkit-arrange-date-feedback .is-error { color: var(--text-error); }
+.gvkit-arrange-calendar-controls { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 /* The daily target keeps the same task behavior with a distinct surface. */
 .gvkit-arrange[data-completed-style] .gvkit-arrange-row.gvkit-arrange-daily-goal[data-id], .gvkit-arrange[data-completed-style] .gvkit-arrange-row.gvkit-arrange-goal-done { background: color-mix(in srgb, #b395e5 20%, var(--background-primary)); }
@@ -424,14 +444,21 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 @media (max-width:380px) { .gvkit-reward-next { display:none; } }
 @media (prefers-reduced-motion:reduce) { .gvkit-reward-float, .gvkit-reward-celebration { animation:none; } }
 
-.gvkit-arrange-repeat-entry { width: 100%; min-height: 44px; margin-bottom: 8px; }
-.gvkit-arrange-repeat > select { width: 100%; min-height: 44px; }
-.gvkit-arrange-repeat-custom { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
-.gvkit-arrange-repeat-custom input { width: 90px; min-height: 44px; font-size: 16px; }
-.gvkit-arrange-repeat-custom select { min-height: 44px; }
-.gvkit-arrange-repeat-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-top: 12px; }
-.gvkit-arrange-repeat-weekdays button { min-width: 0; min-height: 44px; padding: 0; }
-.gvkit-arrange-repeat-weekdays [aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
-.gvkit-arrange-repeat-error { color: var(--text-error); margin-top: 10px; }
-.gvkit-arrange-repeat [hidden] { display: none; }
-.gvkit-arrange-repeat button, .gvkit-arrange-repeat select, .gvkit-arrange-repeat-entry { touch-action: manipulation; }
+.gvkit-arrange-repeat-heading { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-bottom: 18px; }
+.gvkit-arrange-repeat-heading > span { flex: 1; text-align: center; padding-right: 44px; color: var(--gvkit-picker-blue); font-size: 17px; overflow-wrap: anywhere; }
+.gvkit-arrange-repeat-heading button, .gvkit-arrange-repeat-month button { width: 44px; height: 44px; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.gvkit-arrange-repeat-heading svg, .gvkit-arrange-repeat-month svg { width: 24px; height: 24px; }
+.gvkit-arrange-repeat-presets { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 5px; }
+.gvkit-arrange-repeat-presets > button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 68px; height: auto; padding: 6px 1px; font-size: 14px; border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: none; background: transparent; }
+.gvkit-arrange-repeat-hint { font-size: 11px; line-height: 1.4; color: var(--text-muted); text-align: center; }
+.gvkit-arrange-repeat-presets .gvkit-arrange-repeat-hint { max-width: 100%; font-size: 10px; white-space: normal; overflow-wrap: anywhere; }
+.gvkit-arrange-repeat-presets [aria-pressed="true"] { border-color: var(--gvkit-picker-blue); background: color-mix(in srgb,var(--gvkit-picker-blue) 12%,var(--background-primary)); color: var(--gvkit-picker-blue); }
+.gvkit-arrange-repeat-custom { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 24px 0 12px; padding: 12px 0; border-top: 1px solid var(--background-modifier-border); }
+.gvkit-arrange-repeat-custom.is-active { color: var(--gvkit-picker-blue); }
+.gvkit-arrange-repeat-custom input { width: 85px; min-width: 0; min-height: 44px; font-size: 16px; text-align: center; }
+.gvkit-arrange-repeat-custom select { min-height: 44px; font-size: 16px; }
+.gvkit-arrange-repeat-month { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.gvkit-arrange-repeat-days { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 4px; }
+.gvkit-arrange-repeat-days button { min-width: 0; min-height: 44px; padding: 0; font-size: 13px; box-shadow: none; border: 1px solid var(--background-modifier-border); border-radius: 9px; background: transparent; }
+.gvkit-arrange-repeat-days [aria-pressed="true"] { background: var(--gvkit-picker-blue); color: #fff; border-color: var(--gvkit-picker-blue); }
+.gvkit-arrange-repeat-choices + .gvkit-arrange-repeat-hint { margin-top: 10px; }

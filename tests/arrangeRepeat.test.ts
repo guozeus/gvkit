@@ -16,7 +16,7 @@ test('repeat schedules and atomic per-occurrence Markdown completion, rewards, u
  const root=await mkdtemp(join(tmpdir(),'gvkit-repeat-'));
  try {
   await build({stdin:{contents:`export {ArrangeStore} from './src/arrangeStore';export * from './src/arrangeRepeat';export {TFile,TFolder} from 'obsidian';`,resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:join(root,'store.mjs'),plugins:[{name:'obsidian',setup(b){b.onResolve({filter:/^obsidian$/},()=>({path:'shim',namespace:'shim'}));b.onLoad({filter:/.*/,namespace:'shim'},()=>({contents:shim,loader:'js'}));}}]});
-  const {ArrangeStore,TFile,TFolder,repeatRule,nextRepeatDate}=await import(pathToFileURL(join(root,'store.mjs')).href);
+  const {ArrangeStore,TFile,TFolder,repeatRule,nextRepeatDate,firstRepeatDate,sameRepeatCadence}=await import(pathToFileURL(join(root,'store.mjs')).href);
   for(const [unit,interval,anchor,start,expected] of [
    ['day',1,'2026-12-31','2026-12-31','2027-01-01'],['day',3,'2026-12-30','2026-12-30','2027-01-02'],
    ['week',2,'2026-12-29','2026-12-29','2027-01-12'],['month',1,'2027-01-31','2027-01-31','2027-02-28'],
@@ -29,6 +29,31 @@ test('repeat schedules and atomic per-occurrence Markdown completion, rewards, u
   const two=repeatRule({...week,interval:2});assert.equal(nextRepeatDate('2026-11-13',two),'2026-11-24');
   for(const interval of ['',0,-1,1.5,NaN,Infinity,Number.MAX_SAFE_INTEGER+1]) assert.throws(()=>repeatRule({unit:'day',anchor:'2026-11-12',interval}));
   assert.throws(()=>repeatRule({unit:'week',anchor:'2026-11-12',interval:1,weekdays:[]}));
+  const monthly=repeatRule({unit:'month',interval:1,anchor:'2026-01-01',monthDays:[31,1,15,15]});
+  assert.deepEqual(monthly.monthDays,[1,15,31]);
+  for(const [from,next] of [['2026-01-01','2026-01-15'],['2026-01-15','2026-01-31'],['2026-01-31','2026-02-01'],['2026-02-15','2026-03-01']])assert.equal(nextRepeatDate(from,monthly),next);
+  assert.equal(firstRepeatDate('2026-02-14',monthly),'2026-02-15');
+  assert.equal(firstRepeatDate('2026-02-15',monthly),'2026-02-15');
+  const twoMonths=repeatRule({...monthly,interval:2});
+  assert.equal(nextRepeatDate('2026-01-31',twoMonths),'2026-03-01');
+  assert.equal(nextRepeatDate('2026-02-10',twoMonths),'2026-03-01');
+  const yearly=repeatRule({unit:'year',interval:1,anchor:'2024-01-01',yearDates:['12-31','02-29','01-01']});
+  assert.equal(nextRepeatDate('2024-01-01',yearly),'2024-02-29');
+  assert.equal(nextRepeatDate('2025-01-01',yearly),'2025-12-31');
+  assert.equal(nextRepeatDate('2025-12-31',yearly),'2026-01-01');
+  const leapOnly=repeatRule({...yearly,yearDates:['02-29']});
+  assert.equal(nextRepeatDate('2024-02-29',leapOnly),'2028-02-29');
+  assert.equal(nextRepeatDate('2096-02-29',leapOnly),'2104-02-29');
+  assert.equal(nextRepeatDate('2024-12-31',repeatRule({...yearly,interval:3})),'2027-01-01');
+  assert.equal(sameRepeatCadence(monthly,repeatRule({...monthly,monthDays:[1,31]})),false);
+  assert.equal(sameRepeatCadence(yearly,leapOnly),false);
+  assert.equal(sameRepeatCadence(monthly,repeatRule({...monthly,anchor:'2026-02-15'})),true);
+  for(const invalid of [[],[0],[32],[1.2]])assert.throws(()=>repeatRule({...monthly,monthDays:invalid}));
+  for(const invalid of [[],['02-30'],['1-01'],['13-01']])assert.throws(()=>repeatRule({...yearly,yearDates:invalid}));
+  assert.throws(()=>repeatRule({...monthly,unit:'week'}));
+  assert.throws(()=>nextRepeatDate('2026-02-01',repeatRule({unit:'month',interval:12,anchor:'2026-02-01',monthDays:[31]})),/没有可用/);
+  assert.throws(()=>nextRepeatDate('9999-12-31',yearly),/没有可用/);
+  assert.throws(()=>nextRepeatDate('2026-01-31',repeatRule({...monthly,interval:Number.MAX_SAFE_INTEGER})),/没有可用/);
   const entries=new Map<string,any>(),queues=new Map<string,Promise<unknown>>();let fail=false;
   for(const path of ['安排/待执行','安排/已完成','安排/历史','settings/gvkit']) {entries.set(path,new TFolder());await mkdir(join(root,path),{recursive:true});}
   const vault:any={getMarkdownFiles:()=>[...entries.values()].filter(x=>x instanceof TFile),getAbstractFileByPath:(p:string)=>entries.get(p)??null,
@@ -140,5 +165,25 @@ test('repeat schedules and atomic per-occurrence Markdown completion, rewards, u
   assert.deepEqual(tomorrow.state.order,originalOrder);
   t.mock.timers.setTime(Date.parse('2026-11-15T16:00:00Z'));
   await tomorrow.load();assert.equal(tomorrow.items.find((x:any)=>x.id===daily).date,'2026-11-13','missed days stay overdue');
+  await t.test('selected month/year dates persist through real Store completion, undo and future rescheduling',async()=>{
+   for(const [name,start,rule,next,following] of [
+    ['月多选','2026-01-15',monthly,'2026-01-31','2026-02-01'],
+    ['年多选','2024-02-29',yearly,'2024-12-31','2025-01-01'],
+   ] as const) {
+    const id=await store.create(name,null,start,undefined,rule);await store.setReward(id,3);
+    await store.complete(id,true);assert.equal(store.items.find((x:any)=>x.id===id).date,next);
+    const history=store.items.find((x:any)=>x.occurrenceOf===id);
+    const loaded=new ArrangeStore(app);await loaded.load();
+    assert.deepEqual(loaded.items.find((x:any)=>x.id===id).repeat,rule);
+    await loaded.complete(history.id,false);assert.equal(loaded.items.find((x:any)=>x.id===id).date,start);
+    await loaded.complete(id,true);assert.equal(loaded.items.find((x:any)=>x.id===id).date,next);
+    await loaded.complete(id,true);assert.equal(loaded.items.find((x:any)=>x.id===id).date,following);
+    assert.equal(loaded.rewards.filter((x:any)=>x.id===history.occurrenceId).length,1);
+    const before=await vault.read(entries.get(loaded.items.find((x:any)=>x.id===id).path));
+    await loaded.setRepeat(id,rule,following);
+    assert.equal(await vault.read(entries.get(loaded.items.find((x:any)=>x.id===id).path)),before,'unchanged selections preserve anchor and all history');
+   }
+   await store.load();
+  });
  } finally {await rm(root,{recursive:true,force:true});}
 });

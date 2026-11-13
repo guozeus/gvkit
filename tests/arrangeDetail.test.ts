@@ -76,11 +76,11 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		proto.createDiv = function (options: unknown) { return this.createEl('div', options); };
 		proto.createSpan = function (options: unknown) { return this.createEl('span', options); };
 		proto.scrollIntoView = () => {};
-		await build({ stdin: { contents: `export {ArrangeView} from './src/arrangeView';export {ArrangeStore} from './src/arrangeStore';export {TFile,TFolder,Platform} from 'obsidian';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'view.mjs'), plugins: [{ name: 'test-vault', setup(b) {
+		await build({ stdin: { contents: `export {ArrangeView} from './src/arrangeView';export {ArrangeDatePicker} from './src/arrangeDatePicker';export {ArrangeStore} from './src/arrangeStore';export {TFile,TFolder,Platform} from 'obsidian';`, resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: join(dir, 'view.mjs'), plugins: [{ name: 'test-vault', setup(b) {
 			b.onResolve({ filter: /^obsidian$/ }, () => ({ path: 'obsidian', namespace: 'shim' }));
 			b.onLoad({ filter: /.*/, namespace: 'shim' }, () => ({ contents: shim, loader: 'js' }));
 		} }] });
-		const { ArrangeView, ArrangeStore, TFile, TFolder, Platform: tabletPlatform } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
+		const { ArrangeView, ArrangeDatePicker, ArrangeStore, TFile, TFolder, Platform: tabletPlatform } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
 		const files = new Map<string, any>();
 		for (const path of ['安排/待执行', '安排/已完成', '安排/历史', 'settings/gvkit']) files.set(path, new TFolder());
 		const disk = (path: string) => join(dir, encodeURIComponent(path));
@@ -942,7 +942,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			const menu = window.document.querySelectorAll('.gvkit-arrange-date-menu');
 			const panel = menu[menu.length - 1];
 			const button = (label: string) => panel.querySelector(`[aria-label="${label}"]`) as any;
-			assert.deepEqual([...panel.querySelectorAll('button')].map(x => x.textContent), ['重复 · 不重复','今天','明天','后天','下周','选择日期','推一天','提前一天','推一周','推一月','清除日期']);
+			assert.deepEqual([...panel.querySelectorAll('.gvkit-arrange-date-actions button')].map(x => x.textContent), ['今天','明天','后天','下周','选择']);
+			assert.deepEqual([...panel.querySelectorAll('.gvkit-arrange-date-shifts button')].map(x => x.textContent), ['+1天','-1天','+1周','+1月','重复']);
 			const waitDate = async (date: string | null) => {
 				for(let n=0;n<200 && (store.items.find((x:any)=>x.id===second).date!==date || view.busy);n++) await new Promise(r=>setTimeout(r,2));
 				assert.equal(store.items.find((x:any)=>x.id===second).date,date);
@@ -974,7 +975,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		view.input.value='带日期草稿'; view.updateComposer(); view.createDateButton.click();
 		const draftPanel = [...window.document.querySelectorAll('.gvkit-arrange-date-menu')].at(-1)!;
 		(draftPanel.querySelector('[aria-label="推一天"]') as any).click();
-		await new Promise(r=>setTimeout(r,10)); assert.ok(view.draftDate); assert.equal(view.input.value,'带日期草稿');
+		await new Promise(r=>setTimeout(r,280)); assert.ok(view.draftDate); assert.equal(view.input.value,'带日期草稿');
 		draftPanel.remove(); view.draftDate=null; view.input.value=''; view.updateComposer();
 		// One left swipe invokes only the selected action on release, with mouse-compatible coordinates.
 		await view.select(null); await store.configure({ swipeAction: 'date', pullDownClose: true }); view.paintLists();
@@ -1439,6 +1440,84 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.ok(failedRead); assert.equal(view.input.value, ''); assert.match(view.createTip.textContent, /已保存.*刷新失败/);
 		assert.ok(view.createTip.classList.contains('is-error')); assert.equal(store.items.filter((x: any) => x.title === 'C已落盘读回失败子').length, 1);
 		await view.create(); assert.equal(store.items.filter((x: any) => x.title === 'C已落盘读回失败子').length, 1);
+
+
+		// Date/repeat UI uses the real Store and preserves the live editor while it refreshes.
+		const dateId = await store.create('日期交互隔离', null, '2026-11-13');
+		await view.reload(); await view.select(dateId);
+		view.editing.title.value = '日期操作期间的标题草稿';
+		view.editing.body.value = '**日期操作期间的附注草稿**';
+		// Hold the existing debounce in this fixture so the date-save refresh
+		// actually meets an unsaved editor, rather than a fully saved one.
+		if(view.editTimer!==null) window.clearTimeout(view.editTimer);
+		view.editTimer=null;
+		const retainedEditor = view.editing.body;
+		const waitFor = async (check: () => boolean) => {
+			for (let n=0;n<300 && !check();n++) await new Promise(r=>setTimeout(r,10));
+			assert.ok(check(), 'date/repeat state settles');
+		};
+		let repeatWrites = 0;
+		const picker = new ArrangeDatePicker(app, '2026-11-13', '2026-11-13', (date: string|null) => view.run(()=>store.setDate(dateId,date)), {
+			rule:null, save:(rule: any,date: string|null)=>{repeatWrites++;return view.run(()=>store.setRepeat(dateId,rule,date));},
+		});
+		picker.open();
+		const panel = picker.contentEl;
+		const click = (label: string) => (panel.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement).click();
+		const currentDateItem = () => store.items.find((x:any)=>x.id===dateId);
+		click('重复');
+		assert.equal(panel.querySelectorAll('.gvkit-arrange-repeat-presets button').length,5);
+		assert.equal(panel.querySelector('.gvkit-arrange-repeat-custom').hidden,false,'custom controls need no third layer');
+		assert.match(panel.textContent,/（周五）/); assert.match(panel.textContent,/（13号）/); assert.match(panel.textContent,/（11月13号）/);
+		click('每周'); await waitFor(()=>currentDateItem().repeat?.unit==='week' && !view.busy);
+		assert.deepEqual(currentDateItem().repeat.weekdays,[5]);
+		const unit = panel.querySelector('[aria-label="间隔单位"]') as HTMLSelectElement;
+		unit.value='week'; unit.dispatchEvent(new window.Event('change'));
+		click('周一'); click('周五'); click('周三');
+		await waitFor(()=>currentDateItem().date==='2026-11-16' && !view.busy);
+		assert.deepEqual(currentDateItem().repeat.weekdays,[1,3]);
+		click('周一'); click('周五');
+		await waitFor(()=>currentDateItem().date==='2026-11-13' && !view.busy);
+		assert.deepEqual(currentDateItem().repeat.weekdays,[3,5],'continuous selections use the stable opening date, not a drifting intermediate date');
+		assert.equal(panel.querySelectorAll('.gvkit-arrange-repeat-presets [aria-pressed="true"]').length,0);
+		click('每月'); await waitFor(()=>currentDateItem().repeat?.unit==='month' && !view.busy);
+		assert.equal(panel.querySelectorAll('.gvkit-arrange-repeat-days [aria-pressed="true"]').length,0,'preset clears custom selection state');
+		unit.value='month'; unit.dispatchEvent(new window.Event('change')); click('1号'); click('15号'); click('13号');
+		await waitFor(()=>currentDateItem().date==='2026-11-15' && !view.busy);
+		assert.deepEqual(currentDateItem().repeat.monthDays,[1,15]);
+		unit.value='year'; unit.dispatchEvent(new window.Event('change'));
+		click('下个月'); click('12月25日'); click('上个月');
+		await waitFor(()=>currentDateItem().repeat?.yearDates?.length===2 && !view.busy);
+		assert.deepEqual(currentDateItem().repeat.yearDates,['11-13','12-25']);
+		assert.equal(panel.querySelector('[aria-label="11月13日"]').getAttribute('aria-pressed'),'true');
+		const interval = panel.querySelector('[aria-label="重复间隔"]') as HTMLInputElement;
+		interval.value='2'; interval.dispatchEvent(new window.Event('input'));
+		await waitFor(()=>currentDateItem().repeat?.interval===2 && !view.busy);
+		const savedBeforeFailure=await vault.read(files.get(currentDateItem().path));
+		fail=true; click('11月13日');
+		await waitFor(()=>panel.textContent.includes('未保存，请重试') && !view.busy);
+		assert.equal(await vault.read(files.get(currentDateItem().path)),savedBeforeFailure);
+		picker.close(); await new Promise(r=>setTimeout(r,30)); assert.ok(panel.isConnected,'failed save cannot masquerade as a successful close');
+		fail=false; click('重试'); await waitFor(()=>currentDateItem().date==='2026-12-25' && !view.busy);
+		assert.deepEqual(currentDateItem().repeat.yearDates,['12-25']);
+		assert.ok(view.editing.body===retainedEditor,'unsaved editor remains mounted through date persistence'); assert.equal(view.editing.body.value,'**日期操作期间的附注草稿**');
+		assert.equal(view.editing.title.value,'日期操作期间的标题草稿');
+		interval.value='3'; interval.dispatchEvent(new window.Event('input')); picker.close();
+		await waitFor(()=>!panel.isConnected); assert.equal(currentDateItem().repeat.interval,3,'close flushes the final number edit');
+		await view.saveEdit(); await view.reload();
+		assert.equal(currentDateItem().body,'**日期操作期间的附注草稿**'); assert.equal(currentDateItem().title,'日期操作期间的标题草稿');
+		assert.ok(repeatWrites<16,'quick multi-select bursts are coalesced instead of writing every intermediate state');
+
+		const legacyId=await store.create('旧月末不变',null,'2027-01-31',undefined,{unit:'month',interval:1,anchor:'2027-01-31'});
+		await store.complete(legacyId,true);
+		const legacyItem=store.items.find((x:any)=>x.id===legacyId), legacyFile=files.get(legacyItem.path), legacyBytes=await vault.read(legacyFile);
+		let legacyWrites=0;
+		const legacy=new ArrangeDatePicker(app,legacyItem.date,'2026-11-13',async()=>true,{rule:legacyItem.repeat,save:(rule:any,date:string|null)=>{legacyWrites++;return view.run(()=>store.setRepeat(legacyId,rule,date));}});
+		legacy.open();(legacy.contentEl.querySelector('[aria-label="重复"]') as HTMLButtonElement).click();
+		const sameInterval=legacy.contentEl.querySelector('[aria-label="重复间隔"]') as HTMLInputElement;
+		sameInterval.value='1';sameInterval.dispatchEvent(new window.Event('input'));legacy.close();
+		await waitFor(()=>!legacy.contentEl.isConnected);
+		assert.equal(legacyWrites,0); assert.equal(await vault.read(legacyFile),legacyBytes,'unchanged UI preserves legacy month-end anchor/history');
+		await store.complete(legacyId,true);assert.equal(store.items.find((x:any)=>x.id===legacyId).date,'2027-03-31');
 
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
