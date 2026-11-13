@@ -129,6 +129,24 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		Object.defineProperty(host.querySelector('.view-header-title-container'), 'clientWidth', { value: 600, configurable: true });
 		const root = window.document.createElement('main'); host.append(root);
 		view = new ArrangeView({ app, contentEl: root, containerEl: host }, store); await view.onOpen();
+		// Desktop breathe settings share the original Markdown Store and View CSS variables.
+		assert.deepEqual([store.state.selectedBreathePeriod, store.state.selectedBreatheLight, store.state.selectedBreatheDark], [2.8, 8, 55]);
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-selected-period'), '2.8s');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-selected-light'), '8%');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-selected-dark'), '55%');
+		const preservedRowHeight = store.state.rowHeight, preservedRootStyle = store.state.rootItemStyle;
+		await store.configure({ selectedBreathePeriod: 1.8, selectedBreatheLight: 4, selectedBreatheDark: 69 });
+		view.applyComposerSettings();
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-selected-period'), '1.8s');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-selected-light'), '4%');
+		assert.equal(root.style.getPropertyValue('--gvkit-arrange-selected-dark'), '69%');
+		const breatheReload = new ArrangeStore(app); await breatheReload.load();
+		assert.deepEqual([breatheReload.state.selectedBreathePeriod, breatheReload.state.selectedBreatheLight, breatheReload.state.selectedBreatheDark], [1.8, 4, 69]);
+		assert.equal(breatheReload.state.rowHeight, preservedRowHeight);
+		assert.equal(breatheReload.state.rootItemStyle, preservedRootStyle);
+		assert.ok(root.classList.contains('gvkit-arrange-mobile'), 'the mobile View marker is unchanged');
+		await store.configure({ selectedBreathePeriod: 2.8, selectedBreatheLight: 8, selectedBreatheDark: 55 });
+		view.applyComposerSettings();
 		// Real ArrangeView: tablet keeps exactly one operable toolbar in the content,
 		// even if the native title host reports height but is visually hidden.
 		const toolbarSlot = host.querySelector('.view-header-title-container')!;

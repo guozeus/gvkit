@@ -155,12 +155,18 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange[data-row-dividers="false"] .gvkit-arrange-row { border-bottom-color: transparent; }
 .gvkit-arrange-row.is-selected { background: color-mix(in srgb, var(--color-blue) 18%, transparent); }
 @keyframes gvkit-arrange-selected-breathe {
-  0%, 100% { background-color: color-mix(in srgb, var(--color-blue) 18%, transparent); }
-  50% { background-color: color-mix(in srgb, var(--color-blue) 35%, transparent); }
+  0%, 100% { background-color: color-mix(in srgb, var(--color-blue) var(--gvkit-arrange-selected-dark, 55%), transparent); }
+  50% { background-color: color-mix(in srgb, var(--color-blue) var(--gvkit-arrange-selected-light, 8%), transparent); }
 }
-.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-row.is-selected { animation: gvkit-arrange-selected-breathe 4.4s ease-in-out infinite; }
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-row.is-selected {
+  background-color: color-mix(in srgb, var(--color-blue) var(--gvkit-arrange-selected-dark, 55%), transparent);
+  animation: gvkit-arrange-selected-breathe var(--gvkit-arrange-selected-period, 2.8s) ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
-  .gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-row.is-selected { animation: none; }
+  .gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-row.is-selected {
+    animation: none;
+    background-color: color-mix(in srgb, var(--color-blue) var(--gvkit-arrange-selected-dark, 55%), transparent);
+  }
 }
 .gvkit-arrange-row.is-located { outline: 1px dashed var(--text-muted); outline-offset: -2px; }
 .gvkit-arrange-row.is-pinned { box-shadow: inset 3px 0 var(--gvkit-arrange-pin-color, #bb8c18); }

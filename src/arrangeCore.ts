@@ -57,6 +57,9 @@ export interface ArrangeState {
 	listFontSize: number;
 	rowHeight: number;
 	rowDividers: boolean;
+	selectedBreathePeriod: number;
+	selectedBreatheLight: number;
+	selectedBreatheDark: number;
 	gripHeight: number;
 	gripWidth: number;
 	toolbarHeight: number;
@@ -74,6 +77,12 @@ export interface ArrangeState {
 	rowRightGap: number;
 	mobileHeaderGap: number;
 }
+
+export const ARRANGE_BREATHE_SETTINGS = {
+	selectedBreathePeriod: [1.2, 8, 2.8],
+	selectedBreatheLight: [0, 30, 8],
+	selectedBreatheDark: [30, 75, 55],
+} as const;
 
 export const ARRANGE_NUMBER_SETTINGS = {
 	gripHeight: [24, 56, 32], gripWidth: [24, 96, 36], toolbarHeight: [40, 56, 44], closeThreshold: [10, 40, 25],
@@ -95,7 +104,9 @@ export function defaultArrangeState(): ArrangeState {
 		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2, completionSound: 'chime',
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent'],
 		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
-		listFontSize: 17, rowHeight: 44, rowDividers: true, gripHeight: 32, gripWidth: 36,
+		listFontSize: 17, rowHeight: 44, rowDividers: true,
+		selectedBreathePeriod: 2.8, selectedBreatheLight: 8, selectedBreatheDark: 55,
+		gripHeight: 32, gripWidth: 36,
 		toolbarHeight: 44, parentFontSize: 13, closeThreshold: 25, selectionColor: 'blue',
 		detailFontSize: 18, bodyFontSize: 16, dateFontSize: 12, dateHintColor: 'vivid', rowIconGap: 4, detailIconGap: 8 };
 }

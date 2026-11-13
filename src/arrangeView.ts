@@ -3,7 +3,7 @@ import { ArrangeDatePicker } from './arrangeDatePicker';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
-import { ARRANGE_ACTIONS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore } from './arrangeStore';
 import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
@@ -548,6 +548,9 @@ export class ArrangeView extends ItemView {
 			'toolbar-height': state.toolbarHeight, 'parent-font': state.parentFontSize,
 		})) this.contentEl.style.setProperty(`--gvkit-arrange-${name}`, `${value}px`);
 		this.contentEl.dataset.rowDividers = String(state.rowDividers);
+		this.contentEl.style.setProperty('--gvkit-arrange-selected-period', `${state.selectedBreathePeriod}s`);
+		this.contentEl.style.setProperty('--gvkit-arrange-selected-light', `${state.selectedBreatheLight}%`);
+		this.contentEl.style.setProperty('--gvkit-arrange-selected-dark', `${state.selectedBreatheDark}%`);
 		this.contentEl.style.setProperty('--gvkit-arrange-pin-color', PIN_COLORS[state.pinColor]);
 		this.contentEl.style.setProperty('--gvkit-arrange-date-color', DATE_HINT_COLORS[state.dateHintColor] ?? DATE_HINT_COLORS.vivid);
 		this.headline.dataset.selectionColor = state.selectionColor;
@@ -1538,6 +1541,22 @@ export class ArrangeView extends ItemView {
 			iconButton(setting.nameEl, `${names[key]}恢复默认`, 'rotate-ccw', () => {
 				input.value = String(initial); input.removeAttribute('aria-invalid'); updateSlider(initial); configure({ [key]: initial });
 			}).addClass('gvkit-arrange-setting-reset');
+		}
+		if (!Platform.isMobileApp) {
+			const breatheNames = { selectedBreathePeriod: '选中呼吸周期（秒）', selectedBreatheLight: '选中呼吸最浅（%）', selectedBreatheDark: '选中呼吸最深（%）' } as const;
+			// Keep rapid consecutive slider updates together through the existing async save/reload path.
+			const breatheDraft = {
+				selectedBreathePeriod: this.store.state.selectedBreathePeriod,
+				selectedBreatheLight: this.store.state.selectedBreatheLight,
+				selectedBreatheDark: this.store.state.selectedBreatheDark,
+			};
+			for (const key of Object.keys(ARRANGE_BREATHE_SETTINGS) as (keyof typeof ARRANGE_BREATHE_SETTINGS)[]) {
+				const [min, max] = ARRANGE_BREATHE_SETTINGS[key];
+				new Setting(modal.contentEl).setName(breatheNames[key])
+					.addSlider(slider => slider.setLimits(min, max, key === 'selectedBreathePeriod' ? 0.2 : 1)
+						.setValue(this.store.state[key]).setDynamicTooltip()
+						.onChange(value => { breatheDraft[key] = value; configure({ ...breatheDraft }); }));
+			}
 		}
 		new Setting(modal.contentEl).setName('钉住竖条颜色')
 			.addDropdown(dropdown => dropdown.addOptions({ gold: '金色（默认）', purple: '紫色', blue: '蓝色' })
