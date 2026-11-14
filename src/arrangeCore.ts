@@ -147,6 +147,15 @@ export function moveInOrder(order: string[], items: ArrangeItem[], id: string, b
 	});
 }
 
+/** Explicit Top releases the chosen pin slots and preserves every other pinned rank. */
+export function topInOrder(order: string[], items: ArrangeItem[], ids: readonly string[]): string[] {
+	const chosen = new Set(ids);
+	const fixed = new Set(items.filter(item => item.pinned && !item.completedAt && !chosen.has(item.id)).map(item => item.id));
+	const movable = [...order.filter(id => chosen.has(id)), ...order.filter(id => !chosen.has(id) && !fixed.has(id))];
+	let cursor = 0;
+	return order.map(id => fixed.has(id) ? id : movable[cursor++]!);
+}
+
 export function validParent(items: ArrangeItem[], id: string, parent: string | null): boolean {
 	const seen = new Set([id]);
 	let next = parent;

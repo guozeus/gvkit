@@ -1,10 +1,10 @@
 import { repeatLabel, type RepeatRule } from './arrangeRepeat';
-import { ArrangeDatePicker } from './arrangeDatePicker';
+import { ArrangeDatePicker, appendBatchFailures } from './arrangeDatePicker';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
-import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore } from './arrangeStore';
+import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore, type ArrangeBatchAction, type ArrangeBatchTarget, type ArrangeBatchResult } from './arrangeStore';
 import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
@@ -85,6 +85,19 @@ export class ArrangeView extends ItemView {
 	private rewardsView?: ArrangeRewardsView;
 	private rewardChoiceObserver?: ResizeObserver;
 	private selected: string | null = null;
+	private multi = new Set<string>();
+	private multiPreview = false;
+	private multiDate = false;
+	private multiFromChildren = false;
+	private multiBar!: HTMLElement;
+	private multiCount!: HTMLElement;
+	private multiStatus!: HTMLElement;
+	private multiAllButton!: HTMLButtonElement;
+	private multiRetry!: HTMLButtonElement;
+	private multiDetails!: HTMLButtonElement;
+	private multiMessage = '';
+	private multiMessageTimer: number | null = null;
+	private multiReceipt: { original: ArrangeBatchTarget[]; remaining: ArrangeBatchTarget[]; action: ArrangeBatchAction; result: ArrangeBatchResult } | null = null;
 	private filter: 'all' | 'today' | 'overdue' = 'all';
 	private searchOpen = false;
 	private hierarchyFilter: 'all' | 'roots' | 'leaves' = 'all';
@@ -101,7 +114,7 @@ export class ArrangeView extends ItemView {
 	private moreButton!: HTMLButtonElement;
 	private parentBar!: HTMLElement;
 	private parentError!: HTMLElement;
-	private choosingParent: { id: string | null; scroll: number; detailScroll: number; searchOpen: boolean; query: string; searchScroll: number } | null = null;
+	private choosingParent: { id: string | null; targets?: ArrangeBatchTarget[]; scroll: number; detailScroll: number; searchOpen: boolean; query: string; searchScroll: number } | null = null;
 	private scrolls = new Map<string, number>();
 	private list!: HTMLElement;
 	private detail!: HTMLElement;
@@ -251,7 +264,7 @@ export class ArrangeView extends ItemView {
 			for (const [value, label] of [['all', '全部'], ['roots', '无上级'], ['leaves', '无下级']] as const) {
 				menu.addItem(entry => entry.setTitle(`${this.hierarchyFilter === value ? '✓ ' : ''}${label}`).onClick(() => {
 					this.tips.start();
-					this.hierarchyFilter = value; this.paintLists(); this.list.scrollTop = 0;
+					if(this.busy&&this.multi.size)return;this.clearMultiForScope();this.hierarchyFilter = value; this.paintLists(); this.list.scrollTop = 0;
 				}));
 			}
 			menu.showAtMouseEvent(event);
@@ -309,12 +322,13 @@ export class ArrangeView extends ItemView {
 		this.searchBar = root.createDiv('gvkit-arrange-search');
 		this.searchBar.hidden = true;
 		this.searchInput = this.searchBar.createEl('input', { type: 'search', attr: { placeholder: '搜索事项标题', 'aria-label': '搜索事项标题' } });
-		this.searchInput.oninput = () => { this.paintLists(); this.list.scrollTop = 0; };
+		this.searchInput.oninput = () => { if(this.busy&&this.multi.size)return; this.clearMultiForScope(); this.paintLists(); this.list.scrollTop = 0; };
+		this.multiAllButton = iconButton(this.searchBar, '全选搜索结果', 'square-check-big', () => this.selectAllResults());
 		this.completedButton = iconButton(this.searchBar, '包含已完成', 'list-checks', () => {
-			this.includeCompleted = !this.includeCompleted; this.syncSearch(); this.paintLists(); this.list.scrollTop = 0;
+			if(this.busy&&this.multi.size)return;this.clearMultiForScope();this.includeCompleted = !this.includeCompleted; this.syncSearch(); this.paintLists(); this.list.scrollTop = 0;
 		});
 		this.dateButton = iconButton(this.searchBar, '时间范围', 'calendar-range', () => {
-			this.searchDate = this.searchDate ? null : { day: dayKey(new Date(), this.store.state.timezone), grain: 'day' };
+			if(this.busy&&this.multi.size)return;this.clearMultiForScope();this.searchDate = this.searchDate ? null : { day: dayKey(new Date(), this.store.state.timezone), grain: 'day' };
 			this.syncSearch(); this.paintLists(); this.list.scrollTop = 0;
 		});
 		iconButton(this.searchBar, '关闭搜索', 'x', () => this.toggleSearch());
@@ -330,6 +344,7 @@ export class ArrangeView extends ItemView {
 		this.createTip = composer.createDiv({ cls: 'gvkit-arrange-create-tip', attr: { role: 'status', 'aria-live': 'polite' } });
 		this.createTip.hidden = true;
 		this.register(() => { if (this.createTipTimer !== null) window.clearTimeout(this.createTipTimer); });
+		this.buildMultiBar(composer);
 		this.input = composer.createEl('textarea', { attr: { rows: '1', placeholder: '想到就记…', 'aria-label': '新增事项' } });
 		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
 		this.createButton.addClass('gvkit-arrange-submit');
@@ -340,6 +355,10 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
 		this.updateComposer();
 		this.applyComposerSettings();
+		this.registerDomEvent(root,'focusin',event=>{
+			if(this.multi.size&&!this.busy&&(event.target as HTMLElement)?.closest?.('.gvkit-arrange-detail-title,.gvkit-arrange-body'))this.setMulti([]);
+		});
+		this.register(()=>{if(this.multiMessageTimer!==null)(root.ownerDocument.defaultView??window).clearTimeout(this.multiMessageTimer);});
 		if (Platform.isIosApp) {
 			this.keyboardBackdrop = document.body.createDiv({ cls: 'gvkit-arrange-keyboard-backdrop', attr: { 'aria-hidden': 'true' } });
 			this.keyboardBackdrop.hidden = true;
@@ -355,7 +374,9 @@ export class ArrangeView extends ItemView {
 		this.registerDomEvent(this.input, 'compositionend', () => { this.composerComposing = false; });
 		this.registerDomEvent(root, 'keydown', event => {
 			if (event.key !== 'Escape') return;
+			if (this.multiDate || this.busy && this.multi.size > 0) return;
 			if (this.choosingParent) this.finishParentChoice();
+			else if(this.multi.size) { this.setMulti([]);event.preventDefault();event.stopPropagation(); }
 			else if (this.searchOpen) this.toggleSearch();
 			else void this.select(null);
 		});
@@ -582,11 +603,12 @@ export class ArrangeView extends ItemView {
 		const empty = !this.input.value.trim();
 		this.createButton.hidden = empty;
 		this.createDateButton.hidden = empty;
-		this.createDateButton.disabled = this.busy || Boolean(this.choosingParent);
+		this.createDateButton.disabled = this.busy || Boolean(this.choosingParent) || this.multi.size > 0;
 		this.createDateButton.toggleClass('is-active', Boolean(this.draftDate));
 		this.createDateButton.title = this.draftDate ? `新事项日期：${this.draftDate}${this.draftRepeat ? ` · ${repeatLabel(this.draftRepeat)}` : ''}` : '设置新事项日期';
-		this.input.disabled = Boolean(this.choosingParent);
-		this.createButton.disabled = this.busy || empty || Boolean(this.choosingParent);
+		this.input.disabled = Boolean(this.choosingParent) || this.multi.size > 0 && !this.multiPreview;
+		this.createButton.disabled = this.busy || empty || Boolean(this.choosingParent) || this.multi.size > 0;
+		this.syncMulti();
 	}
 	private async run(action: () => Promise<unknown>): Promise<boolean> {
 		if (this.busy) return false;
@@ -599,6 +621,183 @@ export class ArrangeView extends ItemView {
 	private ordered(): ArrangeItem[] {
 		const byId = new Map(this.store.items.map(item => [item.id, item]));
 		return this.store.state.order.map(id => byId.get(id)).filter((item): item is ArrangeItem => Boolean(item));
+	}
+	private buildMultiBar(composer: HTMLElement): void {
+		this.multiBar=composer.createDiv('gvkit-arrange-multi-bar');this.multiBar.hidden=true;
+		const heading=this.multiBar.createDiv('gvkit-arrange-multi-heading');
+		this.multiCount=heading.createSpan({attr:{role:'status','aria-live':'polite'}});
+		heading.createEl('button',{text:'退出',attr:{type:'button','aria-label':'退出多选'}}).onclick=()=>{if(!this.busy)this.setMulti([]);};
+		const buttons=this.multiBar.createDiv('gvkit-arrange-multi-actions');
+		for(const [key,label] of [['date','日期'],['top','置顶'],['pin','钉住'],['changeParent','上级'],['developmentCompleted','AI已执行'],['copy','复制']] as const){
+			const button=buttons.createEl('button',{attr:{type:'button','aria-label':actions[key].title}});
+			button.dataset.batchAction=key;setIcon(button.createSpan(),actions[key].icon);button.createSpan({text:label});
+			button.onclick=event=>{void this.multiAction(key,event);};
+		}
+		const feedback=this.multiBar.createDiv('gvkit-arrange-multi-feedback');
+		this.multiStatus=feedback.createSpan({attr:{role:'status','aria-live':'polite'}});
+		this.multiRetry=feedback.createEl('button',{text:'重试',attr:{type:'button'}});
+		this.multiRetry.onclick=()=>{const pending=this.multiReceipt;if(pending)void this.performBatch(pending.original,pending.action);};
+		this.multiDetails=feedback.createEl('button',{text:'查看',attr:{type:'button'}});
+		this.multiDetails.onclick=()=>{
+			const modal=new Modal(this.app);modal.setTitle('未保存事项');
+			for(const text of this.batchFailureDetails())modal.contentEl.createEl('p',{text});
+			modal.open();
+		};
+	}
+	private batchFailureDetails(): string[] {
+		return (this.multiReceipt?.result.failed??[]).map(failure=>`${failure.title}：${failure.uncertain?'结果待确认，重试先读回':failure.message}`);
+	}
+	private multiItems(): ArrangeItem[] {
+		const goal=this.dailyGoalItem();
+		const items=[...(goal?[goal]:[]),...this.mainListItems(),...(this.selected?this.directChildren(this.selected):[])];
+		return [...new Map(items.map(item=>[item.id,item])).values()].filter(item=>this.multi.has(item.id));
+	}
+	private setMulti(ids: string[], preview=false): void {
+		this.multi=new Set(ids);this.multiPreview=preview;this.multiReceipt=null;this.multiMessage='';
+		if(this.multi.size&&!preview)this.input.blur();
+		this.updateComposer();this.syncMulti();
+	}
+	private clearMultiForScope(): void {
+		if(this.choosingParent||!this.multi.size)return;
+		this.setMulti([]);new Notice('已清除选择');
+	}
+	private pruneMulti(): void {
+		if(!this.multi.size||this.multiPreview||this.multiDate||this.choosingParent||this.busy)return;
+		const visible=new Set(this.multiItems().map(item=>item.id)),previous=this.multi.size;
+		this.multi=new Set([...this.multi].filter(id=>visible.has(id)));
+		if(this.multi.size!==previous){
+			if(!this.multiReceipt)this.multiMessage='';
+			new Notice(`已移除${previous-this.multi.size}项选择`);
+			if(!this.multi.size)this.updateComposer();
+		}
+	}
+	private selectAllResults(): void {
+		if(this.busy||this.choosingParent||!this.searchOpen)return;
+		const ids=this.mainListItems().map(item=>item.id);
+		if(!ids.length){new Notice('没有可选事项');return;}
+		this.multiFromChildren=false;
+		this.setMulti(ids.length===this.multi.size&&ids.every(id=>this.multi.has(id))?[]:ids);
+	}
+	private multiUnavailable(key: RowAction, items=this.multiItems()): string {
+		if(!items.length)return '请先选择事项';
+		if(['top','pin','developmentCompleted'].includes(key)&&items.some(item=>item.completedAt))return '含已完成事项，请先取消选择';
+		const goal=this.dailyGoalItem();
+		if(key==='top'&&goal&&items.some(item=>item.id===goal.id))return '今天特产事项固定显示，不能置顶';
+		return '';
+	}
+	private syncMulti(): void {
+		if(!this.multiBar||!this.input)return;
+		const active=this.multi.size>0&&!this.choosingParent;
+		this.contentEl.toggleClass('is-multiselect',active);
+		this.contentEl.toggleClass('is-multi-preview',active&&this.multiPreview);
+		this.multiBar.hidden=!active;this.multiCount.textContent=`${this.multi.size}项`;
+		this.multiStatus.textContent=this.multiMessage;
+		this.multiStatus.parentElement!.hidden=!this.multiMessage;
+		this.multiRetry.hidden=!this.multiReceipt||this.multiDate;
+		this.multiDetails.hidden=!this.multiReceipt;
+		const items=this.multiItems();
+		for(const button of Array.from(this.multiBar.querySelectorAll<HTMLButtonElement>('button'))){
+			button.disabled=this.busy||this.multiPreview;
+			const key=button.dataset.batchAction as RowAction|undefined;
+			if(!key)continue;
+			const reason=this.multiUnavailable(key,items);
+			button.setAttribute('aria-disabled',String(Boolean(reason)));
+			button.title=reason||actions[key].title;
+			if(key==='pin'||key==='developmentCompleted'){
+				const values=items.map(item=>Boolean(key==='pin'?item.pinned:item.developmentCompleted));
+				button.setAttribute('aria-pressed',values.length&&values.every(Boolean)?'true':values.some(Boolean)?'mixed':'false');
+			}
+		}
+		for(const row of Array.from(this.contentEl.querySelectorAll<HTMLElement>('.gvkit-arrange-row[data-id]'))){
+			const chosen=active&&this.multi.has(row.dataset.id!);row.toggleClass('is-multi-selected',chosen);
+			for(const control of Array.from(row.querySelectorAll<HTMLElement>('input,button'))){
+				control.tabIndex=active&&!control.classList.contains('gvkit-arrange-title')?-1:0;
+				if(control.classList.contains('gvkit-arrange-title')){
+					if(active)control.setAttribute('aria-pressed',String(chosen));else control.removeAttribute('aria-pressed');
+				}
+			}
+		}
+		if(this.multiAllButton){
+			this.multiAllButton.hidden=Boolean(this.choosingParent);this.multiAllButton.disabled=this.busy;
+			const ids=this.mainListItems().map(item=>item.id);
+			this.multiAllButton.setAttribute('aria-pressed',String(Boolean(ids.length&&ids.length===this.multi.size&&ids.every(id=>this.multi.has(id)))));
+		}
+		const bulkBusy=this.busy&&this.multi.size>0;
+		this.searchInput.disabled=bulkBusy;
+		this.completedButton.disabled=this.dateButton.disabled=bulkBusy;
+		this.moreButton.disabled=this.hierarchyButton.disabled=Boolean(this.choosingParent)||bulkBusy;
+	}
+	private multiFeedback(message:string,error=false):void {
+		const win=this.contentEl.ownerDocument.defaultView??window;
+		if(this.multiMessageTimer!==null)win.clearTimeout(this.multiMessageTimer);
+		this.multiMessage=message;this.multiStatus.toggleClass('is-error',error);this.syncMulti();
+		this.multiMessageTimer=message&&!error?win.setTimeout(()=>{this.multiMessage='';this.multiMessageTimer=null;this.syncMulti();},3500):null;
+	}
+	private async performBatch(original: ArrangeBatchTarget[],action:ArrangeBatchAction):Promise<boolean>{
+		if(this.busy)return false;
+		const previous=this.multiReceipt;
+		const same=previous&&JSON.stringify(previous.action)===JSON.stringify(action)&&original.length===previous.original.length&&original.every((item,index)=>item.id===previous.original[index]?.id);
+		const targets=same?previous.remaining:original;
+		this.busy=true;this.updateComposer();this.multiFeedback(`正在保存 0/${targets.length}`,true);
+		let result:ArrangeBatchResult;
+		try{
+			if(this.editing&&original.some(item=>item.id===this.editing!.id)&&!(await this.saveEdit()))throw Error('请先完成当前编辑');
+			result=await this.store.applyBatch(targets,action,(done,total)=>this.multiFeedback(`正在保存 ${done}/${total}`,true));
+		}catch(error){result={applied:[],failed:targets.map(item=>({id:item.id,title:item.title,message:error instanceof Error?error.message:'保存失败'}))};}
+		this.busy=false;
+		const failed=new Set(result.failed.map(item=>item.id));
+		this.multiReceipt=result.failed.length?{original,remaining:original.filter(item=>failed.has(item.id)),action,result}:null;
+		this.paintLists();if(!this.keepEditor())this.paintDetail();this.updateComposer();
+		if(result.failed.length){
+			const detail=result.failed.length===1?`${result.failed[0]!.title}：${result.failed[0]!.uncertain?'结果待确认':result.failed[0]!.message}`:`${result.failed.length}项未保存`;
+			this.multiFeedback(`已应用${original.length-result.failed.length}/${original.length}，${detail}`,true);
+			if(this.choosingParent){
+				this.parentError.empty();this.parentError.createSpan({text:this.multiMessage});
+				appendBatchFailures(this.parentError,this.batchFailureDetails());this.parentError.hidden=false;
+			}
+			return false;
+		}
+		if(result.refreshError)new Notice(`已保存，刷新失败：${result.refreshError}`);
+		const label=action.kind==='pin'?(action.value?'已钉住':'已取消钉住'):action.kind==='developmentCompleted'?(action.value?'已设为AI已执行':'已取消AI已执行'):action.kind==='top'?'已置于最前可用位置':action.kind==='date'?'已设置日期':'已修改上级';
+		this.multiFeedback(`${label} · ${original.length}项`);
+		if(action.kind==='top'){
+			const ids=new Set(original.map(item=>item.id)),first=this.store.state.order.find(id=>ids.has(id));
+			if(first)this.reveal(first,this.multiFromChildren?this.children:this.list);
+		}
+		return true;
+	}
+	private async multiAction(key:RowAction,event:MouseEvent):Promise<void>{
+		if(this.busy||this.multiPreview||this.choosingParent)return;
+		const items=this.multiItems(),reason=this.multiUnavailable(key,items);
+		if(reason){this.multiFeedback(reason,true);return;}
+		const targets:ArrangeBatchTarget[]=items.map(item=>({id:item.id,title:item.title,occurrenceId:item.occurrenceId,repeatInstance:item.repeatInstance}));
+		if(key==='copy'){
+			this.multiReceipt=null;
+			try{
+				const text=items.map(item=>this.editing?.id===item.id?this.editing.title.value:item.title).join('\n');
+				await navigator.clipboard.writeText(text);this.multiReceipt=null;this.multiFeedback(`已复制${items.length}项标题`);
+			}catch{this.multiFeedback('复制失败，请重试',true);}return;
+		}
+		if(key==='date'){
+			this.multiReceipt=null;this.multiDate=true;
+			const dates=new Set(items.map(item=>item.date));
+			new ArrangeDatePicker(this.app,dates.size===1?items[0]!.date:null,this.store.facts().day,
+				date=>this.performBatch(targets,{kind:'date',value:date}),undefined,event=>this.tips.interaction(event),{
+					count:items.length,mixed:dates.size>1,anyDate:items.some(item=>Boolean(item.date)),
+					clearBlocked:items.some(item=>!item.occurrenceId&&item.repeat)?'重复事项需单独清除日期':undefined,
+					failureMessage:()=>this.multiMessage,
+					failureDetails:()=>this.batchFailureDetails(),
+					onClose:()=>{this.multiDate=false;this.paintLists();this.updateComposer();},
+				}).open();return;
+		}
+		if(key==='changeParent'){this.multiReceipt=null;void this.changeParent(targets[0]!.id,targets);return;}
+		if(key==='top'){await this.performBatch(targets,{kind:'top'});return;}
+		if(key==='pin'||key==='developmentCompleted'){
+			const pending=this.multiReceipt;
+			if(pending?.action.kind===key){await this.performBatch(pending.original,pending.action);return;}
+			const value=!items.every(item=>key==='pin'?item.pinned:item.developmentCompleted);
+			await this.performBatch(targets,{kind:key,value});
+		}
 	}
 	private paintLists(): void {
 		if (!this.headline || this.closed) return;
@@ -628,8 +827,7 @@ export class ArrangeView extends ItemView {
 		this.contentEl.dataset.rootItemStyle = this.store.state.rootItemStyle;
 		const scroll = this.list.scrollTop;
 		this.list.empty();
-		const goal = this.store.state.dailyGoal?.day === facts.day
-			? (this.store.items.find(item => item.occurrenceOf === this.store.state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),this.store.state.timezone)===facts.day) ?? this.store.items.find(item => item.id === this.store.state.dailyGoal!.id)) : undefined;
+		const goal = this.dailyGoalItem();
 		if (!this.choosingParent) {
 			if (goal) this.row(this.list, goal, true);
 			else {
@@ -651,6 +849,24 @@ export class ArrangeView extends ItemView {
 			bar.createSpan({ text: '逾期事项' });
 			iconButton(bar, '返回全部事项', 'x', () => this.setFilter('all'));
 		}
+		const items = this.mainListItems(goal);
+		for (const item of items) this.row(this.list, item);
+		if (!items.length) this.list.createDiv({ cls: 'gvkit-arrange-empty', text: this.searchOpen || this.choosingParent ? '没有符合条件的事项' : this.filter === 'all' ? '想到什么，就从下面记下来。' : '这里已经清空。' });
+		this.list.scrollTop = scroll;
+		if (this.children && this.selected && !this.choosingParent) {
+			this.children.empty();
+			for (const item of this.directChildren(this.selected)) this.row(this.children, item);
+		}
+		this.paintDetailState();
+		this.pruneMulti();this.syncMulti();
+	}
+	private dailyGoalItem(): ArrangeItem | undefined {
+		const facts=this.store.facts();
+		return this.store.state.dailyGoal?.day === facts.day
+			? (this.store.items.find(item => item.occurrenceOf === this.store.state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),this.store.state.timezone)===facts.day) ?? this.store.items.find(item => item.id === this.store.state.dailyGoal!.id)) : undefined;
+	}
+	private mainListItems(goal=this.dailyGoalItem()): ArrangeItem[] {
+		const facts=this.store.facts();
 		let items = this.ordered();
 		if (this.choosingParent) {
 			items = [...items, ...this.store.items.filter(item => item.completedAt
@@ -700,14 +916,7 @@ export class ArrangeView extends ItemView {
 			}
 		}
 		if (!this.choosingParent && goal) items = items.filter(item => item.id !== goal.id);
-		for (const item of items) this.row(this.list, item);
-		if (!items.length) this.list.createDiv({ cls: 'gvkit-arrange-empty', text: this.searchOpen || this.choosingParent ? '没有符合条件的事项' : this.filter === 'all' ? '想到什么，就从下面记下来。' : '这里已经清空。' });
-		this.list.scrollTop = scroll;
-		if (this.children && this.selected && !this.choosingParent) {
-			this.children.empty();
-			for (const item of this.directChildren(this.selected)) this.row(this.children, item);
-		}
-		this.paintDetailState();
+		return items;
 	}
 	private directChildren(id: string): ArrangeItem[] {
 		return [...this.ordered().filter(item => item.parent === id),
@@ -727,7 +936,8 @@ export class ArrangeView extends ItemView {
 		label.append(document.createTextNode(title.slice(cursor)));
 	}
 	private setFilter(filter: typeof this.filter): void {
-		if (this.choosingParent) return;
+		if (this.choosingParent || this.busy && this.multi.size > 0) return;
+		this.clearMultiForScope();
 		if (this.searchOpen) this.toggleSearch();
 		this.scrolls.set(this.filter, this.list.scrollTop);
 		this.filter = filter;
@@ -735,6 +945,7 @@ export class ArrangeView extends ItemView {
 		this.list.scrollTop = this.scrolls.get(filter) ?? 0;
 	}
 	private toggleSearch(): void {
+		if(this.busy&&this.multi.size)return;this.clearMultiForScope();
 		if (!this.searchOpen) this.searchScroll = this.list.scrollTop;
 		this.searchOpen = !this.searchOpen;
 		if (!this.searchOpen) this.searchInput.blur();
@@ -747,6 +958,7 @@ export class ArrangeView extends ItemView {
 	private syncSearch(): void {
 		this.searchBar.hidden = !this.searchOpen;
 		this.searchButton.setAttribute('aria-pressed', String(this.searchOpen));
+		this.multiAllButton.hidden = Boolean(this.choosingParent);
 		this.completedButton.hidden = Boolean(this.choosingParent);
 		this.dateButton.hidden = Boolean(this.choosingParent);
 		this.completedButton.setAttribute('aria-pressed', String(this.includeCompleted));
@@ -755,7 +967,7 @@ export class ArrangeView extends ItemView {
 		this.dateBar.empty();
 		if (this.dateBar.hidden || !this.searchDate) return;
 		const filter = this.searchDate;
-		const update = () => { this.syncSearch(); this.paintLists(); this.list.scrollTop = 0; };
+		const update = () => { if(this.busy&&this.multi.size)return;this.clearMultiForScope();this.syncSearch(); this.paintLists(); this.list.scrollTop = 0; };
 		const grains = this.dateBar.createDiv('gvkit-arrange-date-grains');
 		for (const [grain, name] of [['day', '日'], ['week', '周'], ['month', '月'], ['year', '年']] as const) {
 			const button = grains.createEl('button', { text: name, attr: { 'aria-pressed': String(filter.grain === grain) } });
@@ -778,12 +990,14 @@ export class ArrangeView extends ItemView {
 		row.toggleClass('gvkit-arrange-daily-goal', dailyGoal);
 		row.dataset.id = item.id;
 		row.toggleClass('is-selected', item.id === this.selected);
+		row.toggleClass('is-multi-selected',!this.choosingParent&&this.multi.has(item.id));
 		row.toggleClass('is-pinned', item.pinned);
 		row.toggleClass('is-root-item', item.parent === null && this.store.items.some(child => child.parent === item.id));
 		row.toggleClass('is-development-project', Boolean(item.developmentProject));
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
-			const invalid = this.choosingParent.id !== null && !validParent(this.store.items, this.choosingParent.id, item.id);
+			const targetParent=item.occurrenceOf??item.id;
+			const invalid = this.choosingParent.targets ? this.choosingParent.targets.some(target=>!validParent(this.store.items,target.id,targetParent)) : this.choosingParent.id !== null && !validParent(this.store.items, this.choosingParent.id, targetParent);
 			row.toggleClass('is-invalid-parent', invalid);
 			const label = row.createEl('button', { cls: 'gvkit-arrange-title', attr: { 'aria-disabled': String(invalid) } });
 			this.paintTitle(label, item.title, true);
@@ -844,14 +1058,19 @@ export class ArrangeView extends ItemView {
 	private rowGesture(row: HTMLElement, label: HTMLElement, item: ArrangeItem): void {
 		let suppressClickUntil = 0;
 		row.addEventListener('click', event => {
-			if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+			if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+			if(this.multi.size&&!this.multiPreview){
+				event.preventDefault();event.stopImmediatePropagation();
+				if(!this.busy){const ids=new Set(this.multi);if(ids.has(item.id))ids.delete(item.id);else ids.add(item.id);this.setMulti([...ids]);}
+			}
 		}, true);
 		label.addEventListener('contextmenu', event => event.preventDefault());
 		const start = (x: number, y: number, touch: boolean) => {
 			const doc = row.ownerDocument, win = doc.defaultView ?? window;
 			this.cancelReorder?.();
 			this.trace('drag.press', { scope: row.parentElement === this.list ? 'main' : 'children', touch, ownerIsMainDocument: doc === document });
-			let dragging = false, moved = false;
+			let dragging = false, moved = false, held = false, previewing = false;
+			const inMulti=this.multi.size>0&&!this.multiPreview;
 			let moves = 0;
 			let target: HTMLElement | null = null;
 			let after = false;
@@ -859,12 +1078,14 @@ export class ArrangeView extends ItemView {
 			let axis: 'left' | 'other' | null = null;
 			let lastX = x, lastY = y;
 			const beginDrag = () => {
-				if (this.busy || item.pinned || item.completedAt || row.classList.contains('gvkit-arrange-daily-goal')) return;
+				if (this.busy || inMulti || item.pinned || item.completedAt || row.classList.contains('gvkit-arrange-daily-goal')) return;
 				dragging = true; row.addClass('is-dragging'); this.tips.start();
 				this.trace('drag.begin');
 				suppressClickUntil = Infinity;
 			};
-			const timer = win.setTimeout(() => { if (!moved) beginDrag(); }, 380);
+			const timer = win.setTimeout(() => {
+				if(!moved&&!inMulti&&!this.busy){held=previewing=true;this.multiFromChildren=row.parentElement!==this.list;this.setMulti([item.id],true);suppressClickUntil=Infinity;}
+			}, 380);
 			const cleanup = () => {
 				win.clearTimeout(timer);
 				doc.removeEventListener('touchmove', touchMove); doc.removeEventListener('touchend', touchEnd);
@@ -872,19 +1093,22 @@ export class ArrangeView extends ItemView {
 				doc.removeEventListener('pointermove', mouseMove); doc.removeEventListener('pointerup', mouseEnd);
 				doc.removeEventListener('pointercancel', cancel); win.removeEventListener('blur', cancel);
 				row.removeClass('is-dragging'); row.style.removeProperty('transform'); target?.removeClass('is-drop-target');
-				if (dragging || moved) suppressClickUntil = Date.now() + 500;
+				if (dragging || moved || held) suppressClickUntil = Date.now() + 500;
 				if (this.cancelReorder === cancel) this.cancelReorder = null;
 			};
-			const cancel = (event?: Event) => { this.trace('drag.cancel', { cause: event?.type ?? 'repaint', moves }); cleanup(); };
+			const cancel = (event?: Event) => { this.trace('drag.cancel', { cause: event?.type ?? 'repaint', moves }); if(previewing){previewing=false;this.setMulti([]);}cleanup(); };
 			const move = (clientX: number, clientY: number, event: Event) => {
 				if (++moves === 1) this.trace('drag.move', { dx: clientX - x, dy: clientY - y });
 				lastX = clientX; lastY = clientY;
+				const distance=Math.hypot(clientX-x,clientY-y);
+				if(inMulti){if(distance>8)moved=true;return;}
+				if(previewing&&distance>8){previewing=false;this.setMulti([]);moved=true;axis='other';beginDrag();}
 				if (!dragging) {
 					const dx = clientX - x, dy = clientY - y;
 					if (Math.hypot(dx, dy) > 8) {
 						moved = true; win.clearTimeout(timer);
 						// Vertical mouse movement starts sorting; horizontal swipes and touch keep their behavior.
-						if (!touch && !Platform.isMobileApp && Math.abs(dy) > Math.abs(dx) / 1.5) beginDrag();
+						if (!held && !touch && !Platform.isMobileApp && Math.abs(dy) > Math.abs(dx) / 1.5) beginDrag();
 						axis ??= dx < -Math.abs(dy) * 1.5 ? 'left' : 'other';
 					}
 					if (!dragging && axis === 'left' && this.store.state.swipeAction !== 'none') {
@@ -924,7 +1148,8 @@ export class ArrangeView extends ItemView {
 			const end = (event: Event) => {
 				const targetId = target?.dataset.id;
 				const key = this.store.state.swipeAction;
-				const swipe = !dragging && axis === 'left' && x - lastX >= 56 && x - lastX > Math.abs(lastY - y) * 1.5;
+				const swipe = !inMulti && !held && !dragging && axis === 'left' && x - lastX >= 56 && x - lastX > Math.abs(lastY - y) * 1.5;
+				if(previewing){previewing=false;this.multiPreview=false;this.input.blur();this.updateComposer();this.syncMulti();event.preventDefault();}
 				if (dragging || swipe) event.preventDefault();
 				this.trace('drag.release', { dragging, moves, target: Boolean(targetId), topDrop, swipe });
 				cleanup();
@@ -1000,6 +1225,7 @@ export class ArrangeView extends ItemView {
 		return true;
 	}
 	private action(key: RowAction, item: ArrangeItem, event: MouseEvent, fromChildren = false): void {
+		if(this.multi.size){if(this.busy)return;this.setMulti([]);}
 		if (!this.store.items.some(value => value.id === item.id)) return;
 		if (!this.actionAvailable(key, item)) return;
 		if (key === 'parent' && item.parent) {
@@ -1091,7 +1317,8 @@ export class ArrangeView extends ItemView {
 	}
 
 	private async select(id: string | null, locateInMain = false): Promise<void> {
-		if (this.choosingParent) return;
+		if (this.choosingParent || this.busy && this.multi.size > 0) return;
+		if(this.multi.size)this.setMulti([]);
 		if (!(await this.saveEdit())) return;
 		this.editing?.body.destroy(); this.editing = null;
 		this.selected = id;
@@ -1102,6 +1329,7 @@ export class ArrangeView extends ItemView {
 		if (locateInMain && id) this.reveal(id, this.list);
 	}
 	private async toggleComplete(id: string, rect?: DOMRect): Promise<void> {
+		if(this.multi.size&&!this.busy)this.setMulti([]);
 		if (this.busy) return;
 		if (!this.store.items.find(item => item.id === id)?.completedAt) this.feedback.prepare();
 		await this.run(async () => {
@@ -1332,17 +1560,18 @@ export class ArrangeView extends ItemView {
 		}
 		strip.scrollLeft = scroll;
 	}
-	private async changeParent(id: string | null): Promise<void> {
+	private async changeParent(id: string | null, targets?: ArrangeBatchTarget[]): Promise<void> {
 		if (this.busy || this.choosingParent) return;
+		if(!targets&&this.multi.size)this.setMulti([]);
 		if (!(await this.saveEdit())) return;
 		const item = this.store.items.find(item => item.id === id);
 		if (id !== null && !item) return;
-		this.choosingParent = { id, scroll: this.list.scrollTop, detailScroll: this.detailScroll?.scrollTop ?? 0,
+		this.choosingParent = { id, targets, scroll: this.list.scrollTop, detailScroll: this.detailScroll?.scrollTop ?? 0,
 			searchOpen: this.searchOpen, query: this.searchInput.value, searchScroll: this.searchScroll };
 		this.cancelReorder?.();
 		this.searchOpen = false; this.searchInput.value = ''; this.syncSearch();
 		this.parentError.textContent = ''; this.parentError.hidden = true; this.parentBar.hidden = false;
-		this.parentBar.querySelector('span')!.textContent = id === null ? '请选择今天特产基础产出事项' : '选择上一级事项';
+		this.parentBar.querySelector('span')!.textContent = targets ? `为${targets.length}项选择上级` : id === null ? '请选择今天特产基础产出事项' : '选择上一级事项';
 		this.parentBar.querySelector('button')!.hidden = id === null;
 		this.parentBar.toggleClass('gvkit-arrange-goal-picker', id === null);
 		this.detail.hidden = true; this.updateComposer(); this.paintLists(); this.list.scrollTop = 0;
@@ -1350,6 +1579,12 @@ export class ArrangeView extends ItemView {
 	private async chooseParent(parent: string | null): Promise<void> {
 		const choice = this.choosingParent;
 		if (!choice || this.busy) return;
+		if(choice.targets){
+			const targetParent=this.store.items.find(item=>item.id===parent)?.occurrenceOf??parent;
+			if(choice.targets.some(item=>!validParent(this.store.items,item.id,targetParent))){new Notice('不能将自己或自己的下级设为上级');return;}
+			if(await this.performBatch(choice.targets,{kind:'parent',value:parent}))this.finishParentChoice();
+			return;
+		}
 		if (choice.id !== null && parent && !validParent(this.store.items, choice.id, parent)) {
 			new Notice(parent === choice.id ? '不能选择自己作为上级' : '不能选择自己的下级事项作为上级', 2500);
 			return;
@@ -1430,7 +1665,7 @@ export class ArrangeView extends ItemView {
 		this.createTipTimer = text && !error ? window.setTimeout(() => { this.createTip.hidden = true; this.createTipTimer = null; }, 6000) : null;
 	}
 	private async create(): Promise<void> {
-		if (this.choosingParent || this.busy) return;
+		if (this.choosingParent || this.busy || this.multi.size) return;
 		const draft = this.input.value;
 		if (!draft.trim()) return;
 		const parent = this.selected;

@@ -7,6 +7,22 @@ export interface RepeatEditor {
  rule: RepeatRule | null;
  save: (rule: RepeatRule | null, date: string | null) => Promise<boolean>;
 }
+export interface BatchDateOptions {
+ count: number;
+ mixed: boolean;
+ anyDate: boolean;
+ clearBlocked?: string;
+ failureMessage: () => string;
+ failureDetails: () => string[];
+ onClose: () => void;
+}
+export function appendBatchFailures(parent: HTMLElement, failures: readonly string[]): void {
+ if(!failures.length)return;
+ const details=parent.createEl('details',{cls:'gvkit-arrange-batch-failures'});
+ details.createEl('summary',{text:'查看未保存'});
+ const list=details.createDiv();
+ for(const text of failures)list.createEl('p',{text});
+}
 const weekday = (date: string) => new Date(date+'T12:00:00Z').getUTCDay();
 const weekName = (n: number) => '一二三四五六日'[(n+6)%7];
 const monthDay = (month: number, day: number) => `${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
@@ -24,6 +40,9 @@ export class ArrangeDatePicker extends Modal {
  private current: Snapshot;
  private saved: Snapshot;
  private dirty = false;
+ private savedCertain = true;
+ private mixed = false;
+ private anyDate = false;
  private writing: Promise<boolean> | null = null;
  private timer: ReturnType<typeof setTimeout> | null = null;
  private inputTimer: ReturnType<typeof setTimeout> | null = null;
@@ -39,11 +58,13 @@ export class ArrangeDatePicker extends Modal {
  private exiting = false;
  constructor(app: App, current: string | null, private day: string,
   private saveDate: (date: string | null) => Promise<boolean>, private repeat?: RepeatEditor,
-  private interaction?: (event: Event) => void) {
+  private interaction?: (event: Event) => void, private batch?: BatchDateOptions) {
   super(app);
   this.current = this.saved = {date:current,rule:repeat?.rule??null};
+  this.mixed=Boolean(batch?.mixed);this.anyDate=batch?.anyDate??Boolean(current);
+  this.savedCertain=!this.mixed;
   this.modalEl?.addClass('gvkit-arrange-date-dialog');
-  this.modalEl?.setAttribute('aria-label','日期与重复');
+  this.modalEl?.setAttribute('aria-label',batch?'批量日期':'日期与重复');
   this.contentEl.addClass('gvkit-arrange-date-menu');
   for (const name of ['click','input','change']) this.contentEl.addEventListener(name,event=>this.interaction?.(event),true);
   this.showDate();
@@ -59,7 +80,7 @@ export class ArrangeDatePicker extends Modal {
   const footer=this.contentEl.createDiv('gvkit-arrange-date-feedback');
   this.feedback=footer.createSpan({attr:{role:'status','aria-live':'polite'}});
   this.retry=this.button(footer,'重试',()=>{void this.flush();});
-  this.discard=this.button(footer,'取消更改',()=>{
+  this.discard=this.button(footer,this.batch?'结束设置':'取消更改',()=>{
    if(this.timer!==null)clearTimeout(this.timer);
    if(this.inputTimer!==null)clearTimeout(this.inputTimer);
    this.current=this.saved;this.dirty=false;super.close();
@@ -73,13 +94,15 @@ export class ArrangeDatePicker extends Modal {
   this.feedback.parentElement!.hidden=!this.invalid&&!this.status;
   this.retry.hidden=!this.failed;
   this.discard.hidden=!this.failed;
+  this.feedback.parentElement!.querySelector('.gvkit-arrange-batch-failures')?.remove();
+  if(this.failed&&this.batch)appendBatchFailures(this.feedback.parentElement!,this.batch.failureDetails());
  }
  private request(next: Snapshot): void {
   this.invalid='';
   this.current=next;
   this.updateSummary?.();
   // A no-op opening/return must never reset a legacy month-end anchor.
-  this.dirty=JSON.stringify(next)!==JSON.stringify(this.saved);
+  this.dirty=!this.savedCertain||JSON.stringify(next)!==JSON.stringify(this.saved);
   this.failed=false;this.status=this.dirty?'正在保存…':'';this.paintFeedback();
   if(this.timer!==null) clearTimeout(this.timer);
   this.timer=this.dirty ? setTimeout(()=>{this.timer=null;void this.persist();},220) : null;
@@ -95,10 +118,10 @@ export class ArrangeDatePicker extends Modal {
     try { ok=this.repeat ? await this.repeat.save(snapshot.rule,snapshot.date) : await this.saveDate(snapshot.date); }
     catch { /* Keep the user's selection and the retry action visible. */ }
     if(!ok) {
-     this.dirty=true;this.failed=true;this.status='未保存，请重试';this.paintFeedback();
+     this.dirty=true;if(this.batch)this.savedCertain=false;this.failed=true;this.status=this.batch?.failureMessage()||'未保存，请重试';this.paintFeedback();
      return false;
     }
-    this.saved=snapshot;
+    this.saved=snapshot;this.savedCertain=true;
     // Changes made while a slow write is pending get exactly one next write.
     this.dirty=JSON.stringify(this.current)!==JSON.stringify(snapshot);
    }
@@ -120,10 +143,13 @@ export class ArrangeDatePicker extends Modal {
   this.exiting=true;
   this.finishInput();
   void this.flush().then(ok=>{
-   if(ok) {if(this.invalid)new Notice('未完整的重复设置未保存');super.close();}
+   if(ok) {if(this.invalid)new Notice(this.batch?this.invalid:'未完整的重复设置未保存');super.close();}
   }).finally(()=>{this.exiting=false;});
  }
+ override onClose(): void { this.batch?.onClose(); }
  private changeDate(date: string | null): void {
+  if(date===null&&this.batch?.clearBlocked){this.invalid=this.batch.clearBlocked;this.paintFeedback();return;}
+  this.mixed=false;this.anyDate=Boolean(date);
   let rule=this.current.rule;
   if(date!==this.current.date && rule) rule=date?{...rule,anchor:date}:null;
   this.request({date,rule});
@@ -138,8 +164,8 @@ export class ArrangeDatePicker extends Modal {
   const rule=status.createSpan('gvkit-arrange-date-rule');
   header.createSpan({cls:'gvkit-arrange-date-spacer',attr:{'aria-hidden':'true'}});
   this.updateSummary=()=>{
-   clear.hidden=!this.current.date;
-   date.textContent=this.current.date ? `${this.current.date} ` : '未设日期';
+   clear.hidden=!this.current.date&&!this.anyDate;
+   date.textContent=(this.batch?`${this.batch.count}项 · `:'')+(this.mixed?'日期不同':this.current.date ? `${this.current.date} ` : '未设日期');
    date.toggleClass('is-empty',!this.current.date);
    rule.textContent=repeatSummary(this.current.rule);rule.hidden=!this.current.rule;
   };
@@ -311,7 +337,8 @@ export class ArrangeDatePicker extends Modal {
    void this.flush().then(ok=>{
     if(ok) {modal.close();super.close();}
     else {
-     feedback.textContent='未保存，请重试';feedback.addClass('is-error');
+     feedback.textContent=this.batch?.failureMessage()||'未保存，请重试';feedback.addClass('is-error');
+     if(this.batch)appendBatchFailures(feedback,this.batch.failureDetails());
      done.lastElementChild!.textContent='重试';done.setAttribute('aria-label','重试');
     }
    }).finally(()=>{done.disabled=cancel.disabled=false;calendar.inert=false;});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, todayFacts, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
+import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, todayFacts, topInOrder, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
 
 test('archived parent references remain editable and today completions remain facts, not active due items', () => {
 	const state = defaultArrangeState();
@@ -161,4 +161,15 @@ test('date month shifts keep the calendar day and clamp month ends', () => {
  assert.equal(shiftDateMonth('2027-01-31',1),'2027-02-28');
  assert.equal(shiftDateMonth('2026-12-15',1),'2027-01-15');
  assert.equal(shiftDateMonth('2026-11-04',1),'2026-12-04');
+});
+
+
+test('batch top is stable and releases only explicitly chosen pin slots', () => {
+ const order=['A','B','C','D','E','F','G'];
+ const items=order.map(id=>({id,pinned:['B','D','F'].includes(id),completedAt:null} as ArrangeItem));
+ assert.deepEqual(topInOrder(order,items,['E','C']),['C','B','E','D','A','F','G']);
+ assert.deepEqual(topInOrder(order,items,['B','E']),['B','E','A','D','C','F','G']);
+ const next=topInOrder(order,items,['E','C']);
+ assert.deepEqual(topInOrder(next,items,['E','C']),next);
+ for(const id of order)assert.deepEqual(topInOrder(order,items,[id]),moveInOrder(order,items.filter(item=>item.id!==id),id));
 });

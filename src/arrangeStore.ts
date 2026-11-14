@@ -3,7 +3,7 @@ import { rewardRecord, rewardValue, type RewardRecord } from './arrangeRewards';
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
 import { ArrangeTrace, configFingerprint } from './arrangeTrace';
-import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, topInOrder, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -22,6 +22,15 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 
 export class ArrangeCreateError extends Error {
 	constructor(message: string, readonly createdId: string) { super(message); }
+}
+
+export type ArrangeBatchAction = { kind: 'top' } | { kind: 'pin' | 'developmentCompleted'; value: boolean }
+	| { kind: 'date' | 'parent'; value: string | null };
+export type ArrangeBatchTarget = Pick<ArrangeItem, 'id' | 'title' | 'occurrenceId' | 'repeatInstance'>;
+export interface ArrangeBatchResult {
+	applied: string[];
+	failed: { id: string; title: string; message: string; uncertain?: boolean }[];
+	refreshError?: string;
 }
 
 export class ArrangeStore {
@@ -508,7 +517,7 @@ export class ArrangeStore {
   });
  }
 
-	private async changeDate(id: string, date: string | null): Promise<void> {
+	private async writeDate(id: string, date: string | null): Promise<void> {
 		if (date!==null && !validDate(date)) throw Error('请选择有效日期');
 		const item=this.items.find(value=>value.id===id);
 		if (item?.occurrenceId) await this.patch(id,{date});
@@ -517,6 +526,9 @@ export class ArrangeStore {
 			const rule=date ? repeatRule(fields.repeat) : null;
 			return this.reschedule(fields,date,rule) ? markdown(fields,body) : source;
 		});
+	}
+	private async changeDate(id: string, date: string | null): Promise<void> {
+		await this.writeDate(id, date);
 		await this.load();
 	}
 	setDate(id: string, date: string | null): Promise<void> {
@@ -591,11 +603,115 @@ export class ArrangeStore {
 		return this.serial('top', async () => {
 			if (!this.state.order.includes(id) || this.state.order[0] === id) return;
 			const previous = this.state.order;
-			const next = moveInOrder(previous, this.items.filter(item => item.id !== id), id);
+			const next = topInOrder(previous, this.items, [id]);
 			if (next.every((value, index) => value === previous[index])) return;
 			this.state.order = next;
 			try { await this.saveState('top'); }
 			catch (error) { this.state.order = previous; throw error; }
+		});
+	}
+	private async batchSaved(item: ArrangeItem, action: ArrangeBatchAction, order?: string[]): Promise<boolean> {
+		if(action.kind==='top'){
+			const file=this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
+			return file instanceof TFile && JSON.stringify(documentParts(await this.app.vault.read(file)).fields.order)===JSON.stringify(order);
+		}
+		const fields=documentParts(await this.app.vault.read(this.file(item.id))).fields;
+		if(fields.gvid!==(item.occurrenceOf??item.id))return false;
+		const record=item.occurrenceId?(fields.repeat_history as RepeatCompletion[]).find(value=>value.id===item.occurrenceId):fields;
+		if(!record)return false;
+		const key=action.kind==='pin'?'pinned':action.kind==='developmentCompleted'?'development_completed':action.kind;
+		const value=(record as Record<string,unknown>)[key];
+		return action.kind==='pin'||action.kind==='developmentCompleted'?(value===true)===action.value:(value??null)===action.value;
+	}
+	/** One user-selected batch, on the same serial queue and Markdown truth as single actions. */
+	applyBatch(targets: readonly ArrangeBatchTarget[], action: ArrangeBatchAction,
+		progress?: (done: number, total: number) => void): Promise<ArrangeBatchResult> {
+		return this.serial('batch_' + action.kind, async () => {
+			const unique = [...new Map(targets.map(item => [item.id, item])).values()];
+			const current = unique.map(expected => {
+				const item = this.items.find(item => item.id === expected.id);
+				if (!item || item.occurrenceId !== expected.occurrenceId || item.repeatInstance !== expected.repeatInstance)
+					throw Error('事项已变化，请重新选择');
+				return item;
+			});
+			if (!current.length) throw Error('请先选择事项');
+			if (['top', 'pin', 'developmentCompleted'].includes(action.kind) && current.some(item => item.completedAt))
+				throw Error('含已完成事项，请先取消选择');
+			if (action.kind === 'top' && this.state.dailyGoal?.day === this.facts().day) {
+				const goal=this.items.find(item=>item.occurrenceOf===this.state.dailyGoal!.id&&item.completedAt
+					&&dayKey(new Date(item.completedAt),this.state.timezone)===this.state.dailyGoal!.day)
+					??this.items.find(item=>item.id===this.state.dailyGoal!.id);
+				if(current.some(item=>item.id===goal?.id))throw Error('今天特产事项固定显示，不能置顶');
+			}
+			if (action.kind === 'date') {
+				if (action.value !== null && !validDate(action.value)) throw Error('请选择有效日期');
+				if (action.value === null && current.some(item => !item.occurrenceId && item.repeat))
+					throw Error('重复事项需单独清除日期');
+			}
+			if (action.kind === 'parent') {
+				const value=action.value;
+				const parent = this.items.find(item => item.id === value)?.occurrenceOf ?? value;
+				action = { kind: 'parent', value: parent };
+				if (current.some(item => !validParent(this.items, item.id, parent)))
+					throw Error('不能将自己或自己的下级设为上级');
+			}
+			const result: ArrangeBatchResult = { applied: [], failed: [] };
+			let expectedOrder:string[]|undefined;
+			if (action.kind === 'top') {
+				const previous = this.state.order, next = topInOrder(previous, this.items, current.map(item => item.id));
+				expectedOrder=next;
+				try {
+					if (next.some((id, index) => id !== previous[index])) {
+						this.state.order = next; await this.saveState('batch_top');
+					}
+					result.applied = current.map(item => item.id);
+				} catch (error) {
+					this.state.order = previous;
+					let saved = false, uncertain = false;
+					try {
+						saved = await this.batchSaved(current[0]!,action,next);
+					} catch { uncertain = true; }
+					if (saved) { this.state.order = next; result.applied = current.map(item => item.id); }
+					else result.failed = current.map(item => ({ id: item.id, title: item.title,
+						message: error instanceof Error ? error.message : '保存失败', uncertain }));
+				}
+			} else {
+				// Persist effective slots before newly pinning notes, including externally added IDs.
+				if (action.kind === 'pin' && action.value && current.some(item => !item.pinned)) await this.saveState('batch_pin_slots');
+				const wanted=action.value;
+				const field = action.kind === 'pin' ? 'pinned' : action.kind === 'developmentCompleted' ? 'development_completed' : action.kind;
+				for (const item of current) {
+					const matches = (value: unknown) => action.kind === 'pin' || action.kind === 'developmentCompleted'
+						? (value === true) === wanted : (value ?? null) === wanted;
+					const value = action.kind === 'developmentCompleted' ? item.developmentCompleted : action.kind === 'pin' ? item.pinned : action.kind === 'date' ? item.date : item.parent;
+					try {
+						if (!matches(value)) {
+							if (action.kind === 'date') await this.writeDate(item.id, action.value);
+							else await this.patch(item.id, { [field]: action.value });
+						}
+						result.applied.push(item.id);
+					} catch (error) {
+						let saved = false, uncertain = false;
+						try {
+							saved = await this.batchSaved(item,action);
+						} catch { uncertain = true; }
+						if (saved) result.applied.push(item.id);
+						else result.failed.push({ id: item.id, title: item.title, message: error instanceof Error ? error.message : '保存失败', uncertain });
+					}
+					progress?.(result.applied.length + result.failed.length, current.length);
+				}
+			}
+			try { await this.load(); } catch (error) {
+				result.refreshError = error instanceof Error ? error.message : '刷新失败';
+				const committed=result.applied;result.applied=[];
+				for(const id of committed){
+					const item=current.find(item=>item.id===id)!;let saved=false,uncertain=false;
+					try{saved=await this.batchSaved(item,action,expectedOrder);}catch{uncertain=true;}
+					if(saved)result.applied.push(id);
+					else result.failed.push({id,title:item.title,message:uncertain?'结果待确认，请重试读回':'目标值尚未保存',uncertain});
+				}
+			}
+			return result;
 		});
 	}
 	configure(changes: Partial<Omit<ArrangeState, 'order' | 'achievedDays'>>): Promise<void> {

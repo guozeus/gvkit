@@ -396,7 +396,11 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-date-menu .gvkit-arrange-date-shift { min-width: 0; height: 44px; padding: 0 2px; border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: none; background: transparent; font-size: 13px; }
 .gvkit-arrange-date-menu button:active { transform: scale(.96); }
 .gvkit-arrange-date-menu button:focus-visible { outline: 2px solid var(--gvkit-picker-blue); outline-offset: 2px; }
-.gvkit-arrange-date-feedback { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 24px; margin-top: 12px; font-size: 13px; color: var(--text-muted); }
+.gvkit-arrange-date-feedback { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; min-height: 24px; margin-top: 12px; font-size: 13px; color: var(--text-muted); }
+.gvkit-arrange-batch-failures { flex-basis: 100%; min-width: 0; text-align: left; color: var(--text-normal); }
+.gvkit-arrange-batch-failures summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--text-error); touch-action: manipulation; }
+.gvkit-arrange-batch-failures > div { max-height: min(240px, 30vh); overflow-y: auto; overflow-wrap: anywhere; }
+.gvkit-arrange-batch-failures p { margin: 8px 0; }
 .gvkit-arrange-date-feedback .is-error, .gvkit-arrange-calendar-menu .gvkit-arrange-date-feedback.is-error { color: var(--text-error); }
 .gvkit-arrange-calendar-menu .gvkit-arrange-calendar-days > button[aria-pressed="true"], .gvkit-arrange-calendar-menu .mod-cta { background: var(--gvkit-picker-blue); color: #fff; }
 .gvkit-arrange-calendar-menu button:focus-visible { outline: 2px solid var(--gvkit-picker-blue); outline-offset: 2px; }
@@ -479,3 +483,34 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-repeat-days button { min-width: 0; min-height: 44px; padding: 0; font-size: 13px; box-shadow: none; border: 1px solid var(--background-modifier-border); border-radius: 9px; background: transparent; }
 .gvkit-arrange-repeat-days [aria-pressed="true"] { background: var(--gvkit-picker-blue); color: #fff; border-color: var(--gvkit-picker-blue); }
 .gvkit-arrange-repeat-choices + .gvkit-arrange-repeat-hint { margin-top: 10px; }
+
+/* Multi-select keeps the existing editor and detail selection intact. */
+.gvkit-arrange-row.is-multi-selected { outline: 2px solid #2563eb; outline-offset: -2px; border-radius: 3px; }
+.gvkit-arrange.is-multiselect .gvkit-arrange-row .gvkit-arrange-actions,
+.gvkit-arrange.is-multiselect .gvkit-arrange-row .gvkit-arrange-goal-replace { visibility: hidden; }
+.gvkit-arrange.is-multiselect .gvkit-arrange-row .gvkit-arrange-title { cursor: pointer; }
+.gvkit-arrange-multi-bar { position: relative; padding: 4px 8px; background: var(--background-primary); border-radius: inherit; }
+.gvkit-arrange-multi-bar[hidden] { display: none; }
+.gvkit-arrange.is-multiselect .gvkit-arrange-composer > textarea { opacity: 0; pointer-events: none; position: absolute; }
+.gvkit-arrange.is-multiselect.is-multi-preview .gvkit-arrange-composer > textarea { position: relative; }
+.gvkit-arrange.is-multiselect.is-multi-preview .gvkit-arrange-multi-bar { position: absolute; left: 0; right: 0; bottom: var(--gvkit-arrange-composer-inset); }
+.gvkit-arrange.is-multiselect .gvkit-arrange-submit,
+.gvkit-arrange.is-multiselect .gvkit-arrange-composer-date,
+.gvkit-arrange.is-multiselect .gvkit-arrange-create-tip { visibility: hidden; }
+.gvkit-arrange-multi-heading { display: flex; justify-content: space-between; align-items: center; min-height: 28px; }
+.gvkit-arrange-multi-heading > button { min-height: 44px; border: 0; box-shadow: none; background: transparent; padding: 2px 8px; }
+.gvkit-arrange-multi-actions { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 2px; }
+.gvkit-arrange-multi-actions > button { display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; min-height: 44px; padding: 4px; border: 0; box-shadow: none; background: transparent; font-size: 14px; }
+.gvkit-arrange-multi-actions svg { width: 17px; height: 17px; }
+.gvkit-arrange-multi-actions [aria-disabled="true"] { opacity: .4; }
+.gvkit-arrange-multi-actions [aria-pressed="true"],.gvkit-arrange-multi-actions [aria-pressed="mixed"] { color: #2563eb; background: color-mix(in srgb,#2563eb 12%,transparent); }
+.gvkit-arrange-multi-actions [aria-pressed="mixed"] { background: color-mix(in srgb,#2563eb 5%,transparent); }
+.gvkit-arrange-multi-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.gvkit-arrange-multi-feedback[hidden] { display: none; }
+.gvkit-arrange-multi-feedback > span { flex: 1 1 140px; }
+.gvkit-arrange-multi-feedback .is-error { color: var(--text-error); }
+.gvkit-arrange-multi-feedback > button { min-height: 36px; box-shadow: none; }
+.gvkit-arrange-multi-feedback > button[hidden] { display: none; }
+@media (max-width: 600px) {
+ .gvkit-arrange-multi-actions { grid-template-columns: repeat(3,minmax(0,1fr)); }
+}

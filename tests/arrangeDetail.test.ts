@@ -23,7 +23,7 @@ export class Scope {
 }
 export class Modal {
  constructor() { this.contentEl=document.createElement('div'); }
- setTitle() {} open() { document.body.append(this.contentEl); if(this.contentEl.classList.contains('gvkit-arrange-date-menu')) window.dateMenus=(window.dateMenus??0)+1; } close() { this.contentEl.remove(); }
+ setTitle() {} open() { window.lastModal=this;document.body.append(this.contentEl); if(this.contentEl.classList.contains('gvkit-arrange-date-menu')) window.dateMenus=(window.dateMenus??0)+1; } close() { this.contentEl.remove(); this.onClose?.(); }
 }
 export class Menu {
  constructor(){this.entries=[];}
@@ -384,7 +384,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		target.getBoundingClientRect = () => ({ top: 100, height: 48 } as any);
 		window.document.elementFromPoint = () => target as any;
 		pointer(label, 'pointerdown', 100, 20); await waitHold();
-		assert.ok(label.parentElement!.classList.contains('is-dragging'));
+		assert.ok(label.parentElement!.classList.contains('is-multi-selected'));
+		assert.equal(label.parentElement!.classList.contains('is-dragging'),false);
 		pointer(window.document, 'pointermove', 100, 140);
 		assert.ok(target.classList.contains('is-drop-target'));
 		pointer(window.document, 'pointerup', 100, 140);
@@ -1621,6 +1622,89 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.ok(cancelPicker.contentEl.isConnected);assert.equal(calendarMenu.isConnected,false);
 		assert.equal(dateWrites.length,beforeCancel);assert.match(cancelPicker.contentEl.textContent,/2026-11-13/);
 		cancelPicker.close();await waitFor(()=>!cancelPicker.contentEl.isConnected);
+
+		// Selection, full-result actions, and the three independently identified picker/parent edges.
+		await view.select(null);tabletPlatform.isMobileApp=false;tabletPlatform.isTablet=false;
+		view.searchOpen=false;view.searchInput.value='';view.filter='all';view.hierarchyFilter='all';view.includeCompleted=false;view.syncSearch();
+		const multiIds:string[]=[];
+		for(let n=0;n<14;n++)multiIds.push(await store.create('多选验收'+n,null,n===0?null:'2026-11-13'));
+		const commonParent=await store.create('多选共同上级',null);await view.reload();
+		view.input.value='多选保留草稿';view.draftDate='2026-11-30';view.updateComposer();
+		const press=view.list.querySelector(`[data-id="${multiIds[0]}"] .gvkit-arrange-title`)!;
+		pointer(press,'pointerdown',100,100);await waitHold();assert.equal(view.multi.size,1);assert.equal(view.selected,null);
+		pointer(window.document,'pointerup',100,100);(press as any).click();assert.equal(view.multi.size,1,'long hold synthetic click cannot deselect');
+		const nextRow=view.list.querySelector(`[data-id="${multiIds[1]}"]`)!;
+		pointer(nextRow,'pointerdown',100,140);(nextRow.querySelector('.gvkit-arrange-title') as any).click();assert.equal(view.multi.size,2);
+		view.setMulti([]);assert.equal(view.input.value,'多选保留草稿');assert.equal(view.draftDate,'2026-11-30');
+		view.toggleSearch();view.searchInput.value='多选验收';view.paintLists();view.multiAllButton.click();assert.equal(view.multi.size,14);
+		const batchButton=(key:string)=>root.querySelector<HTMLButtonElement>(`[data-batch-action="${key}"]`)!;
+		const waitBatch=async()=>{await new Promise(r=>setTimeout(r,30));await waitFor(()=>!view.busy);};
+		batchButton('pin').click();await waitBatch();assert.ok(multiIds.every(id=>store.items.find((x:any)=>x.id===id).pinned));
+		batchButton('pin').click();await waitBatch();assert.ok(multiIds.every(id=>!store.items.find((x:any)=>x.id===id).pinned));
+		batchButton('developmentCompleted').click();await waitBatch();assert.ok(multiIds.every(id=>store.items.find((x:any)=>x.id===id).developmentCompleted));
+		batchButton('developmentCompleted').click();await waitBatch();assert.ok(multiIds.every(id=>!store.items.find((x:any)=>x.id===id).developmentCompleted));
+		batchButton('copy').click();await waitBatch();assert.equal(copied.at(-1),view.multiItems().map((x:any)=>x.title).join('\n'));
+		batchButton('top').click();await waitBatch();assert.equal(view.multi.size,14);
+		batchButton('date').click();let batchPanel=(window as any).lastModal.contentEl as HTMLElement;
+		assert.match(batchPanel.textContent,/日期不同/);assert.equal((batchPanel.querySelector('[aria-label="清除日期"]') as HTMLElement).hidden,false);
+		(batchPanel.querySelector('[aria-label="清除日期"]') as HTMLButtonElement).click();await new Promise(r=>setTimeout(r,300));await waitBatch();
+		assert.ok(multiIds.every(id=>store.items.find((x:any)=>x.id===id).date===null),'explicit mixed clear must persist');
+		(window as any).lastModal.close();await waitFor(()=>!batchPanel.isConnected);assert.equal(view.multiDate,false);
+		batchButton('changeParent').click();await waitFor(()=>Boolean(view.choosingParent));assert.equal(view.multiAllButton.hidden,true);
+		view.toggleSearch();view.searchInput.value='多选共同上级';view.searchInput.dispatchEvent(new window.Event('input',{bubbles:true}));
+		const frozen=view.choosingParent.targets.map((x:any)=>x.id);view.selectAllResults();assert.deepEqual(view.choosingParent.targets.map((x:any)=>x.id),frozen);assert.equal(view.multi.size,14);
+		await view.chooseParent(commonParent);assert.ok(multiIds.every(id=>store.items.find((x:any)=>x.id===id).parent===commonParent));
+		view.searchInput.value='变化查询';view.searchInput.dispatchEvent(new window.Event('input',{bubbles:true}));assert.equal(view.multi.size,0);
+		// A partial X write makes saved D uncertain; explicitly choosing D must still write A back.
+		let partial=true;const actualDates:(string|null)[]=['2026-11-13','2026-11-13'];
+		const opts={count:2,mixed:false,anyDate:true,failureMessage:()=> '已应用1/2，B未保存',failureDetails:()=>['B：写入拒绝'],onClose:()=>{}};
+		const partialPicker=new ArrangeDatePicker(app,'2026-11-13','2026-11-14',async date=>{actualDates[0]=date;if(partial)return false;actualDates[1]=date;return true;},undefined,undefined,opts);
+		partialPicker.open();(partialPicker as any).changeDate('2026-11-20');assert.equal(await (partialPicker as any).flush(),false);assert.deepEqual(actualDates,['2026-11-20','2026-11-13']);
+		partial=false;(partialPicker as any).changeDate('2026-11-13');assert.equal(await (partialPicker as any).flush(),true);assert.deepEqual(actualDates,['2026-11-13','2026-11-13']);partialPicker.close();
+
+		// R1-F1: exact failures must be reachable in each active surface and after ending settings.
+		view.searchOpen=false;view.searchInput.value='';view.syncSearch();
+		const failedIds=multiIds.slice(0,3);
+		for(const id of failedIds)await store.setDate(id,'2026-11-20');
+		await view.reload();view.setMulti(failedIds);
+		const processBefore=vault.process, failedPaths=failedIds.slice(0,2).map(id=>store.items.find((x:any)=>x.id===id).path);
+		let rejectBatch=true;const batchWrites:string[]=[];
+		vault.process=async(file:any,change:(source:string)=>string)=>{
+			if(failedIds.some(id=>store.items.find((x:any)=>x.id===id).path===file.path)){
+				batchWrites.push(file.path);if(rejectBatch&&failedPaths.includes(file.path))throw Error('R2隔离写入拒绝');
+			}
+			return processBefore(file,change);
+		};
+		const assertFailures=(surface:HTMLElement)=>{
+			const details=surface.querySelector('.gvkit-arrange-batch-failures')!;
+			assert.ok(details,'failure details belong to the current surface');
+			assert.equal(details.querySelectorAll('p').length,2);
+			for(const id of failedIds.slice(0,2))assert.ok(details.textContent!.includes(store.items.find((x:any)=>x.id===id).title));
+			assert.match(details.textContent!,/R2隔离写入拒绝/);
+		};
+		batchButton('date').click();batchPanel=(window as any).lastModal.contentEl;
+		(batchPanel.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
+		calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		(calendarMenu.querySelector('[aria-label="2026-11-24"]') as HTMLButtonElement).click();
+		(calendarMenu.querySelector('[aria-label="完成"]') as HTMLButtonElement).click();
+		await waitFor(()=>Boolean(calendarMenu.querySelector('[aria-label="重试"]')));assertFailures(calendarMenu as HTMLElement);
+		assert.deepEqual(failedIds.map(id=>store.items.find((x:any)=>x.id===id).date),['2026-11-20','2026-11-20','2026-11-24']);
+		(calendarMenu.querySelector('[aria-label="取消"]') as HTMLButtonElement).click();assertFailures(batchPanel);
+		(batchPanel.querySelector('[aria-label="结束设置"]') as HTMLButtonElement).click();
+		assert.equal(batchPanel.isConnected,false);assert.equal(view.multiReceipt.result.failed.length,2);assert.equal(view.multiDetails.hidden,false);
+		view.multiDetails.click();const failuresModal=(window as any).lastModal;assert.match(failuresModal.contentEl.textContent,/R2隔离写入拒绝/);failuresModal.close();
+		rejectBatch=false;batchWrites.length=0;view.multiRetry.click();await waitBatch();
+		assert.deepEqual(batchWrites.sort(),[...failedPaths].sort(),'same date retry writes only the two failed files');
+		assert.ok(failedIds.every(id=>store.items.find((x:any)=>x.id===id).date==='2026-11-24'));
+		assert.equal(view.multiReceipt,null);
+		// Parent cancellation keeps the same failure receipt; selecting the original target retries sparsely.
+		rejectBatch=true;batchWrites.length=0;batchButton('changeParent').click();await waitFor(()=>Boolean(view.choosingParent));
+		(view.parentBar.querySelector('button') as HTMLButtonElement).click();await waitBatch();assertFailures(view.parentError);
+		(view.parentBar.querySelectorAll('button')[1] as HTMLButtonElement).click();assert.equal(view.choosingParent,null);
+		assert.equal(view.multiReceipt.result.failed.length,2);assert.equal(view.multiDetails.hidden,false);
+		rejectBatch=false;batchWrites.length=0;view.multiRetry.click();await waitBatch();
+		assert.deepEqual(batchWrites.sort(),[...failedPaths].sort());assert.ok(failedIds.every(id=>store.items.find((x:any)=>x.id===id).parent===null));
+		vault.process=processBefore;
 
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);

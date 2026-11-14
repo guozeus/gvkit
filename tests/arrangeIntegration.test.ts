@@ -425,6 +425,55 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			assert.equal(new Set(reopened.state.order).size, reopened.state.order.length);
 
 		}
+		// Whole-batch semantics use real Markdown, with partial failure and exact retries.
+		{
+			const batch=new ArrangeStore(app);await batch.load();
+			const a=await batch.create('批量A',null,'2026-11-14'),b=await batch.create('批量B',null,'2026-11-14');
+			const target=(ids:string[])=>ids.map(id=>{const x=batch.items.find((x:any)=>x.id===id);return {id:x.id,title:x.title,occurrenceId:x.occurrenceId,repeatInstance:x.repeatInstance};});
+			await batch.togglePin(a);const order=[...batch.state.order];
+			let result=await batch.applyBatch(target([a,b]),{kind:'pin',value:true});assert.equal(result.failed.length,0);
+			assert.ok(batch.items.find((x:any)=>x.id===a).pinned&&batch.items.find((x:any)=>x.id===b).pinned);assert.deepEqual(batch.state.order,order);
+			await batch.applyBatch(target([a,b]),{kind:'pin',value:false});assert.ok(!batch.items.find((x:any)=>x.id===a).pinned&&!batch.items.find((x:any)=>x.id===b).pinned);
+			const originalProcess=vault.process,bFile=batch.items.find((x:any)=>x.id===b).path;
+			let writesA=0;
+			vault.process=async(file,change)=>{if(file.path===bFile)throw Error('批量隔离失败');if(file.path===batch.items.find((x:any)=>x.id===a).path)writesA++;return originalProcess(file,change);};
+			result=await batch.applyBatch(target([a,b]),{kind:'developmentCompleted',value:true});assert.deepEqual(result.applied,[a]);assert.equal(result.failed[0].id,b);
+			vault.process=async(file,change)=>{if(file.path===batch.items.find((x:any)=>x.id===a).path)writesA++;return originalProcess(file,change);};
+			await batch.applyBatch(target([a,b]),{kind:'developmentCompleted',value:true});assert.equal(writesA,1,'retry never rewrites the successful flag');
+			vault.process=originalProcess;
+			assert.ok(batch.items.find((x:any)=>x.id===a).developmentCompleted&&batch.items.find((x:any)=>x.id===b).developmentCompleted);
+			await batch.applyBatch(target([a,b]),{kind:'developmentCompleted',value:false});
+			await batch.setParent(b,a);await assert.rejects(batch.applyBatch(target([a,b]),{kind:'parent',value:b}),/下级/);
+			const parent=await batch.create('批量共同父',null);await batch.applyBatch(target([a,b]),{kind:'parent',value:parent});
+			assert.ok([a,b].every(id=>batch.items.find((x:any)=>x.id===id).parent===parent));
+			const series=await batch.create('批量周期',null,'2026-11-14',undefined,{unit:'day',interval:1,anchor:'2026-11-14'});
+			await assert.rejects(batch.applyBatch(target([a,series]),{kind:'date',value:null}),/重复事项/);
+			await batch.complete(series,true);const occurrence=batch.items.find((x:any)=>x.occurrenceOf===series);
+			const rewards=JSON.stringify(batch.rewards),instance=batch.items.find((x:any)=>x.id===series).repeatInstance;
+			await batch.applyBatch(target([series,occurrence.id]),{kind:'date',value:'2026-11-20'});
+			assert.equal(batch.items.find((x:any)=>x.id===series).date,'2026-11-20');assert.equal(batch.items.find((x:any)=>x.id===occurrence.id).date,'2026-11-20');
+			assert.equal(batch.items.find((x:any)=>x.id===series).repeatInstance,instance);assert.equal(JSON.stringify(batch.rewards),rewards);
+			await assert.rejects(batch.applyBatch(target([a,occurrence.id]),{kind:'pin',value:true}),/已完成/);
+			const reopened=new ArrangeStore(app);await reopened.load();assert.equal(reopened.items.find((x:any)=>x.id===a).parent,parent);
+			// A process can commit and then reject; exact readback must recognize the saved target.
+			vault.process=async(file,change)=>{await originalProcess(file,change);if(file.path===bFile)throw Error('提交后异常');};
+			result=await batch.applyBatch(target([b]),{kind:'developmentCompleted',value:true});assert.deepEqual(result.applied,[b]);assert.equal(result.failed.length,0);
+			vault.process=originalProcess;
+			await batch.setDailyGoal(series);
+			result=await batch.applyBatch(target([series]),{kind:'top'});assert.equal(result.failed.length,0,'a completed fixed occurrence must not block the next pending period');
+			const fixed=await batch.create('批量固定实体',null);await batch.setDailyGoal(fixed);
+			await assert.rejects(batch.applyBatch(target([fixed]),{kind:'top'}),/固定显示/);
+			const realLoad=batch.load.bind(batch),realRead=vault.read;let loads=0,readFails=false;
+			batch.load=async(...args)=>{if(++loads===2)throw Error('提交后刷新失败');return realLoad(...args);};
+			result=await batch.applyBatch(target([b]),{kind:'developmentCompleted',value:false});
+			assert.deepEqual(result.applied,[b]);assert.match(result.refreshError,/刷新失败/);assert.equal(result.failed.length,0);
+			loads=0;batch.load=async(...args)=>{if(++loads===2){readFails=true;throw Error('提交后刷新失败');}return realLoad(...args);};
+			vault.read=async file=>{if(readFails&&file.path===bFile)throw Error('目标暂不可读');return realRead(file);};
+			result=await batch.applyBatch(target([b]),{kind:'developmentCompleted',value:true});assert.equal(result.failed[0].uncertain,true);assert.equal(result.applied.length,0);
+			readFails=false;vault.read=realRead;batch.load=realLoad;
+			let replayWrites=0;vault.process=async(file,change)=>{replayWrites++;return originalProcess(file,change);};
+			result=await batch.applyBatch(target([b]),{kind:'developmentCompleted',value:true});assert.deepEqual(result.applied,[b]);assert.equal(replayWrites,0,'unknown result retry reads committed truth before any replay');vault.process=originalProcess;
+		}
 		t.mock.timers.reset();
 
 	} finally { await rm(root, { recursive: true, force: true }); }
