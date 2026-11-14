@@ -586,12 +586,16 @@ export class ArrangeStore {
 			await this.saveState('move');
 		});
 	}
-	/** A clicked Top action overrides pinned slots; ordinary moves still protect them. */
+	/** Top releases only the target pin slot; all other pinned ranks stay fixed. */
 	top(id: string): Promise<void> {
 		return this.serial('top', async () => {
 			if (!this.state.order.includes(id) || this.state.order[0] === id) return;
-			this.state.order = [id, ...this.state.order.filter(value => value !== id)];
-			await this.saveState('top');
+			const previous = this.state.order;
+			const next = moveInOrder(previous, this.items.filter(item => item.id !== id), id);
+			if (next.every((value, index) => value === previous[index])) return;
+			this.state.order = next;
+			try { await this.saveState('top'); }
+			catch (error) { this.state.order = previous; throw error; }
 		});
 	}
 	configure(changes: Partial<Omit<ArrangeState, 'order' | 'achievedDays'>>): Promise<void> {

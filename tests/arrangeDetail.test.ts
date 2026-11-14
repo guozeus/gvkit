@@ -364,7 +364,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.ok(view.list.querySelector(`[data-id="${first}"] [aria-label="置顶"]`));
 		(view.list.querySelector(`[data-id="${first}"] [aria-label="置顶"]`) as any).click();
 		while (view.busy) await new Promise(resolve => setTimeout(resolve, 1));
-		assert.equal(store.state.order[0], first);
+		assert.equal(store.state.order[1], first, 'another pin keeps the first slot');
+		assert.equal(store.state.order[0], second);
 		await store.togglePin(first); await store.togglePin(second); await view.reload();
 		const slot = host.querySelector('.view-header-title-container')!;
 		assert.equal(slot.querySelectorAll('.gvkit-arrange-header').length, 1);
@@ -1325,9 +1326,10 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await view.reload();
 		assert.equal(view.list.firstElementChild.querySelector('.gvkit-arrange-goal-achieved'), null, 'an externally corrected completion is not a cached achievement');
 		assert.equal(store.facts().x, achievedCount - 1);
-		// A clicked Top moves a pinned item to the actual first pending row, in either list.
+		// Clicked Top releases only its target pin, in either list.
 		await view.select(null); view.setFilter('all');
 		await store.configure({ rowActions: ['top'], detailActions: ['top'] });
+		for (const item of [...store.items]) if (item.pinned && !item.completedAt) await store.togglePin(item.id);
 		const topParent = await store.create('B置顶父项', null);
 		const topIds: string[] = [];
 		for (const name of ['A', 'B', 'C', 'D', 'E']) topIds.push(await store.create('B置顶子项' + name, topParent));
@@ -1339,7 +1341,8 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const beforeTopClick = [...store.state.order];
 		const topButton = view.list.querySelector<HTMLElement>(`[data-id="${topD}"] [aria-label="置顶"]`)!;
 		assert.ok(topButton, 'pinned main-list task still exposes Top'); topButton.click(); await settle();
-		assert.deepEqual(store.state.order, [topD, ...beforeTopClick.filter(id => id !== topD)]);
+		assert.deepEqual(store.state.order.slice(0, 5), [topD, topIds[4], topIds[2], topB, topIds[0]]);
+		assert.equal(store.state.order.indexOf(topB), beforeTopClick.indexOf(topB));
 		assert.equal(view.list.querySelector('.gvkit-arrange-row[data-id]')?.getAttribute('data-id'), topD);
 		assert.ok(view.list.querySelector(`[data-id="${topD}"].is-pinned`));
 		assert.equal(revealed.at(-1)?.id, topD);
@@ -1350,25 +1353,26 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const beforeChildClick = [...store.state.order];
 		const childTopButton = view.children.querySelector<HTMLElement>(`[data-id="${topB}"] [aria-label="置顶"]`)!;
 		assert.ok(childTopButton, 'pinned child-list task still exposes Top'); childTopButton.click(); await settle();
-		assert.deepEqual(store.state.order, [topB, ...beforeChildClick.filter(id => id !== topB)]);
-		assert.equal(view.children.querySelector('.gvkit-arrange-row[data-id]')?.getAttribute('data-id'), topB);
+		assert.deepEqual(store.state.order.slice(0, 5), [topD, topB, topIds[4], topIds[2], topIds[0]]);
+		assert.equal(store.state.order.indexOf(topD), beforeChildClick.indexOf(topD));
+		assert.equal(view.children.querySelectorAll('.gvkit-arrange-row[data-id]')[1]?.getAttribute('data-id'), topB);
 		assert.ok(view.children.querySelector(`[data-id="${topB}"].is-pinned`));
 		assert.equal(revealed.at(-1)?.id, topB);
 		assert.ok(revealed.at(-1)?.parent === view.children, 'child Top reveals the child list');
 		const beforeNoop = await vault.read(stateFile);
 		view.children.querySelector<HTMLElement>(`[data-id="${topB}"] [aria-label="置顶"]`)!.click(); await settle();
-		assert.equal(await vault.read(stateFile), beforeNoop, 'already-first pinned task is stable');
+		assert.equal(await vault.read(stateFile), beforeNoop, 'earliest available pinned task is stable');
 		view.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-actions [aria-label="置顶"]')!.click(); await settle();
-		assert.equal(store.state.order[0], topParent);
+		assert.equal(store.state.order[2], topParent, 'toolbar top respects the first two pins');
 		assert.equal(revealed.at(-1)?.id, topParent);
 		assert.ok(revealed.at(-1)?.parent === view.list, 'detail-toolbar Top locates the selected item in the main list');
 		view.children.querySelector<HTMLElement>(`[data-id="${topB}"] [aria-label="置顶"]`)!.click(); await settle();
 		await view.select(null); if (view.searchOpen) view.toggleSearch();
 		view.searchDate = null; view.hierarchyFilter = 'all';
 		view.toggleSearch(); view.searchInput.value = 'B置顶子项'; view.searchInput.oninput();
-		assert.equal(view.list.querySelector('.gvkit-arrange-row[data-id]')?.getAttribute('data-id'), topB);
+		assert.equal(view.list.querySelectorAll('.gvkit-arrange-row[data-id]')[1]?.getAttribute('data-id'), topB);
 		view.toggleSearch(); await view.reload();
-		assert.equal(store.state.order[0], topB);
+		assert.equal(store.state.order[1], topB);
 		assert.ok(store.items.find((item: any) => item.id === topD).pinned);
 		await view.select(topParent);
 		view.input.value = '新建子项定位回归'; await view.create();

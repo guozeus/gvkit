@@ -382,33 +382,49 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		const afterPinnedReturn = [...reopened.state.order];
 		const afterReturnNew = await reopened.create('全钉住后新增仍在末尾', null);
 		assert.deepEqual(reopened.state.order, [...afterPinnedReturn, afterReturnNew]);
-		// Explicit Top overrides even sparse pinned slots, without changing their Markdown.
-		const ids: string[] = [];
-		for (const name of ['a', 'b', 'c', 'd', 'e']) ids.push(await reopened.create('置顶B_' + name, null));
-		const [a, b, c, d, e] = ids;
-		assert.deepEqual(reopened.state.order.filter(id => ids.includes(id)), [e, d, c, b, a]);
-		await reopened.togglePin(b); await reopened.togglePin(d);
-		const pinnedFiles = [b, d].map(id => entries.get(reopened.items.find((item: any) => item.id === id).path));
-		const pinnedMarkdown = await Promise.all(pinnedFiles.map(file => vault.read(file)));
-		const beforeExplicitTop = [...reopened.state.order];
-		assert.ok(beforeExplicitTop.indexOf(d) > 0);
-		await reopened.top(d);
-		assert.deepEqual(reopened.state.order, [d, ...beforeExplicitTop.filter(id => id !== d)]);
-		const beforeSecondTop = [...reopened.state.order];
-		await reopened.top(b);
-		assert.deepEqual(reopened.state.order, [b, ...beforeSecondTop.filter(id => id !== b)]);
-		assert.deepEqual(await Promise.all(pinnedFiles.map(file => vault.read(file))), pinnedMarkdown);
-		assert.ok([b, d].every(id => reopened.items.find((item: any) => item.id === id).pinned));
-		const afterTopBytes = await vault.read(stateFile);
-		await reopened.top(b);
-		assert.equal(await vault.read(stateFile), afterTopBytes, 'top of first row is a no-op');
-		const persisted = new ArrangeStore(app); await persisted.load();
-		assert.deepEqual(persisted.state.order, reopened.state.order);
-		const pinnedSlots = new Map(reopened.items.filter((item: any) => item.pinned && !item.completedAt)
-			.map((item: any) => [item.id, reopened.state.order.indexOf(item.id)]));
-		await reopened.move(e); await reopened.create('置顶B_普通新增', null);
-		for (const [id, slot] of pinnedSlots) assert.equal(reopened.state.order[slot], id, 'ordinary reorder/insert protects pinned positions');
-		assert.equal(new Set(reopened.state.order).size, reopened.state.order.length);
+		{ // Top releases only its target's pin slot; every other pin keeps its absolute rank.
+			for (const item of [...reopened.items]) if (item.pinned && !item.completedAt) await reopened.togglePin(item.id);
+			const ids: string[] = [];
+			for (const name of ['e', 'd', 'c', 'b', 'a']) ids.push(await reopened.create('排名_' + name, null));
+			const [e, d, c, b, a] = ids;
+			const before = [...reopened.state.order];
+			await reopened.togglePin(b); await reopened.togglePin(d);
+			const pinSlots = new Map(reopened.items.filter((item: any) => item.pinned && !item.completedAt)
+				.map((item: any) => [item.id, reopened.state.order.indexOf(item.id)]));
+			const notes = await Promise.all(vault.getMarkdownFiles().map(async (file: any) => [file.path, await vault.read(file)]));
+			await reopened.top(e);
+			assert.deepEqual(reopened.state.order.slice(0, 5), [e, b, a, d, c]);
+			for (const [id, slot] of pinSlots) assert.equal(reopened.state.order[slot], id, 'ordinary Top preserves pin ranks');
+			await reopened.top(b);
+			assert.deepEqual(reopened.state.order.slice(0, 5), [b, e, a, d, c]);
+			assert.equal(reopened.state.order.indexOf(d), before.indexOf(d));
+			await reopened.top(d);
+			assert.deepEqual(reopened.state.order.slice(0, 5), [b, d, e, a, c], 'a first-slot pin stays first when another pin is topped');
+			const stable = await vault.read(stateFile);
+			await reopened.top(d);
+			assert.equal(await vault.read(stateFile), stable, 'already earliest available slot is a no-op');
+			const persisted = new ArrangeStore(app); await persisted.load();
+			assert.deepEqual(persisted.state.order, reopened.state.order);
+			for (const [path, source] of notes) if (path !== stateFile.path) assert.equal(await vault.read(entries.get(path)), source);
+			const afterPins = new Map(reopened.items.filter((item: any) => item.pinned && !item.completedAt)
+				.map((item: any) => [item.id, reopened.state.order.indexOf(item.id)]));
+			await reopened.move(e); await reopened.create('排名_普通新增', null);
+			for (const [id, slot] of afterPins) assert.equal(reopened.state.order[slot], id, 'ordinary move/insert retains the new pins');
+			await reopened.togglePin(d);
+			const unpinnedOrder = [...reopened.state.order]; await reopened.load();
+			assert.deepEqual(reopened.state.order, unpinnedOrder, 'unpin does not reorder');
+			const oldOrder = [...reopened.state.order], oldBytes = await vault.read(stateFile);
+			const process = vault.process;
+			vault.process = async (file, change) => { if (file === stateFile) throw Error('isolated save failure'); return process(file, change); };
+			try { await assert.rejects(reopened.top(c), /isolated save failure/); }
+			finally { vault.process = process; }
+			assert.deepEqual(reopened.state.order, oldOrder, 'failed top leaves in-memory order unchanged');
+			assert.equal(await vault.read(stateFile), oldBytes);
+			await reopened.top(c);
+			assert.equal(reopened.state.order[0], b);
+			assert.equal(new Set(reopened.state.order).size, reopened.state.order.length);
+
+		}
 		t.mock.timers.reset();
 
 	} finally { await rm(root, { recursive: true, force: true }); }
