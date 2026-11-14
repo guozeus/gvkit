@@ -278,6 +278,7 @@ export class ArrangeDatePicker extends Modal {
  }
  private calendar(): void {
   const modal=new Modal(this.app);modal.setTitle('选择日期');
+  modal.contentEl.addClass('gvkit-arrange-calendar-menu');
   for(const name of ['click','input','change'])modal.contentEl.addEventListener(name,event=>this.interaction?.(event),true);
   let selected=this.current.date??this.day, month=selected.slice(0,7);
   const calendar=modal.contentEl.createDiv('gvkit-arrange-calendar');
@@ -299,9 +300,22 @@ export class ArrangeDatePicker extends Modal {
    }
   };
   paint();
+  const feedback=modal.contentEl.createDiv({cls:'gvkit-arrange-date-feedback',attr:{role:'status','aria-live':'polite'}});
+  feedback.hidden=true;
   const controls=modal.contentEl.createDiv('gvkit-arrange-calendar-controls');
-  this.button(controls,'取消',()=>modal.close());
-  this.button(controls,'完成',()=>{this.changeDate(selected);void this.flush().then(ok=>{if(ok)modal.close();});},'mod-cta');
+  const cancel=this.button(controls,'取消',()=>modal.close());
+  const done=this.button(controls,'完成',()=>{
+   done.disabled=cancel.disabled=true;calendar.inert=true;
+   feedback.hidden=false;feedback.textContent='正在保存…';feedback.removeClass('is-error');
+   this.changeDate(selected);
+   void this.flush().then(ok=>{
+    if(ok) {modal.close();super.close();}
+    else {
+     feedback.textContent='未保存，请重试';feedback.addClass('is-error');
+     done.lastElementChild!.textContent='重试';done.setAttribute('aria-label','重试');
+    }
+   }).finally(()=>{done.disabled=cancel.disabled=false;calendar.inert=false;});
+  },'mod-cta');
   modal.open();
  }
 }

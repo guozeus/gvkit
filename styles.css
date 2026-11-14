@@ -375,8 +375,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 /* Date/repeat controls are scoped to their own modal, never the Arrange shell. */
 .gvkit-arrange-date-dialog { width: 440px; max-width: calc(100vw - 24px); }
 .gvkit-arrange-date-dialog .modal-title { display: none; }
-.gvkit-arrange-date-menu { width: 100%; max-width: 100%; --gvkit-picker-blue: #2563c6; }
-.gvkit-arrange-date-menu [hidden] { display: none !important; }
+.gvkit-arrange-date-menu { width: 100%; max-width: 100%; }
+.gvkit-arrange-date-menu, .gvkit-arrange-calendar-menu { --gvkit-picker-blue: #2563eb; }
+.gvkit-arrange-date-menu [hidden], .gvkit-arrange-calendar-menu [hidden] { display: none !important; }
 .gvkit-arrange-date-menu button, .gvkit-arrange-date-menu select, .gvkit-arrange-date-menu input { touch-action: manipulation; }
 .gvkit-arrange-date-heading { display: grid; grid-template-columns: minmax(0,1fr) max-content minmax(0,1fr); align-items: center; min-height: 62px; padding-top: 4px; margin-bottom: 18px; gap: 6px; }
 .gvkit-arrange-date-current { display: contents; line-height: 1.65; }
@@ -396,7 +397,9 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-date-menu button:active { transform: scale(.96); }
 .gvkit-arrange-date-menu button:focus-visible { outline: 2px solid var(--gvkit-picker-blue); outline-offset: 2px; }
 .gvkit-arrange-date-feedback { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 24px; margin-top: 12px; font-size: 13px; color: var(--text-muted); }
-.gvkit-arrange-date-feedback .is-error { color: var(--text-error); }
+.gvkit-arrange-date-feedback .is-error, .gvkit-arrange-calendar-menu .gvkit-arrange-date-feedback.is-error { color: var(--text-error); }
+.gvkit-arrange-calendar-menu .gvkit-arrange-calendar-days > button[aria-pressed="true"], .gvkit-arrange-calendar-menu .mod-cta { background: var(--gvkit-picker-blue); color: #fff; }
+.gvkit-arrange-calendar-menu button:focus-visible { outline: 2px solid var(--gvkit-picker-blue); outline-offset: 2px; }
 .gvkit-arrange-calendar-controls { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 /* The daily target keeps the same task behavior with a distinct surface. */

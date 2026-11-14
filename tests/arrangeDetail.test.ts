@@ -986,6 +986,9 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			const selectedDate = selected.getAttribute('aria-label'); selected.click();
 			([...calendarPanel.querySelectorAll('button')].find(x=>x.textContent==='完成') as any).click();
 			await waitDate(selectedDate);
+			await new Promise(r=>setTimeout(r,0));
+			assert.equal(calendarPanel.isConnected,false,'calendar completion closes its own modal');
+			assert.equal(panel.isConnected,false,'successful calendar completion exits the parent date flow');
 			assert.deepEqual(store.state.order,order);
 			assert.equal(store.items.find((x:any)=>x.id===second).pinned,preserved.pinned);
 			panel.remove();
@@ -1570,6 +1573,54 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		await waitFor(()=>!legacy.contentEl.isConnected);
 		assert.equal(legacyWrites,0); assert.equal(await vault.read(legacyFile),legacyBytes,'unchanged UI preserves legacy month-end anchor/history');
 		await store.complete(legacyId,true);assert.equal(store.items.find((x:any)=>x.id===legacyId).date,'2027-03-31');
+
+		// Calendar completion waits for the final snapshot, keeps failed choices, and retries in place.
+		let releaseDateWrite!: () => void;
+		let blockDateWrite = true, calendarFails = false;
+		const dateWrites: (string|null)[] = [];
+		const finishPicker = new ArrangeDatePicker(app,'2026-11-13','2026-11-13',async date=>{
+			if(blockDateWrite) await new Promise<void>(resolve=>{releaseDateWrite=resolve;});
+			if(calendarFails) return false;
+			dateWrites.push(date); return true;
+		});
+		finishPicker.open();
+		(finishPicker.contentEl.querySelector('[aria-label="推一天"]') as HTMLButtonElement).click();
+		await waitFor(()=>Boolean(releaseDateWrite));
+		(finishPicker.contentEl.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
+		let calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		(calendarMenu.querySelector('[aria-label="2026-11-20"]') as HTMLButtonElement).click();
+		(calendarMenu.querySelector('[aria-label="完成"]') as HTMLButtonElement).click();
+		assert.ok(finishPicker.contentEl.isConnected && calendarMenu.isConnected);
+		assert.match(calendarMenu.textContent,/正在保存/);
+		blockDateWrite=false;releaseDateWrite();
+		await waitFor(()=>!finishPicker.contentEl.isConnected);
+		assert.deepEqual(dateWrites,['2026-11-14','2026-11-20'],'pending earlier write is followed by the final calendar snapshot');
+		assert.equal(calendarMenu.isConnected,false);
+
+		const failedPicker=new ArrangeDatePicker(app,'2026-11-13','2026-11-13',async date=>{
+			if(calendarFails)return false;dateWrites.push(date);return true;
+		});
+		failedPicker.open();calendarFails=true;
+		(failedPicker.contentEl.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
+		calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		(calendarMenu.querySelector('[aria-label="2026-11-21"]') as HTMLButtonElement).click();
+		(calendarMenu.querySelector('[aria-label="完成"]') as HTMLButtonElement).click();
+		await waitFor(()=>Boolean(calendarMenu.querySelector('[aria-label="重试"]')));
+		assert.ok(failedPicker.contentEl.isConnected && calendarMenu.isConnected);
+		assert.equal(calendarMenu.querySelector('[aria-label="2026-11-21"]')!.getAttribute('aria-pressed'),'true');
+		assert.match(calendarMenu.textContent,/未保存，请重试/);
+		calendarFails=false;(calendarMenu.querySelector('[aria-label="重试"]') as HTMLButtonElement).click();
+		await waitFor(()=>!failedPicker.contentEl.isConnected);assert.equal(dateWrites.at(-1),'2026-11-21');
+
+		const cancelPicker=new ArrangeDatePicker(app,'2026-11-13','2026-11-13',async date=>{dateWrites.push(date);return true;});
+		cancelPicker.open();const beforeCancel=dateWrites.length;
+		(cancelPicker.contentEl.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
+		calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		(calendarMenu.querySelector('[aria-label="2026-11-22"]') as HTMLButtonElement).click();
+		(calendarMenu.querySelector('[aria-label="取消"]') as HTMLButtonElement).click();
+		assert.ok(cancelPicker.contentEl.isConnected);assert.equal(calendarMenu.isConnected,false);
+		assert.equal(dateWrites.length,beforeCancel);assert.match(cancelPicker.contentEl.textContent,/2026-11-13/);
+		cancelPicker.close();await waitFor(()=>!cancelPicker.contentEl.isConnected);
 
 		await view.onClose();
 		assert.equal(slot.classList.contains('gvkit-arrange-host-title'), false);
