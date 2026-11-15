@@ -1,4 +1,4 @@
-import { addIcon, Editor, getFrontMatterInfo, MarkdownRenderChild, MarkdownView, Menu, Notice, parseYaml, Platform, Plugin, removeIcon, requestUrl, setIcon, TFile, type EditorPosition } from 'obsidian';
+import { addIcon, editorLivePreviewField, Editor, getFrontMatterInfo, MarkdownRenderChild, MarkdownView, Menu, Notice, parseYaml, Platform, Plugin, removeIcon, requestUrl, setIcon, TFile, type EditorPosition } from 'obsidian';
 import {
 	applyStyleToSourceSelection,
 	toggleBoldInSourceSelection,
@@ -272,7 +272,7 @@ export default class GvkitPlugin extends Plugin {
 
 		this.registerStyleCommands();
 		this.registerBlockLinkCommands();
-		this.registerEditorExtension(gvkitEditorDecorations);
+		this.registerEditorExtension(gvkitEditorDecorations(editorLivePreviewField));
 		void this.initializeDocumentActions();
 
 		// Register reading-view support during plugin load, but keep the callback

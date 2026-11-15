@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, todayFacts, topInOrder, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
+import { dateRange, dayKey, defaultArrangeState, matchesDateRange, moveInOrder, pendingOrder, reminderTopInOrder, relativeDate, rowDateLabel, shiftDateMonth, shiftPeriod, todayFacts, topInOrder, validParent, type ArrangeItem } from '../src/arrangeCore.ts';
 
 test('archived parent references remain editable and today completions remain facts, not active due items', () => {
 	const state = defaultArrangeState();
@@ -172,4 +172,14 @@ test('batch top is stable and releases only explicitly chosen pin slots', () => 
  const next=topInOrder(order,items,['E','C']);
  assert.deepEqual(topInOrder(next,items,['E','C']),next);
  for(const id of order)assert.deepEqual(topInOrder(order,items,[id]),moveInOrder(order,items.filter(item=>item.id!==id),id));
+});
+
+
+test('reminder Top sorts by enabling time, releases its pins and keeps other absolute slots', () => {
+ const items=[item('B',{pinned:true,specialReminderAt:'2026-11-15T02:00:00Z'}),item('P',{pinned:true}),item('X'),item('A',{specialReminderAt:'2026-11-15T01:00:00Z'})];
+ assert.deepEqual(reminderTopInOrder(['B','P','X','A'],items),['A','P','B','X']);
+ const equal=items.map(x=>({...x,specialReminderAt:x.specialReminderAt?'2026-11-15T01:00:00Z':null}));
+ assert.deepEqual(reminderTopInOrder(['B','P','X','A'],equal),['B','P','A','X']);
+ assert.deepEqual(topInOrder(['B','P','X','A'],items,['A','B']),['B','P','A','X'],'manual/multi Top still preserves global chosen order');
+ assert.equal(items[0]!.pinned,true);
 });

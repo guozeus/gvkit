@@ -119,3 +119,12 @@ test('many markers do not cause repeated whole-root scans', () => {
 	assert.equal(root.querySelectorAll('.gvkit-text-blue').length, 50);
 	assert.equal(treeWalkerCount, 2, 'text and background each scan the root once');
 });
+
+test('Obsidian del tags caused by adjacent color delimiters render as independent colors',()=>{
+ const {root}=createRoot('<p>~={gv-blue}甲=<del>={gv-purple}乙=</del>={gv-blue}丙=~ <del>原有删除线</del></p>');
+ renderGvkitStyles(root);
+ assert.equal(root.textContent,'甲乙丙 原有删除线');
+ assert.equal(root.querySelector('.gvkit-text-purple')?.textContent,'乙');
+ assert.equal(root.querySelectorAll('del').length,1);
+ assert.equal(root.querySelector('del')?.textContent,'原有删除线');
+});

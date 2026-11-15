@@ -514,3 +514,10 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 @media (max-width: 600px) {
  .gvkit-arrange-multi-actions { grid-template-columns: repeat(3,minmax(0,1fr)); }
 }
+
+/* Only the strike token formed by touching color delimiters is a false strike. */
+.is-live-preview .gvkit-color-delimiter-strike.cm-strikethrough,
+.is-live-preview .gvkit-color-delimiter-strike > .cm-strikethrough,
+.is-live-preview .cm-strikethrough:has(> .gvkit-color-delimiter-strike) {
+	text-decoration: none;
+}

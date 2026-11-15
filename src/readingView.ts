@@ -105,7 +105,43 @@ function stripAdjacentMarker(span: HTMLElement, marker: string, before: boolean)
 	}
 }
 
+function renderCrossingPair(pair: MarkerPair, spec: MarkerSpec): void {
+	if (!pair.open.color) return;
+	const { open, close } = pair;
+	const doc = open.node.ownerDocument;
+	// Remove from right to left, keeping earlier pairs' node offsets valid.
+	close.node.deleteData(close.index, close.length);
+	open.node.deleteData(open.index, open.length);
+	const end = close.index - (open.node === close.node ? open.length : 0);
+	const range = doc.createRange();
+	range.setStart(open.node, open.index);
+	range.setEnd(close.node, end);
+	const ancestor = range.commonAncestorContainer;
+	const nodes: Text[] = [];
+	if (ancestor.nodeType === 3) nodes.push(ancestor as Text);
+	else {
+		const walker = doc.createTreeWalker(ancestor, 4 /* SHOW_TEXT */);
+		for (let node = walker.nextNode(); node; node = walker.nextNode())
+			if (range.intersectsNode(node) && !isInsideCode(node as Text)) nodes.push(node as Text);
+	}
+	// Wrap text in place rather than extracting/cloning a partial strong/link.
+	// Splitting preserves original prefix nodes used by earlier adjacent pairs.
+	for (const node of nodes) {
+		const from = node === open.node ? open.index : 0;
+		const to = node === close.node ? end : node.length;
+		if (to <= from) continue;
+		if (to < node.length) node.splitText(to);
+		const text = from ? node.splitText(from) : node;
+		const span = doc.createElement('span');
+		span.className = spec.className(pair.open.color);
+		text.replaceWith(span); span.appendChild(text);
+	}
+}
+
 function renderMarkerPair(pair: MarkerPair, spec: MarkerSpec): void {
+	if (pair.open.node.parentElement !== pair.close.node.parentElement) {
+		renderCrossingPair(pair, spec); return;
+	}
 	if (!pair.open.color) return;
 
 	const doc = pair.open.node.ownerDocument;
@@ -151,6 +187,18 @@ function renderLegacyBackgroundColors(root: HTMLElement): void {
 }
 
 export function renderGvkitStyles(root: HTMLElement): void {
+	// Markdown's strike parser can consume the two touching tildes between
+	// adjacent color layers. Restore only that exact delimiter collision.
+	for (const strike of Array.from(root.querySelectorAll('s, del'))) {
+		const before = strike.previousSibling, after = strike.nextSibling;
+		if (before?.nodeType !== 3 || after?.nodeType !== 3) continue;
+		const label = strike.textContent ?? '';
+		if (!(before as Text).data.endsWith('=') || !label.endsWith('=')) continue;
+		if (!['={gv-blue}', '={gv-purple}'].some(open => label.startsWith(open) && (after as Text).data.startsWith('={gv-'))) continue;
+		const parent = strike.parentNode!;
+		strike.replaceWith(root.ownerDocument.createTextNode('~~'), ...Array.from(strike.childNodes), root.ownerDocument.createTextNode('~~'));
+		parent.normalize();
+	}
 	// Text and background are independent layers. Each layer scans this rendered
 	// section once, then applies collected ranges from back to front so earlier
 	// offsets remain valid while the DOM is rewritten.

@@ -3,7 +3,7 @@ import { rewardRecord, rewardValue, type RewardRecord } from './arrangeRewards';
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
 import { createGvid } from './fileIdCore';
 import { ArrangeTrace, configFingerprint } from './arrangeTrace';
-import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, SUBMIT_BLUE_COLORS, todayFacts, topInOrder, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
+import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, dayKey, defaultArrangeState, moveInOrder, pendingOrder, reminderTopInOrder, SUBMIT_BLUE_COLORS, todayFacts, topInOrder, validParent, type ArrangeItem, type ArrangeState } from './arrangeCore';
 
 export const ARRANGE_STATE_PATH = 'settings/gvkit/arrange.md';
 const TODO = '安排/待执行';
@@ -74,6 +74,7 @@ export class ArrangeStore {
 			state.order = fields.order;
 			if (typeof fields.rewardsEnabledAt === 'string' && Number.isFinite(Date.parse(fields.rewardsEnabledAt))) state.rewardsEnabledAt = fields.rewardsEnabledAt;
 			state.achievedDays = fields.achievedDays;
+			if (typeof fields.specialReminderDay === 'string') state.specialReminderDay = fields.specialReminderDay;
 			const goal = fields.dailyGoal as ArrangeState['dailyGoal'];
 			if (goal && typeof goal.day === 'string' && (typeof goal.id === 'string' || goal.id === null)) {
 				state.dailyGoal = { day: goal.day, id: goal.id };
@@ -203,6 +204,7 @@ export class ArrangeStore {
 				date: typeof fields.date === 'string' ? fields.date : null,
 				completedAt: typeof fields.completed_at === 'string' ? fields.completed_at : null,
 				rewardPoints: rewardValue(fields.reward_points),
+				specialReminderAt: typeof fields.special_reminder_at === 'string' && Number.isFinite(Date.parse(fields.special_reminder_at)) ? fields.special_reminder_at : null,
 				pinned: fields.pinned === true, developmentCompleted: fields.development_completed === true,
 				developmentProject: fields.development_project === true });
 		}
@@ -567,6 +569,29 @@ export class ArrangeStore {
 			await this.saveState('archive');
 		});
 	}
+	/** Called only on actual presentation, never on background load/refresh. */
+	enter(): Promise<void> {
+		return this.serial('enter', async () => {
+			const day = dayKey(new Date(), this.state.timezone);
+			if (this.state.specialReminderDay === day) return;
+			const previous = this.state;
+			this.state = { ...previous, order: reminderTopInOrder(previous.order, this.items), specialReminderDay: day };
+			try { await this.saveState('special_reminders'); }
+			catch {
+				this.state = previous;
+				throw Error('特别提醒置顶未保存，请重新进入自御重试');
+			}
+		});
+	}
+	toggleSpecialReminder(id: string): Promise<void> {
+		return this.serial('toggleSpecialReminder', async () => {
+			const item = this.items.find(item => item.id === id);
+			if (!item || item.completedAt || item.occurrenceId) return;
+			await this.patch(id, { special_reminder_at: item.specialReminderAt ? null : new Date().toISOString() });
+			await this.load();
+		});
+	}
+
 	togglePin(id: string): Promise<void> {
 		return this.serial('togglePin', async () => {
 			const item = this.items.find(item => item.id === id);

@@ -12,8 +12,9 @@ import { isDeepStrictEqual } from 'node:util';
 const shim = `
 export class ItemView {
  constructor(leaf) { Object.assign(this, leaf); this.disposers=[]; }
- register(fn) { this.disposers.push(fn); } registerEvent() {}
- registerInterval(id) { this.register(()=>window.clearInterval(id)); }
+ register(fn) { this.disposers.push(fn); } registerEvent(ref) { this.register(()=>ref.off?.()); }
+ // Keep this long disk/UI fixture independent of the wall-clock minute repaint.
+ registerInterval(id) { window.clearInterval(id); }
  registerDomEvent(el,type,fn,options) { el.addEventListener(type,fn,options); this.register(()=>el.removeEventListener(type,fn,options)); }
 }
 export const Platform={isMobileApp:true,isIosApp:false,isTablet:false};
@@ -102,10 +103,14 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		};
 		let active = true;
 		const events = new Map<string, () => void>();
+		const listeners = new Map<string, Set<() => void>>();
 		const app = { vault, fileManager: { renameFile: async (file: any, path: string) => {
 			await rename(disk(file.path), disk(path)); files.delete(file.path); file.path = path; files.set(path, file);
-		} }, workspace: { getActiveViewOfType: () => active ? view : null,
-			on: (name: string, callback: () => void) => { events.set(name, callback); return {}; } } };
+		} }, workspace: { onLayoutReady: (fn: () => void) => fn(), getActiveViewOfType: () => active ? view : null,
+			on: (name: string, callback: () => void) => {
+				const group = listeners.get(name) ?? new Set<() => void>(); listeners.set(name, group); group.add(callback);
+				events.set(name, () => { for (const fn of group) fn(); }); return { off: () => group.delete(callback) };
+			} } };
 		const store = new ArrangeStore(app);
 		assert.equal(store.state.rootItemStyle, 'background');
 		await store.configure({ rootItemStyle: 'text' });

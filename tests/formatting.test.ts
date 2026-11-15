@@ -192,3 +192,30 @@ test('desktop bold recognizes underscore strong syntax and toggles it off', () =
 	const result = toggleBoldInSourceSelection(source, 2, 4);
 	assert.equal(result.source, '结论');
 });
+
+for (const color of ['blue','purple'] as const) {
+ test(`${color}: adjacent left/right/bridge and mixed selections merge only the touched text color`, () => {
+  const wrap=(s:string)=>`~={gv-${color}}${s}=~`;
+  for(const [source,selected] of [[wrap('甲')+'乙','乙'],['甲'+wrap('乙'),'甲'],[wrap('甲')+'乙'+wrap('丙'),'乙'],[wrap('甲')+'乙','甲=~乙'],['甲'+wrap('乙'),'甲'+`~={gv-${color}}乙`]]){
+   const from=source.indexOf(selected),r=applyStyleToSourceSelection(source,from,from+selected.length,`text-${color}`);
+   assert.equal(r.source,wrap(source.includes('丙')?'甲乙丙':'甲乙'));
+   assert.equal(removeGvkitStyleMarkup(r.source.slice(r.selectionFrom,r.selectionTo)),removeGvkitStyleMarkup(selected).replace(/=~|~=\{gv-(blue|purple)\}/gu,''));
+  }
+  for(const gap of [' ','空','\n']){
+   const source=wrap('甲')+gap+'乙',r=applyStyleToSourceSelection(source,source.length-1,source.length,`text-${color}`);
+   assert.equal(r.source,wrap('甲')+gap+wrap('乙'));
+  }
+  const source='~={gv-purple}甲=~乙';
+  if(color==='blue')assert.equal(applyStyleToSourceSelection(source,source.length-1,source.length,'text-blue').source,'~={gv-purple}甲=~~={gv-blue}乙=~');
+ });
+ test(`${color}: after merge a single letter can toggle/change/clear without changing its neighbours`,()=>{
+  const source=`~={gv-${color}}甲乙丙=~`,from=source.indexOf('乙');
+  const off=applyStyleToSourceSelection(source,from,from+1,`text-${color}`);
+  assert.equal(off.source,`~={gv-${color}}甲=~乙~={gv-${color}}丙=~`);
+  const other=color==='blue'?'purple':'blue';
+  const changed=applyStyleToSourceSelection(source,from+1,from,`text-${other}`);
+  assert.equal(changed.source,`~={gv-${color}}甲=~~={gv-${other}}乙=~~={gv-${color}}丙=~`);
+  assert.equal(changed.source.slice(changed.selectionFrom,changed.selectionTo),'乙');
+  assert.deepEqual(applyStyleToSourceSelection(source,from,from+1,'clear'),off);
+ });
+}

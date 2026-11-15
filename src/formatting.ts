@@ -259,6 +259,74 @@ function removeStyleRange(
 	};
 }
 
+/** Rebuild only the touched inline color layer, retaining every other source byte. */
+function applyInlineColor(
+	source: string, from: number, to: number, kind: 'text' | 'bg', color: GvkitColor | null,
+): SourceSelectionResult {
+	const lineFrom = source.lastIndexOf('\n', from - 1) + 1;
+	const end = source.indexOf('\n', to), lineTo = end < 0 ? source.length : end;
+	const line = source.slice(lineFrom, lineTo);
+	const styles = collectSourceStyleRanges(line).map(range => ({ ...range,
+		fullFrom: range.fullFrom + lineFrom, contentFrom: range.contentFrom + lineFrom,
+		contentTo: range.contentTo + lineFrom, fullTo: range.fullTo + lineFrom }));
+	const bold = collectBoldRanges(line).filter(range => !isEscapedDelimiter(line, range.fullFrom)).map(range => ({ ...range,
+		fullFrom: range.fullFrom + lineFrom, contentFrom: range.contentFrom + lineFrom,
+		contentTo: range.contentTo + lineFrom, fullTo: range.fullTo + lineFrom }));
+	// Selecting all visible content includes its independent delimiters. This
+	// keeps a complete bold/background layer together when the color is removed.
+	let selectedFrom = from, selectedTo = to, expanded: boolean;
+	do {
+		expanded = false;
+		for (const range of [...styles, ...bold]) {
+			if (range.contentFrom === selectedFrom && range.contentTo === selectedTo) {
+				selectedFrom = range.fullFrom; selectedTo = range.fullTo; expanded = true;
+			}
+		}
+	} while (expanded);
+	const layers = styles.filter(range => range.kind === kind);
+	const touched = layers.filter(range => range.fullFrom < selectedTo && range.fullTo > selectedFrom);
+	let start = Math.min(selectedFrom, ...touched.map(range => range.fullFrom));
+	let stop = Math.max(selectedTo, ...touched.map(range => range.fullTo));
+	// Adjacent same-color spans participate only in this edit, never in a file
+	// normalization pass. Ordinary gaps (including whitespace) remain untouched.
+	if (kind === 'text' && color) {
+		do {
+			expanded = false;
+			for (const range of layers) if (range.color === color && (range.fullTo === start || range.fullFrom === stop)) {
+				start = Math.min(start, range.fullFrom); stop = Math.max(stop, range.fullTo); expanded = true;
+			}
+		} while (expanded);
+	}
+	const relevant = layers.filter(range => range.fullFrom >= start && range.fullTo <= stop);
+	const chars: { text: string; offset: number; color: GvkitColor | null }[] = [];
+	for (let offset = start; offset < stop; offset++) {
+		const layer = relevant.find(range => offset >= range.fullFrom && offset < range.fullTo);
+		if (layer && (offset < layer.contentFrom || offset >= layer.contentTo)) continue;
+		chars.push({ text: source[offset]!, offset, color: layer?.color ?? null });
+	}
+	const selected = chars.filter(char => char.offset >= from && char.offset < to);
+	// Mixed same-color/plain selections fill in; only a fully colored selection toggles off.
+	const target = color && selected.length && selected.every(char => char.color === color) ? null : color;
+	for (const char of chars) if (char.offset >= selectedFrom && char.offset < selectedTo) char.color = target;
+	let replacement = '', current: GvkitColor | null = null;
+	let selectionFrom = -1, selectionTo = -1;
+	for (const char of chars) {
+		if (char.color !== current) {
+			if (current) replacement += WRAPPERS[`${kind === 'text' ? 'text' : 'bg'}-${current}`].close;
+			if (char.color) replacement += WRAPPERS[`${kind === 'text' ? 'text' : 'bg'}-${char.color}`].open;
+			current = char.color;
+		}
+		if (char.offset >= from && char.offset < to) {
+			if (selectionFrom < 0) selectionFrom = start + replacement.length;
+			selectionTo = start + replacement.length + 1;
+		}
+		replacement += char.text;
+	}
+	if (current) replacement += WRAPPERS[`${kind === 'text' ? 'text' : 'bg'}-${current}`].close;
+	return { source: replaceSourceRange(source, start, stop, replacement),
+		selectionFrom: selectionFrom < 0 ? start : selectionFrom, selectionTo: selectionTo < 0 ? start : selectionTo };
+}
+
 /**
  * Applies/toggles a style using the whole source so a user can select only the
  * visible text while gvkit markers remain hidden outside the selection.
@@ -283,27 +351,15 @@ export function applyStyleToSourceSelection(
 	}
 
 	if (action === 'clear') {
-		let result: SourceSelectionResult = { source, selectionFrom, selectionTo };
-		for (const kind of ['text', 'bg'] as const) {
-			const range = findEnclosingRange(result.source, result.selectionFrom, result.selectionTo, kind);
-			if (range) {
-				result = removeStyleRange(
-					result.source,
-					result.selectionFrom,
-					result.selectionTo,
-					range,
-				);
-			}
-		}
-		if (result.source !== source) return result;
-
-		const selected = source.slice(selectionFrom, selectionTo);
+		const text = applyInlineColor(source, selectionFrom, selectionTo, 'text', null);
+		const result = applyInlineColor(text.source, text.selectionFrom, text.selectionTo, 'bg', null);
+		const selected = result.source.slice(result.selectionFrom, result.selectionTo);
 		const replacement = removeGvkitStyleMarkup(selected);
-		return {
-			source: replaceSourceRange(source, selectionFrom, selectionTo, replacement),
-			selectionFrom,
-			selectionTo: selectionFrom + replacement.length,
-		};
+		return { source: replaceSourceRange(result.source, result.selectionFrom, result.selectionTo, replacement),
+			selectionFrom: result.selectionFrom, selectionTo: result.selectionFrom + replacement.length };
+	}
+	if (action === 'text-blue' || action === 'text-purple') {
+		return applyInlineColor(source, selectionFrom, selectionTo, 'text', WRAPPERS[action].color);
 	}
 
 	const wrapper = WRAPPERS[action];
@@ -468,4 +524,10 @@ export function toggleBoldInSourceSelection(
 		selectionFrom: selectionFrom + delimiter.length,
 		selectionTo: selectionTo + delimiter.length,
 	};
+}
+
+/** Adjacent color delimiters can look like Markdown's two-tilde strike syntax. */
+export function isColorDelimiterStrike(source: string, from: number, to: number): boolean {
+	const opening = (at: number) => ['blue', 'purple'].some(color => source.startsWith(`={gv-${color}}`, at));
+	return source[from - 1] === '=' && source[to - 3] === '=' && opening(from + 2) && opening(to);
 }

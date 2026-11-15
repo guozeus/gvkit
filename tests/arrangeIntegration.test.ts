@@ -478,3 +478,43 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('daily reminders persist independently, run once per Vault day on entry and retry after failed saves', async t => {
+ const root=await mkdtemp(join(tmpdir(),'gvkit-reminder-test-'));
+ t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-15T15:55:00Z')});
+ try{
+  await build({stdin:{contents:`export {ArrangeStore} from './src/arrangeStore'; export {TFile,TFolder} from 'obsidian';`,resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:join(root,'store.mjs'),plugins:[{name:'obsidian-test',setup(b){b.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'shim'}));b.onLoad({filter:/.*/,namespace:'shim'},()=>({contents:shim,loader:'js'}));}}]});
+  const {ArrangeStore,TFile,TFolder}=await import(pathToFileURL(join(root,'store.mjs')).href),entries=new Map<string,any>();
+  for(const path of ['安排/待执行','安排/已完成','安排/历史','settings/gvkit']){entries.set(path,new TFolder());await mkdir(join(root,path),{recursive:true});}
+  let fail=false,saves=0;
+  const vault={getMarkdownFiles:()=>[...entries.values()].filter(x=>x instanceof TFile),getAbstractFileByPath:(p:string)=>entries.get(p),read:(f:any)=>readFile(join(root,f.path),'utf8'),create:async(p:string,s:string)=>{await writeFile(join(root,p),s);const f=new TFile(p);entries.set(p,f);return f;},process:async(f:any,change:(s:string)=>string)=>{if(f.path==='settings/gvkit/arrange.md'){if(fail)throw Error('disk failed');saves++;}await writeFile(join(root,f.path),change(await vault.read(f)));}};
+  const app={vault},store=new ArrangeStore(app),doc=(fields:any,body='保留正文 [[链接]]')=>'---\n'+JSON.stringify(fields)+'\n---\n'+body;
+  const fields=(id:string,extra:any={})=>({gvid:id,gvkit_arrange:true,title:id,parent:null,date:null,completed_at:null,pinned:false,unknown:{keep:true},...extra});
+  for(const id of ['B','P','X','A','child','done','R'])await vault.create(`安排/待执行/${id}.md`,doc(fields(id,id==='child'?{parent:'P'}:id==='done'?{completed_at:'2026-11-15T00:00:00Z',special_reminder_at:'2026-11-01T00:00:00Z'}:id==='R'?{repeat:{unit:'day',interval:1,anchor:'2026-11-15'},repeat_instance:'current',repeat_history:[{id:'old',title:'old',body:'',parent:null,date:'2026-11-14',completed_at:'2026-11-14T00:00:00Z'}]}:{})));
+  await store.configure({order:['B','P','X','A','child','R'],timezone:'Asia/Shanghai'});
+  const raw=()=>vault.read(entries.get('安排/待执行/A.md')),before=await raw();
+  await store.toggleSpecialReminder('A');const stamp=store.items.find((x:any)=>x.id==='A').specialReminderAt;
+  assert.equal(stamp,'2026-11-15T15:55:00.000Z');
+  const parsed=JSON.parse((await raw()).split('---\n')[1]);delete parsed.special_reminder_at;assert.deepEqual(parsed,fields('A'));assert.equal((await raw()).split('\n---\n')[1],before.split('\n---\n')[1]);
+  t.mock.timers.tick(1000);await store.edit('A','A', '保留正文 [[链接]]',null);assert.equal(store.items.find((x:any)=>x.id==='A').specialReminderAt,stamp);
+  await store.toggleSpecialReminder('A');assert.equal(store.items.find((x:any)=>x.id==='A').specialReminderAt,null);
+  await store.toggleSpecialReminder('A');assert.notEqual(store.items.find((x:any)=>x.id==='A').specialReminderAt,stamp);
+  t.mock.timers.tick(1000);await store.toggleSpecialReminder('B');await store.togglePin('B');await store.togglePin('P');await store.toggleSpecialReminder('child');await store.toggleSpecialReminder('R');
+  const origOrder=[...store.state.order];await store.load();assert.deepEqual(store.state.order,origOrder,'background load never runs reminders');
+  await store.enter();assert.deepEqual(store.state.order,['A','P','B','child','R','X']);assert.equal(store.state.specialReminderDay,'2026-11-15');
+  assert.equal(store.items.find((x:any)=>x.id==='B').pinned,true);assert.equal(store.items.find((x:any)=>x.id==='old').completedAt,'2026-11-14T00:00:00Z');
+  await store.top('X');const manual=[...store.state.order];const diskBefore=await vault.read(entries.get('settings/gvkit/arrange.md'));const saveCount=saves;
+  await Promise.all([store.enter(),store.enter()]);const other=new ArrangeStore(app);await other.enter();assert.deepEqual(other.state.order,manual);assert.equal(saves,saveCount);assert.equal(await vault.read(entries.get('settings/gvkit/arrange.md')),diskBefore);
+  t.mock.timers.tick(1000);await store.toggleSpecialReminder('X');await store.enter();assert.deepEqual(store.state.order,manual,'enabling after first entry waits for next day');
+  // The timezone day changes at 16:00Z, not at the process timezone midnight.
+  t.mock.timers.tick(10*60*1000);await store.load();assert.equal(store.state.specialReminderDay,'2026-11-15');assert.deepEqual(store.state.order,manual);
+  await store.configure({dailyGoal:{day:'2026-11-15',id:'X'}});
+  fail=true;await assert.rejects(store.enter(),/保存|disk failed/);fail=false;
+  const afterFailure=JSON.parse((await vault.read(entries.get('settings/gvkit/arrange.md'))).split('---\n')[1]);assert.equal(afterFailure.specialReminderDay,'2026-11-15');
+  await store.enter();assert.equal(store.state.specialReminderDay,'2026-11-16');assert.equal(store.state.dailyGoal.returnedId,'X');assert.deepEqual(store.state.order,['A','P','B','child','R','X']);
+  await store.toggleSpecialReminder('A');t.mock.timers.tick(3*86400000);await store.enter();assert.equal(store.state.specialReminderDay,'2026-11-19');assert.equal(store.state.order.includes('done'),false);assert.equal(store.state.order.includes('old'),false);
+  assert.equal(store.items.find((x:any)=>x.id==='A').specialReminderAt,null);
+  // A failure of the reminder save itself never advances its marker or in-memory order.
+  t.mock.timers.tick(86400000);const previous=[...store.state.order];fail=true;await assert.rejects(store.enter(),/特别提醒置顶未保存/);assert.equal(store.state.specialReminderDay,'2026-11-19');assert.deepEqual(store.state.order,previous);fail=false;await store.enter();assert.equal(store.state.specialReminderDay,'2026-11-20');
+ }finally{await rm(root,{recursive:true,force:true});}
+});

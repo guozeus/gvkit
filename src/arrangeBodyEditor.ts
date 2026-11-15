@@ -1,3 +1,4 @@
+import { isColorDelimiterStrike } from './formatting';
 import { EditorState, StateField, type Range } from '@codemirror/state';
 import { Decoration, EditorView, keymap, placeholder, WidgetType, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -147,7 +148,7 @@ function parsedDocument(state: EditorState, app: App, path: string, component: C
 		}
 		if (name === 'StrongEmphasis') mark(from, to, 'strong');
 		if (name === 'Emphasis') mark(from, to, 'em');
-		if (name === 'Strikethrough') mark(from, to, 's');
+		if (name === 'Strikethrough' && !isColorDelimiterStrike(source, from, to)) mark(from, to, 's');
 		if (name === 'InlineCode') mark(from, to, 'code');
 		if (name === 'ArrangeHighlight') {
 			const first = source.slice(from + 2, from + 4);

@@ -9,6 +9,7 @@ export interface ArrangeItem {
 	date: string | null;
 	completedAt: string | null;
 	pinned: boolean;
+	specialReminderAt?: string | null;
 	rewardPoints?: number;
 	repeat?: RepeatRule | null;
 	repeatInstance?: string;
@@ -20,7 +21,7 @@ export interface ArrangeItem {
 	developmentProject?: boolean;
 }
 
-export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'copy', 'archive', 'developmentCompleted', 'developmentProject'] as const;
+export const ARRANGE_ACTIONS = ['parent', 'date', 'top', 'pin', 'changeParent', 'copy', 'archive', 'developmentCompleted', 'developmentProject', 'specialReminder'] as const;
 export type RowAction = typeof ARRANGE_ACTIONS[number];
 export const SUBMIT_BLUE_COLORS = { classic: '#2463b4', console: '#2563eb', navy: '#1e3a8a' } as const;
 export const DATE_HINT_COLORS = { vivid: '#0066ff', electric: '#008cff', cyan: '#00a6ff' } as const;
@@ -29,6 +30,7 @@ export const COMPLETION_SOUNDS = { chime: '轻扬（原音效）', bell: '清铃
 export interface ArrangeState {
 	order: string[];
 	rewardsEnabledAt: string | null;
+	specialReminderDay?: string | null;
 	dailyGoal: { day: string; id: string | null; returnedId?: string } | null;
 	achievedDays: string[];
 	timezone: string;
@@ -152,6 +154,18 @@ export function topInOrder(order: string[], items: ArrangeItem[], ids: readonly 
 	const chosen = new Set(ids);
 	const fixed = new Set(items.filter(item => item.pinned && !item.completedAt && !chosen.has(item.id)).map(item => item.id));
 	const movable = [...order.filter(id => chosen.has(id)), ...order.filter(id => !chosen.has(id) && !fixed.has(id))];
+	let cursor = 0;
+	return order.map(id => fixed.has(id) ? id : movable[cursor++]!);
+}
+
+/** Daily reminder Top has its own order; manual/multi Top retains global order. */
+export function reminderTopInOrder(order: string[], items: ArrangeItem[]): string[] {
+	const reminders = new Map(items.filter(item => !item.completedAt && !item.occurrenceId && item.specialReminderAt)
+		.map(item => [item.id, Date.parse(item.specialReminderAt!)]));
+	const chosen = order.filter(id => reminders.has(id)).sort((a, b) => reminders.get(a)! - reminders.get(b)!);
+	const selected = new Set(chosen);
+	const fixed = new Set(items.filter(item => item.pinned && !item.completedAt && !selected.has(item.id)).map(item => item.id));
+	const movable = [...chosen, ...order.filter(id => !selected.has(id) && !fixed.has(id))];
 	let cursor = 0;
 	return order.map(id => fixed.has(id) ? id : movable[cursor++]!);
 }

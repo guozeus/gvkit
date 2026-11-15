@@ -1,85 +1,65 @@
-import type { Range } from '@codemirror/state';
+import type { Range, StateField } from '@codemirror/state';
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { parser, GFM } from '@lezer/markdown';
+import { isColorDelimiterStrike } from './formatting';
 
-const TEXT_COLOR_RE = /~=\{gv-(blue|purple)\}([\s\S]*?)=~/gu;
-const BG_COLOR_RE = /~=\{gv-bg-(blue|purple)\}([^\n]*?)=bg~/gu;
+const markdown = parser.configure(GFM);
 
-function isLivePreview(view: EditorView): boolean {
-	return view.dom.closest('.is-live-preview') !== null;
-}
-
-export function buildDecorations(view: EditorView): DecorationSet {
-	if (!isLivePreview(view)) return Decoration.none;
-
-	const ranges: Range<Decoration>[] = [];
-	const seenLines = new Set<number>();
-
-	for (const visible of view.visibleRanges) {
-		let line = view.state.doc.lineAt(visible.from);
-		const lastLine = view.state.doc.lineAt(visible.to);
-
-		while (line.number <= lastLine.number) {
-			if (!seenLines.has(line.from)) {
-				seenLines.add(line.from);
-				const text = line.text;
-
-				for (const match of text.matchAll(TEXT_COLOR_RE)) {
-					const color = match[1];
-					const full = match[0];
-					const start = line.from + (match.index ?? 0);
-					const openLength = `~={gv-${color}}`.length;
-					const contentFrom = start + openLength;
-					const contentTo = start + full.length - 2;
-					const className = color === 'blue' ? 'gvkit-text-blue' : 'gvkit-text-purple';
-
-					ranges.push(Decoration.replace({}).range(start, contentFrom));
-					if (contentTo > contentFrom) {
-						ranges.push(Decoration.mark({ class: className }).range(contentFrom, contentTo));
-					}
-					ranges.push(Decoration.replace({}).range(contentTo, start + full.length));
-				}
-
-				for (const match of text.matchAll(BG_COLOR_RE)) {
-					const color = match[1] ?? '';
-					const full = match[0];
-					const start = line.from + (match.index ?? 0);
-					const openLength = `~={gv-bg-${color}}`.length;
-					const closeLength = '=bg~'.length;
-					const contentFrom = start + openLength;
-					const contentTo = start + full.length - closeLength;
-					const className = color === 'blue' ? 'gvkit-bg-blue' : 'gvkit-bg-purple';
-
-					ranges.push(Decoration.replace({}).range(start, contentFrom));
-					if (contentTo > contentFrom) {
-						ranges.push(Decoration.mark({ class: className }).range(contentFrom, contentTo));
-					}
-					ranges.push(Decoration.replace({}).range(contentTo, start + full.length));
-				}
-
+export function buildDecorations(view: EditorView, livePreview = Boolean(view.dom.closest('.is-live-preview'))): DecorationSet {
+	if (!livePreview) return Decoration.none;
+	const source = view.state.doc.toString(), ranges: Range<Decoration>[] = [];
+	const code: { from: number; to: number }[] = [];
+	markdown.parse(source).iterate({ enter(node) {
+		if (['InlineCode', 'FencedCode', 'IndentedCode'].includes(node.name)) {
+			code.push({ from: node.from, to: node.to }); return false;
+		}
+		if (node.name === 'Strikethrough' && isColorDelimiterStrike(source, node.from, node.to))
+			ranges.push(Decoration.mark({ class: 'gvkit-color-delimiter-strike' }).range(node.from, node.to));
+		return true;
+	} });
+	// Pair across lines, while code remains literal. Only delimiter bytes are
+	// replaced; source text, selection and native Markdown semantics remain intact.
+	for (const [pattern, background] of [[/~=\{gv-(blue|purple)\}|=~/gu, false], [/~=\{gv-bg-(blue|purple)\}|=bg~/gu, true]] as const) {
+		let open: { from: number; to: number; color: string } | null = null;
+		for (const token of source.matchAll(pattern)) {
+			const from = token.index!, to = from + token[0].length;
+			if (code.some(range => from < range.to && to > range.from)) continue;
+			if (token[1]) { open ??= { from, to, color: token[1] }; continue; }
+			if (!open) continue;
+			ranges.push(Decoration.replace({}).range(open.from, open.to));
+			const mark = Decoration.mark({ class: `gvkit-${background ? 'bg' : 'text'}-${open.color}` });
+			let start = open.to;
+			for (const literal of code) {
+				if (literal.to <= start || literal.from >= from) continue;
+				if (literal.from > start) ranges.push(mark.range(start, literal.from));
+				start = literal.to;
 			}
-
-			if (line.number === lastLine.number) break;
-			line = view.state.doc.line(line.number + 1);
+			if (from > start) ranges.push(mark.range(start, from));
+			ranges.push(Decoration.replace({}).range(from, to));
+			open = null;
 		}
 	}
-
 	return Decoration.set(ranges, true);
 }
 
-class GvkitDecorationView {
-	decorations: DecorationSet;
-
-	constructor(view: EditorView) {
-		this.decorations = buildDecorations(view);
-	}
-
-	update(update: ViewUpdate): void {
-		if (update.docChanged || update.viewportChanged || update.focusChanged || update.selectionSet) {
-			this.decorations = buildDecorations(update.view);
+/** Use Obsidian's real mode field, including a switch with no selection change. */
+export function gvkitEditorDecorations(livePreviewField: StateField<boolean>) {
+	const isLive = (view: EditorView) => view.state.field(livePreviewField, false) ?? Boolean(view.dom.closest('.is-live-preview'));
+	class GvkitDecorationView {
+		decorations: DecorationSet;
+		live: boolean;
+		constructor(view: EditorView) { this.live = isLive(view); this.decorations = buildDecorations(view, this.live); }
+		update(update: ViewUpdate): void {
+			const live = isLive(update.view);
+			if (live !== this.live || update.docChanged || update.viewportChanged || update.focusChanged || update.selectionSet)
+				this.decorations = buildDecorations(update.view, live);
+			this.live = live;
 		}
 	}
+	return ViewPlugin.fromClass(GvkitDecorationView, {
+		decorations: value => value.decorations,
+		provide: plugin => EditorView.atomicRanges.of(view => view.plugin(plugin)?.decorations.update({
+			filter: (_from, _to, value) => !value.spec.class,
+		}) ?? Decoration.none),
+	});
 }
-
-export const gvkitEditorDecorations = ViewPlugin.fromClass(GvkitDecorationView, {
-	decorations: (value) => value.decorations,
-});

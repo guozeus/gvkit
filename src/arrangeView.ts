@@ -18,6 +18,7 @@ const actions: Record<RowAction, { title: string; icon: string }> = {
 	archive: { title: '归档', icon: 'archive' },
 	developmentCompleted: { title: 'AI已执行', icon: 'code-xml' },
 	developmentProject: { title: '开发工程', icon: 'folder-code' },
+	specialReminder: { title: '特别提醒', icon: 'bell' },
 };
 function iconButton(parent: HTMLElement, label: string, icon: string, action: (event: MouseEvent) => void): HTMLButtonElement {
 	const button = parent.createEl('button', { cls: 'gvkit-arrange-icon', attr: { type: 'button', 'aria-label': label, title: label } });
@@ -489,6 +490,18 @@ export class ArrangeView extends ItemView {
 		}
 		try { await this.store.enableRewards(); } catch (error) { this.error(error); }
 		await this.reload('view_open');
+		let shown = this.isDisplayed(), active = this.app.workspace.getActiveViewOfType(ArrangeView) === this;
+		this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+			const next = this.app.workspace.getActiveViewOfType(ArrangeView) === this;
+			if (next && !active && this.isDisplayed()) void this.reload('view_enter');
+			active = next;
+		}));
+		this.registerEvent(this.app.workspace.on('layout-change', () => {
+			const next = this.isDisplayed();
+			if (next && !shown) void this.reload('view_enter');
+			shown = next;
+		}));
+		this.app.workspace.onLayoutReady(() => { if (!this.closed && this.isDisplayed()) void this.reload('view_enter'); });
 	}
 	async onClose(): Promise<void> {
 		this.store.trace?.record('view.close');
@@ -510,9 +523,16 @@ export class ArrangeView extends ItemView {
 		await this.saveEdit();
 		this.editing?.body.destroy();
 	}
+	private isDisplayed(): boolean {
+		const bounds = this.contentEl.getBoundingClientRect();
+		return !this.closed && !this.contentEl.ownerDocument.hidden && bounds.width > 0 && bounds.height > 0;
+	}
 	private async reload(trigger = 'view_reload'): Promise<void> {
 		this.store.trace?.record('view.reload', { trigger });
-		try { await this.store.load(trigger); if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
+		try {
+			if (['view_open', 'view_enter', 'visibility'].includes(trigger) && this.isDisplayed()) await this.store.enter();
+			else await this.store.load(trigger);
+			if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
 		catch (error) { this.error(error); }
 	}
 	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
@@ -1042,6 +1062,7 @@ export class ArrangeView extends ItemView {
 			if (dailyGoal && key === 'top' || !this.actionAvailable(key, item)) continue;
 			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event, parent !== this.list));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
+			if (key === 'specialReminder') { button.toggleClass('is-active', Boolean(item.specialReminderAt)); button.setAttribute('aria-pressed', String(Boolean(item.specialReminderAt))); }
 			if (key === 'date' && item.date) button.addClass('is-active');
 			if (key === 'developmentCompleted') button.toggleClass('is-active', Boolean(item.developmentCompleted));
 			if (key === 'developmentProject') button.toggleClass('is-active', Boolean(item.developmentProject));
@@ -1221,7 +1242,7 @@ export class ArrangeView extends ItemView {
 	private actionAvailable(key: RowAction, item: ArrangeItem): boolean {
 		if (key === 'parent') return Boolean(item.parent && this.store.items.some(parent => parent.id === item.parent));
 		if (key === 'top') return !item.completedAt;
-		if (key === 'pin' || key === 'developmentCompleted') return !item.completedAt;
+		if (key === 'pin' || key === 'developmentCompleted' || key === 'specialReminder') return !item.completedAt;
 		return true;
 	}
 	private action(key: RowAction, item: ArrangeItem, event: MouseEvent, fromChildren = false): void {
@@ -1235,6 +1256,7 @@ export class ArrangeView extends ItemView {
 			});
 		} else if (key === 'date') this.dateMenu(item, event);
 		else if (key === 'top') void this.run(() => this.store.top(item.id)).then(ok => { if (ok) this.reveal(item.id, fromChildren ? this.children : this.list); });
+		else if (key === 'specialReminder') void this.run(() => this.store.toggleSpecialReminder(item.id)).then(ok => { if (ok) new Notice(this.store.items.find(value => value.id === item.id)?.specialReminderAt ? '已开启特别提醒' : '已关闭特别提醒'); });
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
 		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
 		else if (key === 'developmentProject') void this.run(() => this.store.toggleDevelopmentProject(item.id));
@@ -1279,9 +1301,15 @@ export class ArrangeView extends ItemView {
 		};
 		for (const key of ARRANGE_ACTIONS) {
 			const title = key === 'pin' && item.pinned ? '取消钉住'
+				: key === 'specialReminder' ? (item.specialReminderAt ? '关闭特别提醒' : '开启特别提醒')
 				: key === 'developmentCompleted' && item.developmentCompleted ? '取消AI已执行'
 				: key === 'developmentProject' && item.developmentProject ? '取消开发工程' : actions[key].title;
 			const row = entry(title, actions[key].icon, () => this.action(key, item, event));
+			if (key === 'specialReminder') {
+				const button = row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!;
+				button.setAttribute('aria-pressed', String(Boolean(item.specialReminderAt)));
+				button.toggleClass('is-active', Boolean(item.specialReminderAt));
+			}
 			if (key === 'developmentCompleted' || key === 'developmentProject') {
 				const button = row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!;
 				button.setAttribute('aria-pressed', String(Boolean(item[key])));
@@ -1556,7 +1584,9 @@ export class ArrangeView extends ItemView {
 			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
 			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned
 				|| key === 'developmentCompleted' && Boolean(item.developmentCompleted)
-				|| key === 'developmentProject' && Boolean(item.developmentProject));
+				|| key === 'developmentProject' && Boolean(item.developmentProject)
+				|| key === 'specialReminder' && Boolean(item.specialReminderAt));
+			if (key === 'specialReminder') button.setAttribute('aria-pressed', String(Boolean(item.specialReminderAt)));
 		}
 		strip.scrollLeft = scroll;
 	}
