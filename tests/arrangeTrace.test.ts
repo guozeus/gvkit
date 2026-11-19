@@ -203,9 +203,13 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     malformed.dailyGoal={day:'2026-11-19',id:null,returnedId:'01a1ab26-ca30-729'};
     await writeFile(disk(stateFile.path),'---\n'+JSON.stringify(malformed)+'\n---\n');
     await view.reload('vault_change');
-    assert.ok(view.store.configIssue);
+    assert.equal(view.store.configIssue,null);
+    assert.ok(view.store.goalIssue);
     assert.equal(view.store.items.length,1);
-    await assert.rejects(view.store.configure({keyboardGap:20}));
+    assert.match(view.contentEl.textContent,/昨日目标返回待确认/);
+    await view.store.configure({keyboardGap:20});
+    assert.ok(view.store.goalIssue);
+    await assert.rejects(view.store.setDailyGoal('task'),/目标设置暂不可用/);
     await writeFile(disk(stateFile.path),good);
     await view.reload('vault_change');
     assert.equal(view.store.configIssue,null);

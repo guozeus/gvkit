@@ -25,6 +25,18 @@ export class ArrangeConfigError extends Error {
 		super('安排配置异常，已按本机顺序显示事项；每日目标和奖励暂不可确认。');
 	}
 }
+export class ArrangeGoalIssue extends ArrangeConfigError {
+	constructor(fingerprint: string) {
+		super('goal:' + fingerprint, Error('unconfirmed_returned_id'));
+		this.message = '昨日目标返回状态待确认；普通事项可正常保存，目标设置暂不可用。';
+	}
+}
+function unconfirmedReturnedId(goal: ArrangeState['dailyGoal']): boolean {
+	if (!goal || !Object.prototype.hasOwnProperty.call(goal, 'returnedId')) return false;
+	const id = goal.returnedId;
+	return typeof id !== 'string' || (/^[0-9a-f]{8}-/i.test(id)
+		&& !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+}
 const copyState = (state: ArrangeState): ArrangeState => JSON.parse(JSON.stringify(state));
 const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 function validateConfig(fields: Record<string, unknown>): void {
@@ -36,7 +48,7 @@ function validateConfig(fields: Record<string, unknown>): void {
 	if (fields.order.some(id => uuidLike(id) && !uuid.test(id as string))) throw Error('安排排序身份不完整');
 	const goal = fields.dailyGoal as ArrangeState['dailyGoal'];
 	if (goal && (typeof goal.day !== 'string' || !validDate(goal.day) || !(goal.id === null || typeof goal.id === 'string')
-		|| [goal.id, goal.returnedId].some(id => uuidLike(id) && !uuid.test(id!)))) throw Error('每日目标配置不完整');
+		|| [goal.id].some(id => uuidLike(id) && !uuid.test(id!)))) throw Error('每日目标配置不完整');
 }
 
 export class ArrangeCreateError extends Error {
@@ -60,6 +72,7 @@ export class ArrangeStore {
 	private archivedCompletions: string[] = [];
 	private queue: Promise<unknown> = Promise.resolve();
 	configIssue: ArrangeConfigError | null = null;
+	goalIssue: ArrangeGoalIssue | null = null;
 	private notifiedConfig: string | null = null;
 	private explicitInitialize = false;
 	claimConfigNotice(fingerprint: string): boolean {
@@ -101,6 +114,7 @@ export class ArrangeStore {
 	private async loadInner(context: { run: number; stage: string; trigger: string }): Promise<void> {
 		let state = defaultArrangeState();
 		this.configIssue = null;
+		this.goalIssue = null;
 		let source = '';
 		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
 		if (file instanceof TFile) {
@@ -126,7 +140,11 @@ export class ArrangeStore {
 			const goal = fields.dailyGoal as ArrangeState['dailyGoal'];
 			if (goal && typeof goal.day === 'string' && (typeof goal.id === 'string' || goal.id === null)) {
 				state.dailyGoal = { day: goal.day, id: goal.id };
-				if (typeof goal.returnedId === 'string') state.dailyGoal.returnedId = goal.returnedId;
+				if (unconfirmedReturnedId(goal)) {
+					this.goalIssue = new ArrangeGoalIssue(configFingerprint(JSON.stringify(goal)).fingerprint!);
+					this.trace?.failure('config.invalid', this.goalIssue, { run: context.run, trigger: context.trigger,
+						stage: 'unconfirmed_returned_id', ...configFingerprint(source) });
+				} else if (typeof goal.returnedId === 'string') state.dailyGoal.returnedId = goal.returnedId;
 			}
 			if (typeof fields.tips === 'string') state.tips = fields.tips;
 			if (typeof fields.tipsProbability === 'number' && Number.isFinite(fields.tipsProbability))
@@ -277,7 +295,7 @@ export class ArrangeStore {
 		this.items = items;
 		this.state = state;
 		this.loadedState = copyState(state);
-		if (!this.configIssue) {
+		if (!this.configIssue && !this.goalIssue) {
 			this.notifiedConfig = null;
 			try { this.storage?.removeItem(this.recoveryKey + ':notice'); } catch { /* optional */ }
 			this.lastGood = copyState(state);
@@ -285,7 +303,7 @@ export class ArrangeStore {
 		}
 		this.archivedCompletions = archivedCompletions;
 		this.archivedDailyGoalCompletedAt = archivedDailyGoalCompletedAt;
-		if (!this.configIssue && state.dailyGoal && state.dailyGoal.day < today) {
+		if (!this.configIssue && !this.goalIssue && state.dailyGoal && state.dailyGoal.day < today) {
 			context.stage = 'day_rollover';
 			this.trace?.record('day_rollover.start', { run: context.run, trigger: 'dailyGoal_day_changed' });
 			const previous = items.find(item => item.occurrenceOf === state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),state.timezone)===state.dailyGoal!.day) ?? items.find(item => item.id === state.dailyGoal!.id);
@@ -309,6 +327,7 @@ export class ArrangeStore {
 			await this.load('before_' + trigger);
 			const initialize = this.configIssue?.fingerprint === 'missing' && ['create', 'configure', 'enableRewards'].includes(trigger);
 			if (this.configIssue && !presentation && !initialize) throw this.configIssue;
+			if (this.goalIssue && trigger === 'setDailyGoal') throw this.goalIssue;
 			this.explicitInitialize = initialize;
 			if (initialize) { this.configIssue = null; this.loadedFields = {}; }
 			try { return await action(); } finally { this.explicitInitialize = false; }
@@ -324,6 +343,7 @@ export class ArrangeStore {
 		if (this.configIssue || !this.loadedFields) throw this.configIssue ?? new ArrangeConfigError('missing', Error('配置尚未到达'));
 		const keys = (Object.keys(this.state) as (keyof ArrangeState)[]).filter(key => !sameValue(this.state[key], this.loadedState[key]));
 		if (['complete', 'archive', 'toggle_pin', 'batch_pin_slots'].includes(trigger) && !keys.includes('order') && !sameValue(this.state.order, this.loadedFields.order)) keys.push('order');
+		if (this.goalIssue && keys.includes('dailyGoal')) throw this.goalIssue;
 		if (!keys.length) return;
 		const base = this.loadedFields, proposed = copyState(this.state);
 		const run = this.trace?.nextRun() ?? 0;

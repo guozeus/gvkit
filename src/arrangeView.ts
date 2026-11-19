@@ -539,6 +539,7 @@ export class ArrangeView extends ItemView {
 					if (['view_open', 'view_enter', 'visibility'].includes(trigger) && this.isDisplayed()) await this.store.enter(trigger);
 					else await this.store.refresh(trigger);
 					if (this.store.configIssue) this.error(this.store.configIssue);
+					else if (this.store.goalIssue) this.error(this.store.goalIssue);
 					if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); }
 				} catch (error) { this.error(error); }
 				trigger = this.pendingReload ?? '';
@@ -840,7 +841,7 @@ export class ArrangeView extends ItemView {
 		if (!this.headline || this.closed) return;
 		this.cancelReorder?.();
 		const facts = this.store.facts();
-		if (this.store.state.dailyGoal && this.store.state.dailyGoal.day < facts.day) {
+		if (!this.store.goalIssue && this.store.state.dailyGoal && this.store.state.dailyGoal.day < facts.day) {
 			if (!this.busy) void this.reload();
 			return;
 		}
@@ -849,8 +850,8 @@ export class ArrangeView extends ItemView {
 		this.headline.empty();
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
 		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
-		this.headline.createSpan({ text: this.store.configIssue ? '配置异常 · 每日目标暂不可确认' : `今天达成 ${facts.x}/${facts.y}` });
-		this.headline.setAttribute('aria-label', this.store.configIssue ? '配置异常，每日目标暂不可确认' : `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
+		this.headline.createSpan({ text: this.store.configIssue ? '配置异常 · 每日目标暂不可确认' : `今天达成 ${facts.x}/${facts.y}${this.store.goalIssue ? ' · 昨日目标返回待确认' : ''}` });
+		this.headline.setAttribute('aria-label', this.store.configIssue ? '配置异常，每日目标暂不可确认' : this.store.goalIssue ? '昨日目标返回状态待确认，普通事项可正常保存' : `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
 		this.headline.dataset.color = facts.color;
 		this.headline.setAttribute('aria-pressed', String(this.filter === 'today' && !this.searchOpen && !this.choosingParent));
 		this.headline.disabled = Boolean(this.choosingParent) || Boolean(this.store.configIssue);
