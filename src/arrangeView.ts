@@ -4,7 +4,7 @@ import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
-import { ARRANGE_STATE_PATH, ArrangeCreateError, ArrangeStore, type ArrangeBatchAction, type ArrangeBatchTarget, type ArrangeBatchResult } from './arrangeStore';
+import { ARRANGE_STATE_PATH, ArrangeConfigError, ArrangeCreateError, ArrangeStore, type ArrangeBatchAction, type ArrangeBatchTarget, type ArrangeBatchResult } from './arrangeStore';
 import { deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
@@ -141,6 +141,8 @@ export class ArrangeView extends ItemView {
 	private savingEdit: Promise<boolean> | null = null;
 	private timer: number | null = null;
 	private today = '';
+	private reloadTask: Promise<void> | null = null;
+	private pendingReload: string | null = null;
 	private restoreHeader: (() => void) | null = null;
 	private cancelReorder: (() => void) | null = null;
 	private cancelResize: (() => void) | null = null;
@@ -488,7 +490,6 @@ export class ArrangeView extends ItemView {
 			});
 			bindViewport();
 		}
-		try { await this.store.enableRewards(); } catch (error) { this.error(error); }
 		await this.reload('view_open');
 		let shown = this.isDisplayed(), active = this.app.workspace.getActiveViewOfType(ArrangeView) === this;
 		this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
@@ -501,7 +502,6 @@ export class ArrangeView extends ItemView {
 			if (next && !shown) void this.reload('view_enter');
 			shown = next;
 		}));
-		this.app.workspace.onLayoutReady(() => { if (!this.closed && this.isDisplayed()) void this.reload('view_enter'); });
 	}
 	async onClose(): Promise<void> {
 		this.store.trace?.record('view.close');
@@ -527,15 +527,32 @@ export class ArrangeView extends ItemView {
 		const bounds = this.contentEl.getBoundingClientRect();
 		return !this.closed && !this.contentEl.ownerDocument.hidden && bounds.width > 0 && bounds.height > 0;
 	}
-	private async reload(trigger = 'view_reload'): Promise<void> {
-		this.store.trace?.record('view.reload', { trigger });
-		try {
-			if (['view_open', 'view_enter', 'visibility'].includes(trigger) && this.isDisplayed()) await this.store.enter();
-			else await this.store.load(trigger);
-			if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); } }
-		catch (error) { this.error(error); }
+	private reload(trigger = 'view_reload'): Promise<void> {
+		if (this.reloadTask) {
+			if (trigger === 'vault_change') this.pendingReload = trigger;
+			return this.reloadTask;
+		}
+		this.reloadTask = (async () => {
+			do {
+				this.pendingReload = null;
+				try {
+					if (['view_open', 'view_enter', 'visibility'].includes(trigger) && this.isDisplayed()) await this.store.enter(trigger);
+					else await this.store.refresh(trigger);
+					if (this.store.configIssue) this.error(this.store.configIssue);
+					if (!this.closed) { this.applyComposerSettings(); this.paintLists(); if (!this.keepEditor()) this.paintDetail(); }
+				} catch (error) { this.error(error); }
+				trigger = this.pendingReload ?? '';
+			} while (trigger && !this.closed);
+		})().finally(() => { this.reloadTask = null; });
+		return this.reloadTask;
 	}
-	private error(error: unknown): void { new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000); }
+	private error(error: unknown): void {
+		if (error instanceof ArrangeConfigError) {
+			if (!this.store.claimConfigNotice(error.fingerprint)) return;
+		}
+		new Notice(error instanceof Error ? error.message : '安排操作未成功，请重试', 7000);
+	}
+
 	private guardSmallEditorZoom(root: HTMLElement): void {
 		const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
 		if (!meta) return;
@@ -832,11 +849,11 @@ export class ArrangeView extends ItemView {
 		this.headline.empty();
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
 		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
-		this.headline.createSpan({ text: `今天达成 ${facts.x}/${facts.y}` });
-		this.headline.setAttribute('aria-label', `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
+		this.headline.createSpan({ text: this.store.configIssue ? '配置异常 · 每日目标暂不可确认' : `今天达成 ${facts.x}/${facts.y}` });
+		this.headline.setAttribute('aria-label', this.store.configIssue ? '配置异常，每日目标暂不可确认' : `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
 		this.headline.dataset.color = facts.color;
 		this.headline.setAttribute('aria-pressed', String(this.filter === 'today' && !this.searchOpen && !this.choosingParent));
-		this.headline.disabled = Boolean(this.choosingParent);
+		this.headline.disabled = Boolean(this.choosingParent) || Boolean(this.store.configIssue);
 		this.moreButton.disabled = Boolean(this.choosingParent);
 		this.hierarchyButton.disabled = Boolean(this.choosingParent);
 		const hierarchyLabel = `事项筛选：${{ all: '全部', roots: '无上级', leaves: '无下级' }[this.hierarchyFilter]}`;

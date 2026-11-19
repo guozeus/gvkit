@@ -20,6 +20,25 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 	return `---\n${stringifyYaml(fields)}---\n${body}`;
 }
 
+export class ArrangeConfigError extends Error {
+	constructor(readonly fingerprint: string, readonly cause: unknown) {
+		super('安排配置异常，已按本机顺序显示事项；每日目标和奖励暂不可确认。');
+	}
+}
+const copyState = (state: ArrangeState): ArrangeState => JSON.parse(JSON.stringify(state));
+const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+function validateConfig(fields: Record<string, unknown>): void {
+	if (fields.gvkit_arrange_state !== 1 || !Array.isArray(fields.order) || !fields.order.every(id => typeof id === 'string')
+		|| !Array.isArray(fields.achievedDays) || !fields.achievedDays.every(day => typeof day === 'string'))
+		throw Error('安排配置格式不正确');
+	const uuidLike = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{8}-/i.test(value);
+	const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+	if (fields.order.some(id => uuidLike(id) && !uuid.test(id as string))) throw Error('安排排序身份不完整');
+	const goal = fields.dailyGoal as ArrangeState['dailyGoal'];
+	if (goal && (typeof goal.day !== 'string' || !validDate(goal.day) || !(goal.id === null || typeof goal.id === 'string')
+		|| [goal.id, goal.returnedId].some(id => uuidLike(id) && !uuid.test(id!)))) throw Error('每日目标配置不完整');
+}
+
 export class ArrangeCreateError extends Error {
 	constructor(message: string, readonly createdId: string) { super(message); }
 }
@@ -40,11 +59,35 @@ export class ArrangeStore {
 	archivedDailyGoalCompletedAt: string | null = null;
 	private archivedCompletions: string[] = [];
 	private queue: Promise<unknown> = Promise.resolve();
-	constructor(private app: App, readonly trace?: ArrangeTrace) {}
+	configIssue: ArrangeConfigError | null = null;
+	private notifiedConfig: string | null = null;
+	private explicitInitialize = false;
+	claimConfigNotice(fingerprint: string): boolean {
+		if (this.notifiedConfig === fingerprint) return false;
+		this.notifiedConfig = fingerprint;
+		try { this.storage?.setItem(this.recoveryKey + ':notice', fingerprint); } catch { /* optional */ }
+		return true;
+	}
+	private loadedFields: Record<string, unknown> | null = null;
+	private loadedState = copyState(this.state);
+	private lastGood: ArrangeState | null = null;
+	private readonly recoveryKey: string;
+	private readonly storage: Storage | null;
+	constructor(private app: App, readonly trace?: ArrangeTrace) {
+		this.recoveryKey = 'gvkit:arrange:last-valid:v1:' + (app.vault.getName?.() ?? '');
+		let storage: Storage | null = null;
+		try { storage = typeof window !== 'undefined' ? window.localStorage : null; } catch { /* optional local recovery */ }
+		this.storage = storage;
+		try { this.notifiedConfig = storage?.getItem(this.recoveryKey + ':notice') ?? null; } catch { /* optional */ }
+		try {
+			const saved = JSON.parse(storage?.getItem(this.recoveryKey) ?? 'null');
+			if (saved) { validateConfig({ ...saved, gvkit_arrange_state: 1 }); this.lastGood = saved; }
+		} catch { /* never restore an invalid local snapshot */ }
+	}
 
 	async load(trigger = 'direct'): Promise<void> {
 		const run = this.trace?.nextRun() ?? 0;
-		const context = { run, stage: 'start' };
+		const context = { run, stage: 'start', trigger };
 		this.trace?.record('load.start', { run, trigger });
 		try {
 			await this.loadInner(context);
@@ -55,17 +98,22 @@ export class ArrangeStore {
 		}
 	}
 
-	private async loadInner(context: { run: number; stage: string }): Promise<void> {
+	private async loadInner(context: { run: number; stage: string; trigger: string }): Promise<void> {
 		let state = defaultArrangeState();
+		this.configIssue = null;
+		let source = '';
 		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
 		if (file instanceof TFile) {
+			try {
 			context.stage = 'read_config';
 			this.trace?.record('config.read.start', { run: context.run, mtime: file.stat?.mtime, size: file.stat?.size });
-			const source = await this.app.vault.read(file);
+			source = await this.app.vault.read(file);
 			this.trace?.record('config.read.ok', { run: context.run, ...configFingerprint(source) });
 			context.stage = 'parse_config';
 			this.trace?.record('config.parse.start', { run: context.run });
 			const { fields } = documentParts(source);
+			validateConfig(fields);
+			this.loadedFields = JSON.parse(JSON.stringify(fields));
 			this.trace?.record('config.parse.ok', { run: context.run });
 			context.stage = 'validate_config';
 			if (fields.gvkit_arrange_state !== 1) throw Error('安排配置版本不兼容');
@@ -135,7 +183,23 @@ export class ArrangeStore {
 			if (fields.pinColor === 'gold' || fields.pinColor === 'purple' || fields.pinColor === 'blue') state.pinColor = fields.pinColor;
 			if (typeof fields.dateHintColor === 'string' && Object.keys(DATE_HINT_COLORS).includes(fields.dateHintColor))
 				state.dateHintColor = fields.dateHintColor as ArrangeState['dateHintColor'];
-		} else this.trace?.record('config.missing', { run: context.run });
+			} catch (error) {
+				if (context.stage !== 'parse_config' && context.stage !== 'validate_config') throw error;
+				this.loadedFields = null;
+				this.configIssue = new ArrangeConfigError(configFingerprint(source).fingerprint!, error);
+				this.trace?.failure('config.invalid', error, { run: context.run, trigger: context.trigger, stage: context.stage, ...configFingerprint(source) });
+			}
+		} else {
+			this.loadedFields = null;
+			this.configIssue = new ArrangeConfigError('missing', Error('配置尚未到达'));
+			this.trace?.record('config.invalid', { run: context.run, trigger: context.trigger, stage: 'config_missing', fingerprint: 'missing' });
+		}
+		if (this.configIssue) {
+			state = copyState(this.lastGood ?? defaultArrangeState());
+			// Cached presentation must never guess today's goal or enable/award rewards.
+			state.dailyGoal = null;
+			state.rewardsEnabledAt = null;
+		}
 		context.stage = 'scan_items';
 		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
 		const identities=new Set<string>();
@@ -212,9 +276,16 @@ export class ArrangeStore {
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
 		this.state = state;
+		this.loadedState = copyState(state);
+		if (!this.configIssue) {
+			this.notifiedConfig = null;
+			try { this.storage?.removeItem(this.recoveryKey + ':notice'); } catch { /* optional */ }
+			this.lastGood = copyState(state);
+			try { this.storage?.setItem(this.recoveryKey, JSON.stringify(state)); } catch { /* display still works */ }
+		}
 		this.archivedCompletions = archivedCompletions;
 		this.archivedDailyGoalCompletedAt = archivedDailyGoalCompletedAt;
-		if (state.dailyGoal && state.dailyGoal.day < today) {
+		if (!this.configIssue && state.dailyGoal && state.dailyGoal.day < today) {
 			context.stage = 'day_rollover';
 			this.trace?.record('day_rollover.start', { run: context.run, trigger: 'dailyGoal_day_changed' });
 			const previous = items.find(item => item.occurrenceOf === state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),state.timezone)===state.dailyGoal!.day) ?? items.find(item => item.id === state.dailyGoal!.id);
@@ -230,10 +301,18 @@ export class ArrangeStore {
 		}
 		context.stage = 'done';
 	}
+	refresh(trigger = 'view_reload'): Promise<void> { return this.serial(trigger, async () => {}, true); }
 	facts() { return todayFacts(this.items, this.state, new Date(), this.archivedCompletions); }
 
-	private serial<T>(trigger: string, action: () => Promise<T>): Promise<T> {
-		const next = this.queue.then(async () => { await this.load('before_' + trigger); return action(); });
+	private serial<T>(trigger: string, action: () => Promise<T>, presentation = false): Promise<T> {
+		const next = this.queue.then(async () => {
+			await this.load('before_' + trigger);
+			const initialize = this.configIssue?.fingerprint === 'missing' && ['create', 'configure', 'enableRewards'].includes(trigger);
+			if (this.configIssue && !presentation && !initialize) throw this.configIssue;
+			this.explicitInitialize = initialize;
+			if (initialize) { this.configIssue = null; this.loadedFields = {}; }
+			try { return await action(); } finally { this.explicitInitialize = false; }
+		});
 		this.queue = next.catch(() => {});
 		return next;
 	}
@@ -242,39 +321,50 @@ export class ArrangeStore {
 			throw Error(`请先确认信息库已有目录「${path}」；插件不会改变一级、二级目录`);
 	}
 	private async saveState(trigger = 'internal'): Promise<void> {
+		if (this.configIssue || !this.loadedFields) throw this.configIssue ?? new ArrangeConfigError('missing', Error('配置尚未到达'));
+		const keys = (Object.keys(this.state) as (keyof ArrangeState)[]).filter(key => !sameValue(this.state[key], this.loadedState[key]));
+		if (['complete', 'archive', 'toggle_pin'].includes(trigger) && !keys.includes('order') && !sameValue(this.state.order, this.loadedFields.order)) keys.push('order');
+		if (!keys.length) return;
+		const base = this.loadedFields, proposed = copyState(this.state);
 		const run = this.trace?.nextRun() ?? 0;
-		let stage = 'folder_check';
-		this.trace?.record('save.start', { run, trigger });
-		try {
+		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
+		if (!(file instanceof TFile)) {
+			if (!this.explicitInitialize) throw new ArrangeConfigError('missing', Error('配置已移走'));
 			await this.requireFolder('settings/gvkit');
-			stage = 'lookup_config';
-			const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
-			if (file instanceof TFile) {
-				stage = 'vault_process';
-				await this.app.vault.process(file, source => {
-					this.trace?.record('save.process.source', { run, ...configFingerprint(source) });
-					stage = 'parse_config_before_write';
-					this.trace?.record('save.parse.start', { run });
-					const { fields, body } = documentParts(source);
-					this.trace?.record('save.parse.ok', { run });
-					stage = 'serialize_config';
-					const next = markdown({ ...fields, ...this.state, gvkit_arrange_state: 1 }, body);
-					this.trace?.record('save.proposed', { run, ...configFingerprint(next) });
-					stage = 'vault_process_commit';
-					return next;
-				});
-			} else {
-				stage = 'create_config';
-				const next = markdown({ gvkit_arrange_state: 1, ...this.state }, '# 安排\n\n全局执行顺序、界面设置与每日基础投入确认。\n');
-				this.trace?.record('save.proposed', { run, ...configFingerprint(next) });
-				await this.app.vault.create(ARRANGE_STATE_PATH, next);
-			}
-			this.trace?.record('save.ok', { run, trigger, stage: 'vault_committed' });
+			await this.app.vault.create(ARRANGE_STATE_PATH, markdown({ gvkit_arrange_state: 1, ...proposed }, '# 安排\n'));
+			this.loadedFields = { gvkit_arrange_state: 1, ...proposed }; this.loadedState = proposed;
+			return;
+		}
+		let writeFingerprint = '', candidateFingerprint = '';
+		try {
+			let committedFields = base;
+			await this.app.vault.process(file, source => {
+				writeFingerprint = configFingerprint(source).fingerprint!;
+				let fields: Record<string, unknown>, body: string;
+				try { ({ fields, body } = documentParts(source)); validateConfig(fields); }
+				catch (error) { throw new ArrangeConfigError(configFingerprint(source).fingerprint!, error); }
+				const changed = keys.filter(key => !sameValue(fields[key], proposed[key]));
+				for (const key of changed) if (!sameValue(fields[key], base[key])) {
+					this.trace?.record('write.conflict', { run, trigger, ...configFingerprint(source) });
+					throw Error('安排配置已被其他操作更新，本次配置未覆盖，请刷新后重试');
+				}
+				if (!changed.length) { committedFields = fields; return source; }
+				const nextFields = { ...fields };
+				for (const key of changed) nextFields[key] = proposed[key];
+				validateConfig(nextFields);
+				committedFields = nextFields;
+				const next = markdown(nextFields, body);
+				candidateFingerprint = configFingerprint(next).fingerprint!;
+				return next;
+			});
+			this.loadedFields = committedFields;
+			this.loadedState = proposed;
 		} catch (error) {
-			this.trace?.failure('save.fail', error, { run, trigger, stage });
+			this.trace?.failure('save.fail', error, { run, trigger, stage: 'config_commit', fingerprint: writeFingerprint, candidateFingerprint });
 			throw error;
 		}
 	}
+
 	private file(id: string): TFile {
 		const item = this.items.find(item => item.id === id);
 		const file = item && this.app.vault.getAbstractFileByPath(item.path);
@@ -570,8 +660,10 @@ export class ArrangeStore {
 		});
 	}
 	/** Called only on actual presentation, never on background load/refresh. */
-	enter(): Promise<void> {
-		return this.serial('enter', async () => {
+	enter(trigger = 'enter'): Promise<void> {
+		return this.serial(trigger, async () => {
+			if (this.configIssue) return;
+			if (!this.state.rewardsEnabledAt) { this.state.rewardsEnabledAt = new Date().toISOString(); await this.saveState('enable_rewards'); }
 			const day = dayKey(new Date(), this.state.timezone);
 			if (this.state.specialReminderDay === day) return;
 			const previous = this.state;
@@ -581,7 +673,7 @@ export class ArrangeStore {
 				this.state = previous;
 				throw Error('特别提醒置顶未保存，请重新进入自御重试');
 			}
-		});
+		}, true);
 	}
 	toggleSpecialReminder(id: string): Promise<void> {
 		return this.serial('toggleSpecialReminder', async () => {

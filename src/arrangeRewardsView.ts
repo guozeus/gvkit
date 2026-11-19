@@ -23,6 +23,13 @@ export class ArrangeRewardsView {
  levels() { return periods.map(period => rewardProgress(this.total(period), period).level); }
  paint(): void {
   this.top.empty();
+  this.top.disabled = Boolean(this.store.configIssue);
+  if (this.store.configIssue) {
+   this.open = false; this.panel.hidden = true;
+   this.top.createSpan({text:'奖励暂不可确认'});
+   this.top.setAttribute('aria-label','配置异常，奖励暂不可确认');
+   return;
+  }
   const points = this.total('day'), progress = rewardProgress(points, 'day');
   const summary = this.top.createSpan({ cls: 'gvkit-reward-summary gvkit-reward-bar' });
   summary.toggleClass('is-high', progress.level >= 8);

@@ -15,16 +15,16 @@ test('bounded per-device Trace survives recreation, redacts errors and never blo
   trace.record('load.start', { run: 1, trigger: 'view_open' });
   trace.failure('load.fail', { name: 'YAMLException', message: 'Implicit keys at line 20, column 1 SECRET_REMINDER' }, { run: 1, stage: 'parse_config' });
   const reopened = new ArrangeTrace(storage, 'test-trace', '0.6.62', 'ios');
-  assert.equal(reopened.export().events.length, 2);
-  assert.equal(reopened.export().events[1].detail.line, 20);
-  assert.equal(reopened.export().events[1].detail.column, 1);
-  assert.equal(reopened.export().events[1].detail.stage, 'parse_config');
+  assert.equal(reopened.export().events.length, 1);
+  assert.equal(reopened.export().events[0].detail.line, 20);
+  assert.equal(reopened.export().events[0].detail.column, 1);
+  assert.equal(reopened.export().events[0].detail.stage, 'parse_config');
   assert.ok(!JSON.stringify(reopened.export()).includes('SECRET_REMINDER'));
   assert.equal(reopened.export().events[0].platform, 'ios');
-  assert.equal(reopened.export().events[0].version, '0.6.61');
-  assert.match(reopened.export().events[0].time, /^\d{4}-/);
-  for (let i = 0; i < 300; i++) reopened.record('load.ok');
+  for (let i = 0; i < 300; i++) reopened.record('config.invalid', { fingerprint: String(i) });
   assert.equal(new ArrangeTrace(storage, 'test-trace', '0.6.63', 'ios').export().events.length, 240);
+  reopened.record('config.invalid', { fingerprint: '299' });
+  assert.equal(reopened.export().events.at(-1)?.count, 2);
   const brokenStorage = { getItem: () => { throw Error('failed'); }, setItem: () => { throw Error('failed'); } };
   const isolated = new ArrangeTrace(brokenStorage, 'restricted', '0.6.61', 'ios');
   assert.doesNotThrow(() => isolated.record('load.start'));
@@ -105,6 +105,7 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     const open=async()=>{
       const host=win.document.createElement('section');win.document.body.append(host);
       const root=win.document.createElement('main');host.append(root);
+      root.getBoundingClientRect=()=>({x:0,y:0,left:0,top:0,right:390,bottom:844,width:390,height:844,toJSON(){}});
       view=factory({app,contentEl:root,containerEl:host});active=view;await view.onOpen();
     };
     const copy=async()=>{
@@ -121,17 +122,15 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     const good=await vault.read(stateFile);
     assert.match(good,/"keyboardGap": 13/);
     let data=await copy(), events=data.configTrace.events as any[];
-    for(const name of ['view.open','config.read.ok','config.parse.ok','save.proposed','save.ok','vault.modify'])
-      assert.ok(events.some(x=>x.event===name),'missing '+name);
-    assert.ok(events.some(x=>x.event==='save.start'&&x.detail.trigger==='configure'));
-    assert.ok(events.some(x=>x.event==='vault.modify'&&x.detail.origin==='unknown'));
+    assert.ok(events.every(x=>x.event==='config.invalid'&&x.detail.stage==='config_missing'),'only the initial missing configuration is an anomaly');
     assert.equal(data.configTrace.persistence,'available');
     await view.onClose();active=null;
     handlers.clear();registerArrange(plugin);await open();
     data=await copy();events=data.configTrace.events;
-    assert.ok(events.some((x:any)=>x.event==='save.start'&&x.detail.trigger==='configure'),'trace persists across view recreation');
-    assert.ok(events.some((x:any)=>x.event==='view.close'));
+    assert.ok(events.every((x:any)=>x.event==='config.invalid'&&x.detail.stage==='config_missing'));
     await view.onClose();active=null;
+    // A real note remains readable even when the separate configuration cannot parse.
+    await vault.create('安排/待执行/task.md','---\n'+JSON.stringify({gvid:'task',gvkit_arrange:true,title:'Fixture item',parent:null,date:null,completed_at:null,pinned:false})+'\n---\n');
     const broken='---\n{"gvkit_arrange_state":1,"order":[\n---\nCONFIDENTIAL_NOTE\n';
     await writeFile(disk(stateFile.path),broken);stateFile.stat={mtime:Date.now(),size:broken.length};
     handlers.clear();registerArrange(plugin);emit('modify',stateFile);
@@ -140,14 +139,76 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     await assert.rejects(view.store.saveState('isolated_injection'));
     assert.equal(await vault.read(stateFile),broken);
     data=await copy();events=data.configTrace.events;
-    assert.ok(events.some((x:any)=>x.event==='load.fail'&&x.detail.stage==='parse_config'));
-    assert.ok(events.some((x:any)=>x.event==='save.fail'&&x.detail.stage==='parse_config_before_write'));
-    assert.ok(!events.some((x:any)=>x.event==='save.ok'&&x.detail.trigger==='isolated_injection'));
+    assert.ok(events.some((x:any)=>x.event==='config.invalid'&&x.detail.stage==='parse_config'));
+    assert.equal(view.store.items.length,1);
+    assert.equal(view.store.state.dailyGoal,null);
+    assert.equal(view.store.state.rewardsEnabledAt,null);
+    assert.match(view.contentEl.textContent,/Fixture item/);
+    const beforeNotices=(win as any).notices.filter((x:string)=>x.startsWith('安排配置异常')).length;
+    await Promise.all([view.reload('view_enter'),view.reload('visibility'),view.reload('vault_change')]);
+    assert.equal((win as any).notices.filter((x:string)=>x.startsWith('安排配置异常')).length,beforeNotices);
+    assert.equal(await vault.read(stateFile),broken,'presentation and repeated events do not repair/write shared bytes');
+    await assert.rejects(view.store.configure({keyboardGap:20}));
     assert.ok(!JSON.stringify(data).includes('CONFIDENTIAL_NOTE'));
     await view.onClose();active=null;
     await writeFile(disk(stateFile.path),good);handlers.clear();registerArrange(plugin);await open();
     await view.store.configure({keyboardGap:14});
     assert.match(await vault.read(stateFile),/"keyboardGap": 14/);
+    // A second client changes another field after this operation's load.
+    const originalProcess=vault.process;
+    let inject:Record<string,unknown>|null={submitColor:'navy',foreignSetting:'keep'};
+    vault.process=async(file:any,change:any)=>{
+      if(file.path==='settings/gvkit/arrange.md'&&inject){
+        const source=await vault.read(file),fm=JSON.parse(source.slice(4,source.indexOf('\n---',4)));
+        Object.assign(fm,inject);inject=null;
+        await writeFile(disk(file.path),'---\n'+JSON.stringify(fm)+'\n---\n');
+      }
+      return originalProcess(file,change);
+    };
+    await view.store.configure({keyboardGap:16});
+    let persisted=await vault.read(stateFile);
+    assert.match(persisted,/"submitColor": "navy"/);
+    assert.match(persisted,/"foreignSetting": "keep"/);
+    inject={keyboardGap:22};
+    await assert.rejects(view.store.configure({keyboardGap:17}),/其他操作更新/);
+    assert.match(await vault.read(stateFile),/"keyboardGap":22/,'same-field race is preserved, not overwritten');
+    vault.process=originalProcess;
+    await view.store.load();
+    let writes=0;vault.process=async(...args:any[])=>{writes++;return originalProcess(...args);};
+    await view.store.configure({keyboardGap:22});
+    assert.equal(writes,0,'unchanged business setting does not write');
+    vault.process=originalProcess;
+    // An offline instance must apply only its changed field after reconnection.
+    const offline=new view.store.constructor(app);
+    await offline.load();
+    await view.store.configure({submitArrowSize:30});
+    offline.state.keyboardGap=19;
+    await offline.saveState('offline_reconnect');
+    persisted=await vault.read(stateFile);
+    assert.match(persisted,/"submitArrowSize": 30/);
+    assert.match(persisted,/"keyboardGap": 19/);
+    // Reconnected bad content is not replaced with the offline client's good snapshot.
+    offline.state.keyboardGap=18;
+    await writeFile(disk(stateFile.path),broken);
+    await assert.rejects(offline.saveState('offline_bad_reconnect'));
+    assert.equal(await vault.read(stateFile),broken);
+    // Even a cold client with no cache lists source notes and makes no shared initialization.
+    await view.onClose();active=null;win.localStorage.clear();
+    handlers.clear();registerArrange(plugin);await open();
+    assert.equal(view.store.items.length,1);
+    assert.match(view.contentEl.textContent,/Fixture item/);
+    assert.equal(await vault.read(stateFile),broken);
+    // A parseable truncated UUID is also degraded, not treated as a healthy cache.
+    const malformed=JSON.parse(good.slice(4,good.indexOf('\n---',4)));
+    malformed.dailyGoal={day:'2026-11-19',id:null,returnedId:'01a1ab26-ca30-729'};
+    await writeFile(disk(stateFile.path),'---\n'+JSON.stringify(malformed)+'\n---\n');
+    await view.reload('vault_change');
+    assert.ok(view.store.configIssue);
+    assert.equal(view.store.items.length,1);
+    await assert.rejects(view.store.configure({keyboardGap:20}));
+    await writeFile(disk(stateFile.path),good);
+    await view.reload('vault_change');
+    assert.equal(view.store.configIssue,null);
     // Even real Store.load/save paths must proceed when diagnostic persistence rejects every access.
     view.store.trace = new ArrangeTrace({
       getItem: () => { throw Error('storage denied'); },

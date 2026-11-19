@@ -14,6 +14,7 @@ export interface ArrangeTraceDetail {
   kind?: string;
   line?: number;
   column?: number;
+  candidateFingerprint?: string;
 }
 
 interface TraceEntry {
@@ -25,6 +26,10 @@ interface TraceEntry {
   platform: string;
   event: string;
   detail: ArrangeTraceDetail;
+  count?: number;
+  lastTime?: string;
+  lastRun?: number;
+  lastTrigger?: string;
 }
 
 export function configFingerprint(source: string): Pick<ArrangeTraceDetail, 'chars' | 'fingerprint'> {
@@ -60,9 +65,13 @@ export class ArrangeTrace {
   nextRun(): number { return ++this.run; }
 
   record(event: string, detail: ArrangeTraceDetail = {}): void {
+    // Keep anomalies, not a journal of every successful load or write.
+    if (!/fail|invalid|conflict/.test(event)) return;
     try {
       const now = new Date();
-      this.events.push({
+      const previous = this.events.find(entry => entry.event === event && entry.detail.fingerprint === detail.fingerprint && entry.detail.stage === detail.stage);
+      if (previous && detail.fingerprint) { previous.count = (previous.count ?? 1) + 1; previous.lastTime = now.toISOString(); previous.lastRun = detail.run; previous.lastTrigger = detail.trigger; }
+      else this.events.push({
         time: now.toISOString(), offsetMinutes: -now.getTimezoneOffset(), session: this.session,
         seq: ++this.seq, version: this.version, platform: this.platform, event, detail,
       });
