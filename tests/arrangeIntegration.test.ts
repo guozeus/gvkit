@@ -430,6 +430,25 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			const batch=new ArrangeStore(app);await batch.load();
 			const a=await batch.create('批量A',null,'2026-11-14'),b=await batch.create('批量B',null,'2026-11-14');
 			const target=(ids:string[])=>ids.map(id=>{const x=batch.items.find((x:any)=>x.id===id);return {id:x.id,title:x.title,occurrenceId:x.occurrenceId,repeatInstance:x.repeatInstance};});
+			// An externally synced note appears in the effective order before it has a disk slot.
+			const external='external-batch-pin-test';
+			await vault.create('安排/待执行/'+external+'.md','---\n'+JSON.stringify({gvid:external,gvkit_arrange:true,title:'外部同步批量钉住回归',parent:null,date:null,completed_at:null,pinned:false})+'\n---\n');
+			await batch.load();
+			const effectiveSlots=[...batch.state.order];
+			assert.ok(effectiveSlots.includes(external));
+			const beforePin=JSON.parse((await vault.read(stateFile)).split('---')[1]);
+			assert.ok(!beforePin.order.includes(external),'external note has not been written into shared order');
+			await batch.applyBatch(target([a]),{kind:'pin',value:true});
+			assert.deepEqual(batch.state.order,effectiveSlots,'newly pinned item retains its effective slot');
+			const savedSlots=JSON.parse((await vault.read(stateFile)).split('---')[1]).order;
+			assert.deepEqual(savedSlots,effectiveSlots,'batch pin persists effective slots including external notes');
+			const reopenedSlots=new ArrangeStore(app);await reopenedSlots.load();
+			assert.deepEqual(reopenedSlots.state.order,effectiveSlots,'batch pin slots survive reopening');
+			const pinProcess=vault.process;let configWrites=0;
+			vault.process=async(file,change)=>{if(file===stateFile)configWrites++;return pinProcess(file,change);};
+			try { await batch.applyBatch(target([a]),{kind:'pin',value:true}); } finally { vault.process=pinProcess; }
+			assert.equal(configWrites,0,'pinning an already pinned item does not rewrite shared configuration');
+			await batch.applyBatch(target([a]),{kind:'pin',value:false});
 			await batch.togglePin(a);const order=[...batch.state.order];
 			let result=await batch.applyBatch(target([a,b]),{kind:'pin',value:true});assert.equal(result.failed.length,0);
 			assert.ok(batch.items.find((x:any)=>x.id===a).pinned&&batch.items.find((x:any)=>x.id===b).pinned);assert.deepEqual(batch.state.order,order);

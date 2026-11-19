@@ -323,7 +323,7 @@ export class ArrangeStore {
 	private async saveState(trigger = 'internal'): Promise<void> {
 		if (this.configIssue || !this.loadedFields) throw this.configIssue ?? new ArrangeConfigError('missing', Error('配置尚未到达'));
 		const keys = (Object.keys(this.state) as (keyof ArrangeState)[]).filter(key => !sameValue(this.state[key], this.loadedState[key]));
-		if (['complete', 'archive', 'toggle_pin'].includes(trigger) && !keys.includes('order') && !sameValue(this.state.order, this.loadedFields.order)) keys.push('order');
+		if (['complete', 'archive', 'toggle_pin', 'batch_pin_slots'].includes(trigger) && !keys.includes('order') && !sameValue(this.state.order, this.loadedFields.order)) keys.push('order');
 		if (!keys.length) return;
 		const base = this.loadedFields, proposed = copyState(this.state);
 		const run = this.trace?.nextRun() ?? 0;
