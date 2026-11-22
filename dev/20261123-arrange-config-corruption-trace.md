@@ -23,4 +23,4 @@
 ## 后续边界
 阶段0不是根治；须按 dev/20261121-arrange-v2-storage-proposal.md 的已经审核共识推进 v2 阶段1（分领域＋不可变操作记录＋本地投影＋一次性切换权威），让旧YAML文本合并不能污染新权威。至少验收同机连续进入、跨天自动行为、迟到版本、真机iOS及旧端重新同步。新 Trace 只有 iPhone 通过 BRAT 升级0.6.78后才能捕捉后续成功写入，不能追补旧版历史。
 
-发布核验：待本轮完成后更新。
+发布核验：0.6.78 正式发布，Git提交/仓库master/tag均指向 c525a8e696cbd72d4477b09257dfd52e15360457。GitHub Release https://github.com/guozeus/gvkit/releases/tag/0.6.78 非草稿、非预发布、最新版本；匿名 GET 三安装资产 main.js / manifest.json / styles.css 均 HTTP 200 且 SHA-256 与本次实际生产构建逐字节相同。GitHub 仓库原 origin.pushurl 防误推封锁保持不变。手机端 BRAT 尚须制作人自行更新完成真机复验。
