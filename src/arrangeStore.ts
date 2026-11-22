@@ -122,7 +122,8 @@ export class ArrangeStore {
 			context.stage = 'read_config';
 			this.trace?.record('config.read.start', { run: context.run, mtime: file.stat?.mtime, size: file.stat?.size });
 			source = await this.app.vault.read(file);
-			this.trace?.record('config.read.ok', { run: context.run, ...configFingerprint(source) });
+			this.trace?.record('config.read.ok', { run: context.run, trigger: context.trigger, mtime: file.stat?.mtime,
+				size: file.stat?.size, ...configFingerprint(source) });
 			context.stage = 'parse_config';
 			this.trace?.record('config.parse.start', { run: context.run });
 			const { fields } = documentParts(source);
@@ -347,11 +348,25 @@ export class ArrangeStore {
 		if (!keys.length) return;
 		const base = this.loadedFields, proposed = copyState(this.state);
 		const run = this.trace?.nextRun() ?? 0;
+		this.trace?.record('write.start', { run, trigger, keys });
 		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
 		if (!(file instanceof TFile)) {
 			if (!this.explicitInitialize) throw new ArrangeConfigError('missing', Error('配置已移走'));
 			await this.requireFolder('settings/gvkit');
-			await this.app.vault.create(ARRANGE_STATE_PATH, markdown({ gvkit_arrange_state: 1, ...proposed }, '# 安排\n'));
+			const next = markdown({ gvkit_arrange_state: 1, ...proposed }, '# 安排\n');
+			const candidateFingerprint = configFingerprint(next).fingerprint!;
+			this.trace?.record('write.candidate', { run, trigger, keys, ...configFingerprint(next),
+				sourceFingerprint: 'missing', candidateFingerprint });
+			const created = await this.app.vault.create(ARRANGE_STATE_PATH, next);
+			this.trace?.record('write.process.ok', { run, trigger, keys, sourceFingerprint: 'missing', candidateFingerprint });
+			try {
+				const observed = configFingerprint(await this.app.vault.read(created));
+				this.trace?.record(observed.fingerprint === candidateFingerprint ? 'write.readback.ok' : 'write.readback.mismatch',
+					{ run, trigger, keys, ...observed, sourceFingerprint: 'missing',
+						candidateFingerprint, readbackFingerprint: observed.fingerprint });
+			} catch (error) {
+				this.trace?.failure('write.readback.fail', error, { run, trigger, stage: 'post_create', candidateFingerprint });
+			}
 			this.loadedFields = { gvkit_arrange_state: 1, ...proposed }; this.loadedState = proposed;
 			return;
 		}
@@ -360,6 +375,7 @@ export class ArrangeStore {
 			let committedFields = base;
 			await this.app.vault.process(file, source => {
 				writeFingerprint = configFingerprint(source).fingerprint!;
+				this.trace?.record('write.source', { run, trigger, keys, ...configFingerprint(source) });
 				let fields: Record<string, unknown>, body: string;
 				try { ({ fields, body } = documentParts(source)); validateConfig(fields); }
 				catch (error) { throw new ArrangeConfigError(configFingerprint(source).fingerprint!, error); }
@@ -375,8 +391,25 @@ export class ArrangeStore {
 				committedFields = nextFields;
 				const next = markdown(nextFields, body);
 				candidateFingerprint = configFingerprint(next).fingerprint!;
+				this.trace?.record('write.candidate', { run, trigger, keys, ...configFingerprint(next),
+					sourceFingerprint: writeFingerprint, candidateFingerprint });
 				return next;
 			});
+			this.trace?.record(candidateFingerprint ? 'write.process.ok' : 'write.noop', {
+				run, trigger, keys, sourceFingerprint: writeFingerprint, candidateFingerprint,
+			});
+			// Observe the actual bytes after process; a later Sync merge may replace them.
+			// Readback is diagnostic only: a read failure must not undo a successful commit.
+			try {
+				const after = await this.app.vault.read(file), observed = configFingerprint(after);
+				this.trace?.record(candidateFingerprint && candidateFingerprint !== observed.fingerprint
+					? 'write.readback.mismatch' : 'write.readback.ok',
+					{ run, trigger, keys, ...observed, sourceFingerprint: writeFingerprint,
+						candidateFingerprint, readbackFingerprint: observed.fingerprint });
+			} catch (error) {
+				this.trace?.failure('write.readback.fail', error, { run, trigger, stage: 'post_process',
+					sourceFingerprint: writeFingerprint, candidateFingerprint });
+			}
 			this.loadedFields = committedFields;
 			this.loadedState = proposed;
 		} catch (error) {
@@ -687,8 +720,12 @@ export class ArrangeStore {
 			const day = dayKey(new Date(), this.state.timezone);
 			if (this.state.specialReminderDay === day) return;
 			const previous = this.state;
+			this.trace?.record('special_reminders.start', { trigger });
 			this.state = { ...previous, order: reminderTopInOrder(previous.order, this.items), specialReminderDay: day };
-			try { await this.saveState('special_reminders'); }
+			try {
+				await this.saveState('special_reminders');
+				this.trace?.record('special_reminders.ok', { trigger });
+			}
 			catch {
 				this.state = previous;
 				throw Error('特别提醒置顶未保存，请重新进入自御重试');

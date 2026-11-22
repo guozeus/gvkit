@@ -5,7 +5,7 @@ import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeConfigError, ArrangeCreateError, ArrangeStore, type ArrangeBatchAction, type ArrangeBatchTarget, type ArrangeBatchResult } from './arrangeStore';
-import { deviceArrangeTrace } from './arrangeTrace';
+import { configFingerprint, deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
 import { ArrangeTips, renderArrangeTipsSettings } from './arrangeTips';
@@ -53,9 +53,12 @@ export function registerArrange(plugin: Plugin): void {
 	const store = new ArrangeStore(plugin.app, trace);
 	// Vault notifications can be from local code, another plugin, or Sync: no source attribution here.
 	plugin.registerEvent(plugin.app.vault.on('modify', file => {
-		if (file instanceof TFile && file.path === ARRANGE_STATE_PATH) trace.record('vault.modify', {
-			origin: 'unknown', mtime: file.stat?.mtime, size: file.stat?.size,
-		});
+		if (!(file instanceof TFile) || file.path !== ARRANGE_STATE_PATH) return;
+		const observed = { origin: 'unknown', mtime: file.stat?.mtime, size: file.stat?.size };
+		trace.record('vault.modify', observed);
+		void plugin.app.vault.read(file).then(source => trace.record('vault.observe', {
+			...observed, ...configFingerprint(source),
+		})).catch(error => trace.failure('vault.observe.fail', error, { stage: 'vault_change' }));
 	}));
 	plugin.registerView(ARRANGE_VIEW, leaf => new ArrangeView(leaf, store));
 	const syncChrome = () => document.body.classList.toggle(
@@ -68,6 +71,12 @@ export function registerArrange(plugin: Plugin): void {
 		if (Platform.isMobileApp) syncChrome();
 	};
 	plugin.addCommand({ id: 'open-arrange', name: '打开自御安排', callback: () => { void open(); } });
+	// Available even if the Arrange view fails to initialize or display.
+	plugin.addCommand({ id: 'copy-arrange-config-trace', name: '复制自御配置诊断日志', callback: () => {
+		void navigator.clipboard.writeText(JSON.stringify({ time: new Date().toISOString(), configTrace: trace.export() }, null, 2))
+			.then(() => new Notice('已复制自御配置诊断日志'))
+			.catch(() => new Notice('复制失败，请重试'));
+	} });
 	plugin.addRibbonIcon('list-checks', '自御安排', () => { void open(); });
 	plugin.registerObsidianProtocolHandler('gvkit-arrange', () => {
 		plugin.app.workspace.onLayoutReady(() => { void open(); });

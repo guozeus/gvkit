@@ -15,10 +15,13 @@ test('bounded per-device Trace survives recreation, redacts errors and never blo
   trace.record('load.start', { run: 1, trigger: 'view_open' });
   trace.failure('load.fail', { name: 'YAMLException', message: 'Implicit keys at line 20, column 1 SECRET_REMINDER' }, { run: 1, stage: 'parse_config' });
   const reopened = new ArrangeTrace(storage, 'test-trace', '0.6.62', 'ios');
-  assert.equal(reopened.export().events.length, 1);
-  assert.equal(reopened.export().events[0].detail.line, 20);
-  assert.equal(reopened.export().events[0].detail.column, 1);
-  assert.equal(reopened.export().events[0].detail.stage, 'parse_config');
+  assert.equal(reopened.export().events.length, 2);
+  assert.equal(reopened.export().events[0].event, 'load.start');
+  assert.equal(reopened.export().events[1].detail.line, 20);
+  assert.equal(reopened.export().events[1].detail.column, 1);
+  assert.equal(reopened.export().events[1].detail.stage, 'parse_config');
+  assert.equal(reopened.export().device, trace.export().device, 'device correlation persists between sessions');
+  assert.equal(reopened.export().incidents[0].events.length, 2, 'incident freezes the preceding load boundary');
   assert.ok(!JSON.stringify(reopened.export()).includes('SECRET_REMINDER'));
   assert.equal(reopened.export().events[0].platform, 'ios');
   for (let i = 0; i < 300; i++) reopened.record('config.invalid', { fingerprint: String(i) });
@@ -100,8 +103,9 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     };
     const app:any={vault,scope:{},workspace:{getActiveViewOfType:()=>active,getLeavesOfType:()=>[],on:()=>({})}};
     let factory:(leaf:any)=>any=()=>{throw Error('factory missing')};
+    const commands=new Map<string,()=>void>();
     const plugin:any={app,manifest:{version:'0.6.61'},registerView:(_id:string,fn:any)=>{factory=fn},
-      registerEvent:()=>{},addCommand:()=>{},addRibbonIcon:()=>{},registerObsidianProtocolHandler:()=>{}};
+      registerEvent:()=>{},addCommand:(value:any)=>{commands.set(value.id,value.callback)},addRibbonIcon:()=>{},registerObsidianProtocolHandler:()=>{}};
     const open=async()=>{
       const host=win.document.createElement('section');win.document.body.append(host);
       const root=win.document.createElement('main');host.append(root);
@@ -122,12 +126,21 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     const good=await vault.read(stateFile);
     assert.match(good,/"keyboardGap": 13/);
     let data=await copy(), events=data.configTrace.events as any[];
-    assert.ok(events.every(x=>x.event==='config.invalid'&&x.detail.stage==='config_missing'),'only the initial missing configuration is an anomaly');
+    assert.ok(events.some(x=>x.event==='config.invalid'&&x.detail.stage==='config_missing'));
+    assert.ok(events.some(x=>x.event==='write.candidate'));
+    assert.ok(events.some(x=>x.event==='write.process.ok'));
+    assert.ok(events.some(x=>x.event==='write.readback.ok'));
+    assert.ok(data.configTrace.incidents.some((x:any)=>x.event==='config.invalid'));
     assert.equal(data.configTrace.persistence,'available');
+    assert.ok(commands.has('copy-arrange-config-trace'),'command palette can export diagnostics without view');
+    commands.get('copy-arrange-config-trace')!();
+    await Promise.resolve();await Promise.resolve();
+    assert.ok(JSON.parse(copied.at(-1)!).configTrace.events.some((x:any)=>x.event==='write.candidate'));
     await view.onClose();active=null;
     handlers.clear();registerArrange(plugin);await open();
     data=await copy();events=data.configTrace.events;
-    assert.ok(events.every((x:any)=>x.event==='config.invalid'&&x.detail.stage==='config_missing'));
+    assert.ok(events.some((x:any)=>x.event==='config.invalid'&&x.detail.stage==='config_missing'));
+    assert.ok(events.some((x:any)=>x.event==='write.readback.ok'),'success boundaries persist after reload');
     await view.onClose();active=null;
     // A real note remains readable even when the separate configuration cannot parse.
     await vault.create('安排/待执行/task.md','---\n'+JSON.stringify({gvid:'task',gvkit_arrange:true,title:'Fixture item',parent:null,date:null,completed_at:null,pinned:false})+'\n---\n');
@@ -140,6 +153,7 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     assert.equal(await vault.read(stateFile),broken);
     data=await copy();events=data.configTrace.events;
     assert.ok(events.some((x:any)=>x.event==='config.invalid'&&x.detail.stage==='parse_config'));
+    assert.ok(events.some((x:any)=>x.event==='vault.observe' && x.detail.fingerprint===configFingerprint(broken).fingerprint), 'external modified file fingerprint is observed');
     assert.equal(view.store.items.length,1);
     assert.equal(view.store.state.dailyGoal,null);
     assert.equal(view.store.state.rewardsEnabledAt,null);
@@ -150,6 +164,17 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
     assert.equal(await vault.read(stateFile),broken,'presentation and repeated events do not repair/write shared bytes');
     await assert.rejects(view.store.configure({keyboardGap:20}));
     assert.ok(!JSON.stringify(data).includes('CONFIDENTIAL_NOTE'));
+    await view.onClose();active=null;
+    // Real incident signature (11/23): valid YAML containing a glued UUID and duplicates.
+    const merged=JSON.parse(good.slice(4,good.indexOf('\n---',4)));
+    const valid='12345678-1111-7222-8333-444444444444';
+    merged.order=[valid,valid+'5555-6666-7777-8888-999999999999',valid];
+    const mergedSource='---\n'+JSON.stringify(merged)+'\n---\n';
+    await writeFile(disk(stateFile.path),mergedSource);
+    handlers.clear();registerArrange(plugin);await open();
+    assert.ok(view.store.configIssue,'merged UUID corruption is detected before it can be re-saved');
+    assert.equal(await vault.read(stateFile),mergedSource,'suspicious synced text is not rewritten');
+    assert.ok((await copy()).configTrace.events.some((x:any)=>x.event==='config.invalid'));
     await view.onClose();active=null;
     await writeFile(disk(stateFile.path),good);handlers.clear();registerArrange(plugin);await open();
     await view.store.configure({keyboardGap:14});
