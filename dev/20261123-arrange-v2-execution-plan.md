@@ -68,6 +68,6 @@
 - 11/23事故与0.6.78已完成Trace：dev/20261123-arrange-config-corruption-trace.md。
 - 11/21以来设计积累：dev/20261121-arrange-v2-storage-proposal.md。
 - 11/22两轮独立审核：dev/20261122-arrange-v2-independent-review.md。
-- 本轮独立原生审核：dev/20261123-arrange-v2-independent-codex-review.md。
-- 本轮GPT独立审核：https://chatgpt.com/c/6b03ad41-7a9c-83e8-b686-bb75054a3652。
+- 本轮独立原生审核及二轮确认：dev/20261123-arrange-v2-independent-codex-review.md。
+- 本轮GPT独立审核原文：dev/20261123-arrange-v2-independent-gpt-review.md；原会话：https://chatgpt.com/c/6b03ad41-7a9c-83e8-b686-bb75054a3652。
 - 制作阶段从A开始；这次只审方案，**v2目前没有实际制作、真机验收或迁移。**
