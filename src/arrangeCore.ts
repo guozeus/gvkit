@@ -116,14 +116,21 @@ export function defaultArrangeState(): ArrangeState {
 /** Missing IDs are new externally created items; stale/completed IDs are not slots. */
 export function pendingOrder(items: ArrangeItem[], order: string[]): string[] {
 	const pending = new Set(items.filter(item => !item.completedAt).map(item => item.id));
-	const known = new Set(order);
-	let result = order.filter((id, index) => pending.has(id) && order.indexOf(id) === index);
-	for (const item of items.filter(item => pending.has(item.id) && !known.has(item.id))) {
-		// A restored or externally created item occupies the first free slot too.
-		// A new ID has no protected position until it enters the global sequence.
-		result = moveInOrder(result, items.filter(other => other.id !== item.id), item.id);
+	const known = new Set<string>();
+	const result = order.filter(id => { if (!pending.has(id) || known.has(id)) return false; known.add(id); return true; });
+	const fresh = items.filter(item => pending.has(item.id) && !known.has(item.id));
+	if (!fresh.length) return result;
+	const pinned = new Set(items.filter(item => item.pinned && known.has(item.id)).map(item => item.id));
+	const slots = new Map<number, string>();
+	result.forEach((id, index) => { if (pinned.has(id)) slots.set(index, id); });
+	let firstFree = 0;
+	for (const item of fresh) if (item.pinned) {
+		while (slots.has(firstFree)) firstFree++;
+		slots.set(firstFree, item.id);
 	}
-	return result;
+	const movable = [...fresh.filter(item => !item.pinned).map(item => item.id).reverse(), ...result.filter(id => !pinned.has(id))];
+	let cursor = 0;
+	return Array.from({ length: result.length + fresh.length }, (_, index) => slots.get(index) ?? movable[cursor++]!);
 }
 
 /** Ordinary moves protect pinned slots; moving a pinned ID permutes only pinned slots. */

@@ -1,3 +1,4 @@
+import { defaultArrangeState } from '../src/arrangeCore.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
@@ -97,6 +98,7 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
       getAbstractFileByPath:(path:string)=>files.get(path)??null,
       on:(kind:string,fn:(file:any)=>void)=>{handlers.set(kind,[...(handlers.get(kind)??[]),fn]);return {}},
       read:(file:any)=>readFile(disk(file.path),'utf8'),
+      createFolder:async(path:string)=>{files.set(path,new TFolder())},
       create:async (path:string,source:string)=>{await writeFile(disk(path),source);const f=new TFile(path);f.stat.size=source.length;files.set(path,f);emit('create',f);return f},
       process:async (file:any,change:(source:string)=>string)=>{const next=change(await readFile(disk(file.path),'utf8'));
         await writeFile(disk(file.path),next);file.stat={mtime:Date.now(),size:next.length};emit('modify',file)}
@@ -119,132 +121,30 @@ test('isolated Store/View: config save, Vault event, damaged parse, close/reopen
       assert.ok(entry,'existing menu exposes export');
       await entry.click();return JSON.parse(copied.at(-1)!);
     };
-    registerArrange(plugin);
-    await open();
+    const state={...defaultArrangeState(),listFontSize:25};
+    const legacy='---\n'+JSON.stringify({gvkit_arrange_state:1,...state})+'\n---\n';
+    const stateFile=await vault.create('settings/gvkit/arrange.md',legacy);
+    await vault.createFolder('settings/gvkit/arrange-v2');
+    await vault.create('settings/gvkit/arrange-v2/activation.md','# GVKit Arrange v2\n\n```json\n'+JSON.stringify({schema:2,epoch:'trace',state,legacy})+'\n```\n');
+    registerArrange(plugin);await open();
     await view.store.configure({keyboardGap:13});
-    const stateFile=files.get('settings/gvkit/arrange.md')!;
-    const good=await vault.read(stateFile);
-    assert.match(good,/"keyboardGap": 13/);
-    let data=await copy(), events=data.configTrace.events as any[];
-    assert.ok(events.some(x=>x.event==='config.invalid'&&x.detail.stage==='config_missing'));
-    assert.ok(events.some(x=>x.event==='write.candidate'));
-    assert.ok(events.some(x=>x.event==='write.process.ok'));
-    assert.ok(events.some(x=>x.event==='write.readback.ok'));
-    assert.ok(data.configTrace.incidents.some((x:any)=>x.event==='config.invalid'));
-    assert.equal(data.configTrace.persistence,'available');
-    assert.ok(commands.has('copy-arrange-config-trace'),'command palette can export diagnostics without view');
-    commands.get('copy-arrange-config-trace')!();
-    await Promise.resolve();await Promise.resolve();
-    assert.ok(JSON.parse(copied.at(-1)!).configTrace.events.some((x:any)=>x.event==='write.candidate'));
-    await view.onClose();active=null;
-    handlers.clear();registerArrange(plugin);await open();
-    data=await copy();events=data.configTrace.events;
-    assert.ok(events.some((x:any)=>x.event==='config.invalid'&&x.detail.stage==='config_missing'));
-    assert.ok(events.some((x:any)=>x.event==='write.readback.ok'),'success boundaries persist after reload');
-    await view.onClose();active=null;
-    // A real note remains readable even when the separate configuration cannot parse.
+    let data=await copy();
+    assert.ok(data.configTrace.events.some((x:any)=>x.event==='v2.write.readback.ok'));
+    assert.ok(commands.has('copy-arrange-config-trace'));
+    await view.onClose();active=null;handlers.clear();registerArrange(plugin);await open();
+    assert.equal(view.store.state.keyboardGap,13);
+    assert.equal(view.store.state.listFontSize,25);
     await vault.create('安排/待执行/task.md','---\n'+JSON.stringify({gvid:'task',gvkit_arrange:true,title:'Fixture item',parent:null,date:null,completed_at:null,pinned:false})+'\n---\n');
     const broken='---\n{"gvkit_arrange_state":1,"order":[\n---\nCONFIDENTIAL_NOTE\n';
-    await writeFile(disk(stateFile.path),broken);stateFile.stat={mtime:Date.now(),size:broken.length};
-    handlers.clear();registerArrange(plugin);emit('modify',stateFile);
-    await open(); // load fails and cannot overwrite damaged Markdown.
-    assert.equal(await vault.read(stateFile),broken);
-    await assert.rejects(view.store.saveState('isolated_injection'));
-    assert.equal(await vault.read(stateFile),broken);
-    data=await copy();events=data.configTrace.events;
-    assert.ok(events.some((x:any)=>x.event==='config.invalid'&&x.detail.stage==='parse_config'));
-    assert.ok(events.some((x:any)=>x.event==='vault.observe' && x.detail.fingerprint===configFingerprint(broken).fingerprint), 'external modified file fingerprint is observed');
-    assert.equal(view.store.items.length,1);
-    assert.equal(view.store.state.dailyGoal,null);
-    assert.equal(view.store.state.rewardsEnabledAt,null);
+    await vault.process(stateFile,()=>broken);await view.reload('vault_change');
+    assert.equal(view.store.configIssue,null);assert.equal(view.store.state.listFontSize,25);
     assert.match(view.contentEl.textContent,/Fixture item/);
-    const beforeNotices=(win as any).notices.filter((x:string)=>x.startsWith('安排配置异常')).length;
-    await Promise.all([view.reload('view_enter'),view.reload('visibility'),view.reload('vault_change')]);
-    assert.equal((win as any).notices.filter((x:string)=>x.startsWith('安排配置异常')).length,beforeNotices);
-    assert.equal(await vault.read(stateFile),broken,'presentation and repeated events do not repair/write shared bytes');
-    await assert.rejects(view.store.configure({keyboardGap:20}));
+    await view.store.configure({keyboardGap:20});assert.equal(await vault.read(stateFile),broken);
+    await vault.create('settings/gvkit/arrange-v2/ops/broken.md','CONFIDENTIAL_NOTE');await view.reload('vault_change');
+    data=await copy();assert.ok(data.configTrace.events.some((x:any)=>x.event==='v2.operation.invalid'));
     assert.ok(!JSON.stringify(data).includes('CONFIDENTIAL_NOTE'));
-    await view.onClose();active=null;
-    // Real incident signature (11/23): valid YAML containing a glued UUID and duplicates.
-    const merged=JSON.parse(good.slice(4,good.indexOf('\n---',4)));
-    const valid='12345678-1111-7222-8333-444444444444';
-    merged.order=[valid,valid+'5555-6666-7777-8888-999999999999',valid];
-    const mergedSource='---\n'+JSON.stringify(merged)+'\n---\n';
-    await writeFile(disk(stateFile.path),mergedSource);
-    handlers.clear();registerArrange(plugin);await open();
-    assert.ok(view.store.configIssue,'merged UUID corruption is detected before it can be re-saved');
-    assert.equal(await vault.read(stateFile),mergedSource,'suspicious synced text is not rewritten');
-    assert.ok((await copy()).configTrace.events.some((x:any)=>x.event==='config.invalid'));
-    await view.onClose();active=null;
-    await writeFile(disk(stateFile.path),good);handlers.clear();registerArrange(plugin);await open();
-    await view.store.configure({keyboardGap:14});
-    assert.match(await vault.read(stateFile),/"keyboardGap": 14/);
-    // A second client changes another field after this operation's load.
-    const originalProcess=vault.process;
-    let inject:Record<string,unknown>|null={submitColor:'navy',foreignSetting:'keep'};
-    vault.process=async(file:any,change:any)=>{
-      if(file.path==='settings/gvkit/arrange.md'&&inject){
-        const source=await vault.read(file),fm=JSON.parse(source.slice(4,source.indexOf('\n---',4)));
-        Object.assign(fm,inject);inject=null;
-        await writeFile(disk(file.path),'---\n'+JSON.stringify(fm)+'\n---\n');
-      }
-      return originalProcess(file,change);
-    };
-    await view.store.configure({keyboardGap:16});
-    let persisted=await vault.read(stateFile);
-    assert.match(persisted,/"submitColor": "navy"/);
-    assert.match(persisted,/"foreignSetting": "keep"/);
-    inject={keyboardGap:22};
-    await assert.rejects(view.store.configure({keyboardGap:17}),/其他操作更新/);
-    assert.match(await vault.read(stateFile),/"keyboardGap":22/,'same-field race is preserved, not overwritten');
-    vault.process=originalProcess;
-    await view.store.load();
-    let writes=0;vault.process=async(...args:any[])=>{writes++;return originalProcess(...args);};
-    await view.store.configure({keyboardGap:22});
-    assert.equal(writes,0,'unchanged business setting does not write');
-    vault.process=originalProcess;
-    // An offline instance must apply only its changed field after reconnection.
-    const offline=new view.store.constructor(app);
-    await offline.load();
-    await view.store.configure({submitArrowSize:30});
-    offline.state.keyboardGap=19;
-    await offline.saveState('offline_reconnect');
-    persisted=await vault.read(stateFile);
-    assert.match(persisted,/"submitArrowSize": 30/);
-    assert.match(persisted,/"keyboardGap": 19/);
-    // Reconnected bad content is not replaced with the offline client's good snapshot.
-    offline.state.keyboardGap=18;
-    await writeFile(disk(stateFile.path),broken);
-    await assert.rejects(offline.saveState('offline_bad_reconnect'));
-    assert.equal(await vault.read(stateFile),broken);
-    // Even a cold client with no cache lists source notes and makes no shared initialization.
-    await view.onClose();active=null;win.localStorage.clear();
-    handlers.clear();registerArrange(plugin);await open();
-    assert.equal(view.store.items.length,1);
-    assert.match(view.contentEl.textContent,/Fixture item/);
-    assert.equal(await vault.read(stateFile),broken);
-    // A parseable truncated UUID is also degraded, not treated as a healthy cache.
-    const malformed=JSON.parse(good.slice(4,good.indexOf('\n---',4)));
-    malformed.dailyGoal={day:'2026-11-19',id:null,returnedId:'01a1ab26-ca30-729'};
-    await writeFile(disk(stateFile.path),'---\n'+JSON.stringify(malformed)+'\n---\n');
-    await view.reload('vault_change');
-    assert.equal(view.store.configIssue,null);
-    assert.ok(view.store.goalIssue);
-    assert.equal(view.store.items.length,1);
-    assert.match(view.contentEl.textContent,/昨日目标返回待确认/);
-    await view.store.configure({keyboardGap:20});
-    assert.ok(view.store.goalIssue);
-    await assert.rejects(view.store.setDailyGoal('task'),/目标设置暂不可用/);
-    await writeFile(disk(stateFile.path),good);
-    await view.reload('vault_change');
-    assert.equal(view.store.configIssue,null);
-    // Even real Store.load/save paths must proceed when diagnostic persistence rejects every access.
-    view.store.trace = new ArrangeTrace({
-      getItem: () => { throw Error('storage denied'); },
-      setItem: () => { throw Error('storage denied'); },
-    }, 'denied', '0.6.61', 'ios');
-    await view.store.configure({keyboardGap:15});
-    assert.match(await vault.read(stateFile),/"keyboardGap": 15/);
+    view.store.trace = new ArrangeTrace({getItem:()=>{throw Error('denied')},setItem:()=>{throw Error('denied')}},'denied','v2','ios');
+    await view.store.configure({keyboardGap:15});assert.equal(view.store.state.keyboardGap,15);
     assert.equal(view.store.trace.export().persistence,'failed');
     await view.onClose();active=null;
   } finally {

@@ -1,3 +1,4 @@
+import { V2_ROOT } from './arrangeV2';
 import { repeatLabel, type RepeatRule } from './arrangeRepeat';
 import { ArrangeDatePicker, appendBatchFailures } from './arrangeDatePicker';
 import { ArrangeRewardsView } from './arrangeRewardsView';
@@ -401,7 +402,8 @@ export class ArrangeView extends ItemView {
 		};
 		for (const name of ['create', 'modify', 'delete', 'rename'] as const) {
 			this.registerEvent(this.app.vault.on(name as 'modify', file => {
-				if (file.path.startsWith('安排/') || file.path === ARRANGE_STATE_PATH) refresh();
+				if (file.path.startsWith(V2_ROOT + '/')) this.store.v2.invalidate(file.path);
+				if (file.path.startsWith('安排/') || file.path === ARRANGE_STATE_PATH || file.path.startsWith(V2_ROOT + '/')) refresh();
 			}));
 		}
 		if (this.app.metadataCache) this.registerEvent(this.app.metadataCache.on('changed', file => {
@@ -859,8 +861,8 @@ export class ArrangeView extends ItemView {
 		this.headline.empty();
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
 		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
-		this.headline.createSpan({ text: this.store.configIssue ? '配置异常 · 每日目标暂不可确认' : `今天达成 ${facts.x}/${facts.y}${this.store.goalIssue ? ' · 昨日目标返回待确认' : ''}` });
-		this.headline.setAttribute('aria-label', this.store.configIssue ? '配置异常，每日目标暂不可确认' : this.store.goalIssue ? '昨日目标返回状态待确认，普通事项可正常保存' : `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
+		this.headline.createSpan({ text: this.store.configIssue ? '配置等待同步' : this.store.isolatedItems.size ? '部分事项待确认' : `今天达成 ${facts.x}/${facts.y}${this.store.isolatedItems.size ? ' · 部分事项待确认' : this.store.goalIssue ? ' · 目标待确认' : this.store.v2.pending ? ' · 已保存在本机' : ''}` });
+		this.headline.setAttribute('aria-label', this.store.configIssue ? '配置等待同步，普通事项可继续使用' : this.store.goalIssue ? '昨日目标返回状态待确认，普通事项可正常保存' : `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
 		this.headline.dataset.color = facts.color;
 		this.headline.setAttribute('aria-pressed', String(this.filter === 'today' && !this.searchOpen && !this.choosingParent));
 		this.headline.disabled = Boolean(this.choosingParent) || Boolean(this.store.configIssue);
@@ -1768,7 +1770,7 @@ export class ArrangeView extends ItemView {
 		modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
 		modal.contentEl.addEventListener('input', event => this.tips.interaction(event), true);
 		modal.contentEl.addEventListener('change', event => this.tips.interaction(event), true); modal.setTitle('安排界面设置');
-		modal.contentEl.createEl('p', { text: '设置自动保存在 settings/gvkit/arrange.md，随同一 Vault 的文件同步到其他设备。请确保同步包含 settings 目录。完成时播放轻音；触觉反馈取决于设备支持与系统设置，不支持震动的平台仅播放音效。' });
+		modal.contentEl.createEl('p', { text: '设置自动保存，并随同一 Vault 同步到其他设备。完成时播放轻音；触觉反馈取决于设备支持与系统设置，不支持震动的平台仅播放音效。' });
 		modal.contentEl.dataset.ignoreSwipe = 'true';
 		let rowActions = [...this.store.state.rowActions];
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {

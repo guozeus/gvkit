@@ -1,3 +1,5 @@
+import { MemoryStorage } from './helpers/arrangeV2Fixture.ts';
+import { defaultArrangeState } from '../src/arrangeCore.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
@@ -6,6 +8,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+async function seedV2(vault: any, state = defaultArrangeState()) {
+ (globalThis as any).window = {localStorage:new MemoryStorage()};
+ for (const path of ['settings/gvkit/arrange-v2','settings/gvkit/arrange-v2/ops']) if (!vault.getAbstractFileByPath(path)) await vault.createFolder(path);
+ await vault.create('settings/gvkit/arrange.md','---\n'+JSON.stringify({gvkit_arrange_state:1,...state},null,2)+'\n---\n');
+ await vault.create('settings/gvkit/arrange-v2/activation.md','# GVKit Arrange v2\n\n```json\n'+JSON.stringify({schema:2,epoch:'integration',state,legacy:''})+'\n```\n');
+}
 // Production Store bundled against a small disk-backed Vault adapter. Every
 // assertion below reads real temporary Markdown bytes; no production Vault is used.
 const shim = `
@@ -43,6 +51,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		const untouched = '# 既有安排\n\n正文与链接 [[保留]]\n';
 		await vault.create('安排/待执行/旧事项.md', untouched);
 		await vault.create('安排/待执行/无关旧属性.md', '---\nlegacy: [\n---\n不由本功能接管');
+		await seedV2(vault);
 		const store = new ArrangeStore(app);
 		await store.load(); assert.equal(store.state.keyboardGap, 7, 'new installs use the accepted 7px gap');
 		assert.equal(store.state.submitArrowSize, 24);
@@ -196,9 +205,9 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			assert.equal(await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path)), itemBytes);
 			assert.deepEqual(fresh.state.rowActions, ['pin']);
 		}
-		await store.configure(Object.fromEntries(Object.keys(freeSizes).map(key => [key, -1])));
+		await assert.rejects(store.configure(Object.fromEntries(Object.keys(freeSizes).map(key => [key, -1]))));
 		await fresh.load();
-		for (const [key, initial] of Object.entries(freeSizes)) assert.equal(fresh.state[key], initial, 'invalid negative size falls back to default');
+		for (const key of Object.keys(freeSizes)) assert.equal(fresh.state[key], 512, 'invalid value cannot replace trusted setting');
 		await store.configure(freeSizes);
 		for (const color of ['vivid', 'electric', 'cyan']) {
 			await store.configure({ dateHintColor: color }); await fresh.load();
@@ -208,7 +217,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			assert.equal(await vault.read(entries.get(fresh.items.find((x: any) => x.id === child1).path)), itemBytes);
 		}
 		await vault.process(stateFile, source => source.replace('"dateHintColor": "cyan"', '"dateHintColor": "unknown"'));
-		await fresh.load(); assert.equal(fresh.state.dateHintColor, 'vivid');
+		await fresh.load(); assert.equal(fresh.state.dateHintColor, 'cyan');
 		for (const radius of [0, 12, 16, 24, 40]) {
 			await store.configure({ detailShadow: radius }); await fresh.load(); assert.equal(fresh.state.detailShadow, radius);
 		}
@@ -220,14 +229,14 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		for (const gap of [0, 24, 40]) {
 			await store.configure({ keyboardGap: gap });
 			await fresh.load(); assert.equal(fresh.state.keyboardGap, gap, 'gap persists across Store reloads');
-			assert.ok((await vault.read(stateFile)).includes(`"keyboardGap": ${gap}`));
+			assert.equal(fresh.v2.projection.state.keyboardGap,gap);
 			assert.equal(fresh.state.fullscreenThreshold, 70);
 			assert.deepEqual(fresh.state.rowActions, ['pin']);
 		}
 		for (const size of [16, 17, 24, 32]) {
 			await store.configure({ submitArrowSize: size });
 			await fresh.load(); assert.equal(fresh.state.submitArrowSize, size);
-			assert.ok((await vault.read(stateFile)).includes(`"submitArrowSize": ${size}`));
+			assert.equal(fresh.v2.projection.state.submitArrowSize,size);
 		}
 		for (const color of ['classic', 'console', 'navy']) {
 			await store.configure({ submitColor: color });
@@ -240,7 +249,7 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await Promise.all([store.configure({ submitArrowSize: 20 }), store.configure({ submitColor: 'console' })]);
 		await fresh.load(); assert.equal(fresh.state.submitArrowSize, 20); assert.equal(fresh.state.submitColor, 'console');
 		await vault.process(stateFile, source => source.replace('"submitArrowSize": 20', '"submitArrowSize": 100').replace('"submitColor": "console"', '"submitColor": "unknown"'));
-		await fresh.load(); assert.equal(fresh.state.submitArrowSize, 32); assert.equal(fresh.state.submitColor, 'classic');
+		await fresh.load(); assert.equal(fresh.state.submitArrowSize, 20); assert.equal(fresh.state.submitColor, 'console');
 		const first = store.state.order[0];
 		const protectedId = store.state.order[2];
 		await store.togglePin(protectedId);
@@ -334,14 +343,14 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 		await store.togglePin(peer);
 		const dailyPath = store.items.find((x: any) => x.id === daily).path;
 		const orderBefore = [...store.state.order], achievedBefore = [...store.state.achievedDays];
-		const fileCount = vault.getMarkdownFiles().length;
+		const fileCount = vault.getMarkdownFiles().filter(f=>f.path.startsWith('安排/')).length;
 		await store.setDailyGoal(daily);
 		assert.deepEqual(store.state.dailyGoal, { day: '2026-11-05', id: daily });
 		assert.deepEqual(store.state.order, orderBefore, 'selecting target does not rewrite the one global order');
 		assert.deepEqual(store.state.achievedDays, achievedBefore);
 		assert.equal(store.items.find((x: any) => x.id === daily).path, dailyPath);
 		assert.equal(store.items.find((x: any) => x.id === daily).date, '2026-11-05');
-		assert.equal(vault.getMarkdownFiles().length, fileCount, 'selection creates no copied note');
+		assert.equal(vault.getMarkdownFiles().filter(f=>f.path.startsWith('安排/')).length, fileCount, 'selection creates no copied note');
 		const device = new ArrangeStore(app); await device.load();
 		assert.deepEqual(device.state.dailyGoal, store.state.dailyGoal);
 		assert.equal(device.items.find((x: any) => x.id === daily).date, '2026-11-05');
@@ -414,10 +423,10 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			const unpinnedOrder = [...reopened.state.order]; await reopened.load();
 			assert.deepEqual(reopened.state.order, unpinnedOrder, 'unpin does not reorder');
 			const oldOrder = [...reopened.state.order], oldBytes = await vault.read(stateFile);
-			const process = vault.process;
-			vault.process = async (file, change) => { if (file === stateFile) throw Error('isolated save failure'); return process(file, change); };
+			const storage=(globalThis as any).window.localStorage, setItem=storage.setItem;
+			storage.setItem=()=>{throw Error('isolated save failure')};
 			try { await assert.rejects(reopened.top(c), /isolated save failure/); }
-			finally { vault.process = process; }
+			finally { storage.setItem=setItem; }
 			assert.deepEqual(reopened.state.order, oldOrder, 'failed top leaves in-memory order unchanged');
 			assert.equal(await vault.read(stateFile), oldBytes);
 			await reopened.top(c);
@@ -436,11 +445,11 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 			await batch.load();
 			const effectiveSlots=[...batch.state.order];
 			assert.ok(effectiveSlots.includes(external));
-			const beforePin=JSON.parse((await vault.read(stateFile)).split('---')[1]);
+			const beforePin=batch.v2.projection.state;
 			assert.ok(!beforePin.order.includes(external),'external note has not been written into shared order');
 			await batch.applyBatch(target([a]),{kind:'pin',value:true});
 			assert.deepEqual(batch.state.order,effectiveSlots,'newly pinned item retains its effective slot');
-			const savedSlots=JSON.parse((await vault.read(stateFile)).split('---')[1]).order;
+			const savedSlots=batch.v2.projection.state.order.filter(id=>batch.state.order.includes(id));
 			assert.deepEqual(savedSlots,effectiveSlots,'batch pin persists effective slots including external notes');
 			const reopenedSlots=new ArrangeStore(app);await reopenedSlots.load();
 			assert.deepEqual(reopenedSlots.state.order,effectiveSlots,'batch pin slots survive reopening');
@@ -498,42 +507,4 @@ test('disk Markdown create, sibling context, edit, reload, pin, complete/undo pr
 	} finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('daily reminders persist independently, run once per Vault day on entry and retry after failed saves', async t => {
- const root=await mkdtemp(join(tmpdir(),'gvkit-reminder-test-'));
- t.mock.timers.enable({apis:['Date'],now:new Date('2026-11-15T15:55:00Z')});
- try{
-  await build({stdin:{contents:`export {ArrangeStore} from './src/arrangeStore'; export {TFile,TFolder} from 'obsidian';`,resolveDir:process.cwd()},bundle:true,platform:'node',format:'esm',outfile:join(root,'store.mjs'),plugins:[{name:'obsidian-test',setup(b){b.onResolve({filter:/^obsidian$/},()=>({path:'obsidian',namespace:'shim'}));b.onLoad({filter:/.*/,namespace:'shim'},()=>({contents:shim,loader:'js'}));}}]});
-  const {ArrangeStore,TFile,TFolder}=await import(pathToFileURL(join(root,'store.mjs')).href),entries=new Map<string,any>();
-  for(const path of ['安排/待执行','安排/已完成','安排/历史','settings/gvkit']){entries.set(path,new TFolder());await mkdir(join(root,path),{recursive:true});}
-  let fail=false,saves=0;
-  const vault={getMarkdownFiles:()=>[...entries.values()].filter(x=>x instanceof TFile),getAbstractFileByPath:(p:string)=>entries.get(p),read:(f:any)=>readFile(join(root,f.path),'utf8'),create:async(p:string,s:string)=>{await writeFile(join(root,p),s);const f=new TFile(p);entries.set(p,f);return f;},process:async(f:any,change:(s:string)=>string)=>{if(f.path==='settings/gvkit/arrange.md'){if(fail)throw Error('disk failed');saves++;}await writeFile(join(root,f.path),change(await vault.read(f)));}};
-  const app={vault},store=new ArrangeStore(app),doc=(fields:any,body='保留正文 [[链接]]')=>'---\n'+JSON.stringify(fields)+'\n---\n'+body;
-  const fields=(id:string,extra:any={})=>({gvid:id,gvkit_arrange:true,title:id,parent:null,date:null,completed_at:null,pinned:false,unknown:{keep:true},...extra});
-  for(const id of ['B','P','X','A','child','done','R'])await vault.create(`安排/待执行/${id}.md`,doc(fields(id,id==='child'?{parent:'P'}:id==='done'?{completed_at:'2026-11-15T00:00:00Z',special_reminder_at:'2026-11-01T00:00:00Z'}:id==='R'?{repeat:{unit:'day',interval:1,anchor:'2026-11-15'},repeat_instance:'current',repeat_history:[{id:'old',title:'old',body:'',parent:null,date:'2026-11-14',completed_at:'2026-11-14T00:00:00Z'}]}:{})));
-  await store.configure({order:['B','P','X','A','child','R'],timezone:'Asia/Shanghai'});
-  const raw=()=>vault.read(entries.get('安排/待执行/A.md')),before=await raw();
-  await store.toggleSpecialReminder('A');const stamp=store.items.find((x:any)=>x.id==='A').specialReminderAt;
-  assert.equal(stamp,'2026-11-15T15:55:00.000Z');
-  const parsed=JSON.parse((await raw()).split('---\n')[1]);delete parsed.special_reminder_at;assert.deepEqual(parsed,fields('A'));assert.equal((await raw()).split('\n---\n')[1],before.split('\n---\n')[1]);
-  t.mock.timers.tick(1000);await store.edit('A','A', '保留正文 [[链接]]',null);assert.equal(store.items.find((x:any)=>x.id==='A').specialReminderAt,stamp);
-  await store.toggleSpecialReminder('A');assert.equal(store.items.find((x:any)=>x.id==='A').specialReminderAt,null);
-  await store.toggleSpecialReminder('A');assert.notEqual(store.items.find((x:any)=>x.id==='A').specialReminderAt,stamp);
-  t.mock.timers.tick(1000);await store.toggleSpecialReminder('B');await store.togglePin('B');await store.togglePin('P');await store.toggleSpecialReminder('child');await store.toggleSpecialReminder('R');
-  const origOrder=[...store.state.order];await store.load();assert.deepEqual(store.state.order,origOrder,'background load never runs reminders');
-  await store.enter();assert.deepEqual(store.state.order,['A','P','B','child','R','X']);assert.equal(store.state.specialReminderDay,'2026-11-15');
-  assert.equal(store.items.find((x:any)=>x.id==='B').pinned,true);assert.equal(store.items.find((x:any)=>x.id==='old').completedAt,'2026-11-14T00:00:00Z');
-  await store.top('X');const manual=[...store.state.order];const diskBefore=await vault.read(entries.get('settings/gvkit/arrange.md'));const saveCount=saves;
-  await Promise.all([store.enter(),store.enter()]);const other=new ArrangeStore(app);await other.enter();assert.deepEqual(other.state.order,manual);assert.equal(saves,saveCount);assert.equal(await vault.read(entries.get('settings/gvkit/arrange.md')),diskBefore);
-  t.mock.timers.tick(1000);await store.toggleSpecialReminder('X');await store.enter();assert.deepEqual(store.state.order,manual,'enabling after first entry waits for next day');
-  // The timezone day changes at 16:00Z, not at the process timezone midnight.
-  t.mock.timers.tick(10*60*1000);await store.load();assert.equal(store.state.specialReminderDay,'2026-11-15');assert.deepEqual(store.state.order,manual);
-  await store.configure({dailyGoal:{day:'2026-11-15',id:'X'}});
-  fail=true;await assert.rejects(store.enter(),/保存|disk failed/);fail=false;
-  const afterFailure=JSON.parse((await vault.read(entries.get('settings/gvkit/arrange.md'))).split('---\n')[1]);assert.equal(afterFailure.specialReminderDay,'2026-11-15');
-  await store.enter();assert.equal(store.state.specialReminderDay,'2026-11-16');assert.equal(store.state.dailyGoal.returnedId,'X');assert.deepEqual(store.state.order,['A','P','B','child','R','X']);
-  await store.toggleSpecialReminder('A');t.mock.timers.tick(3*86400000);await store.enter();assert.equal(store.state.specialReminderDay,'2026-11-19');assert.equal(store.state.order.includes('done'),false);assert.equal(store.state.order.includes('old'),false);
-  assert.equal(store.items.find((x:any)=>x.id==='A').specialReminderAt,null);
-  // A failure of the reminder save itself never advances its marker or in-memory order.
-  t.mock.timers.tick(86400000);const previous=[...store.state.order];fail=true;await assert.rejects(store.enter(),/特别提醒置顶未保存/);assert.equal(store.state.specialReminderDay,'2026-11-19');assert.deepEqual(store.state.order,previous);fail=false;await store.enter();assert.equal(store.state.specialReminderDay,'2026-11-20');
- }finally{await rm(root,{recursive:true,force:true});}
-});
+// Daily reminder timing, no-op writes and durable retry are covered by arrangeV2.test.ts.

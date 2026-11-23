@@ -1,3 +1,5 @@
+import { ArrangeV2Store } from './arrangeV2Store';
+import { clone, type OrderIntent } from './arrangeV2';
 import { nextRepeatDate, repeatRule, sameRepeatCadence, validDate, type RepeatRule, type RepeatCompletion } from './arrangeRepeat';
 import { rewardRecord, rewardValue, type RewardRecord } from './arrangeRewards';
 import { App, getFrontMatterInfo, parseYaml, stringifyYaml, TFile, TFolder } from 'obsidian';
@@ -22,7 +24,7 @@ function markdown(fields: Record<string, unknown>, body: string): string {
 
 export class ArrangeConfigError extends Error {
 	constructor(readonly fingerprint: string, readonly cause: unknown) {
-		super('安排配置异常，已按本机顺序显示事项；每日目标和奖励暂不可确认。');
+		super('配置等待同步；已保留本机设置，普通事项可继续使用。');
 	}
 }
 export class ArrangeGoalIssue extends ArrangeConfigError {
@@ -74,7 +76,12 @@ export class ArrangeStore {
 	configIssue: ArrangeConfigError | null = null;
 	goalIssue: ArrangeGoalIssue | null = null;
 	private notifiedConfig: string | null = null;
-	private explicitInitialize = false;
+	readonly v2: ArrangeV2Store;
+	readonly isolatedItems = new Map<string, string>();
+	private uncertainParents = new Set<string>();
+	private uncertainIds = new Set<string>();
+	private links = new Map<string, { id: string; parent: string | null }>();
+	private unknownRelations = false;
 	claimConfigNotice(fingerprint: string): boolean {
 		if (this.notifiedConfig === fingerprint) return false;
 		this.notifiedConfig = fingerprint;
@@ -91,6 +98,9 @@ export class ArrangeStore {
 		let storage: Storage | null = null;
 		try { storage = typeof window !== 'undefined' ? window.localStorage : null; } catch { /* optional local recovery */ }
 		this.storage = storage;
+		this.v2 = new ArrangeV2Store(app, storage, trace);
+		if (this.v2.projection) this.state = clone(this.v2.projection.state);
+		try { this.links = new Map(JSON.parse(storage?.getItem(this.recoveryKey + ':links') ?? '[]')); } catch { /* optional */ }
 		try { this.notifiedConfig = storage?.getItem(this.recoveryKey + ':notice') ?? null; } catch { /* optional */ }
 		try {
 			const saved = JSON.parse(storage?.getItem(this.recoveryKey) ?? 'null');
@@ -115,6 +125,9 @@ export class ArrangeStore {
 		let state = defaultArrangeState();
 		this.configIssue = null;
 		this.goalIssue = null;
+		const projection = await this.v2.load();
+		if (projection) state = clone(projection.state);
+		else {
 		let source = '';
 		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
 		if (file instanceof TFile) {
@@ -219,13 +232,36 @@ export class ArrangeStore {
 			state.dailyGoal = null;
 			state.rewardsEnabledAt = null;
 		}
+		// Legacy bytes are presentation/recovery only; never reactivated as authority.
+		this.configIssue = new ArrangeConfigError('v2_pending', Error('等待 v2 激活同步'));
+		}
 		context.stage = 'scan_items';
 		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
-		const identities=new Set<string>();
+		const identities = new Map<string, string>();
+		const seenIds = new Set<string>();
+		let linksChanged = false;
+		this.isolatedItems.clear(); this.uncertainIds.clear(); this.uncertainParents.clear(); this.unknownRelations = false;
+		const claimIdentity = (fields: Record<string, unknown>, path: string): void => {
+			const id = fields.gvid as string;
+			seenIds.add(id);
+			const duplicate = identities.get(id);
+			if (duplicate && duplicate !== path) {
+				this.isolatedItems.set(duplicate, '重复身份'); this.uncertainIds.add(id);
+				const prior = this.links.get(duplicate); if (prior?.parent) this.uncertainParents.add(prior.parent);
+				throw Error('重复身份');
+			}
+			identities.set(id, path);
+			const link = { id, parent: typeof fields.parent === 'string' ? fields.parent : null };
+			if (!sameValue(this.links.get(path), link)) { this.links.set(path, link); linksChanged = true; }
+		};
 		const rewards: RewardRecord[] = [];
 		let archivedDailyGoalCompletedAt: string | null = null;
 		const today = dayKey(new Date(), state.timezone);
 		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (![TODO, DONE, HISTORY].some(folder => file.path.startsWith(folder + '/'))) continue;
+			const startItems = items.length, startRewards = rewards.length, startArchived = archivedCompletions.length;
+			let raw = '', parsed: Record<string, unknown> | undefined;
+			try {
 			if (file.path.startsWith(`${HISTORY}/`)) {
 				// The index may lag a just-completed/undone note. Today's modified
 				// files need their real fields; mtime selects reads, never counts completions.
@@ -234,12 +270,13 @@ export class ArrangeStore {
 				const rewardHistory = state.rewardsEnabledAt && (!file.stat || file.stat.mtime >= Date.parse(state.rewardsEnabledAt));
 				const currentMonth = file.path.startsWith(`${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`);
 				if (changedToday || (!fields && (currentMonth || rewardHistory))) {
-					const source = await this.app.vault.read(file);
+					const source = raw = await this.app.vault.read(file);
 					fields = getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange') ? documentParts(source).fields : undefined;
 				}
+				if (fields?.gvkit_arrange === true) { parsed = fields; this.validateItem(fields); claimIdentity(fields, file.path); }
 				const history = fields?.repeat_history as RepeatCompletion[] | undefined;
 				for (const occurrence of history ?? []) {
-					rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded});
+					rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded ?? 0});
 					if (dayKey(new Date(occurrence.completed_at), state.timezone) === today) {
 						archivedCompletions.push(occurrence.completed_at);
 						if(state.dailyGoal?.day===today && (fields?.gvid===state.dailyGoal.id || occurrence.id===state.dailyGoal.id)) archivedDailyGoalCompletedAt=occurrence.completed_at;
@@ -256,22 +293,24 @@ export class ArrangeStore {
 				continue;
 			}
 			if (!file.path.startsWith(`${TODO}/`) && !file.path.startsWith(`${DONE}/`)) continue;
-			const source = await this.app.vault.read(file);
+			const source = raw = await this.app.vault.read(file);
 			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
 			const { fields, body } = documentParts(source);
 			if (fields.gvkit_arrange !== true) continue;
+			parsed = fields;
+			this.validateItem(fields);
 			const record = rewardRecord(fields);
 			if (record) rewards.push(record);
 			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
-			if (identities.has(fields.gvid)) throw Error('事项 GVID 重复，请先修正重复身份');
-			identities.add(fields.gvid);
+			seenIds.add(fields.gvid);
+			claimIdentity(fields, file.path);
 			const history = (fields.repeat_history ?? []) as RepeatCompletion[];
 			const rule = repeatRule(fields.repeat);
 			const closed = fields.repeat_closed === true;
 			const visible = history.filter(value => !value.archived);
 			const last = closed ? visible[visible.length-1] : undefined;
 			for (const occurrence of history) {
-				rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded});
+				rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded ?? 0});
 				if (occurrence.archived) { archivedCompletions.push(occurrence.completed_at); continue; }
 				items.push({id:occurrence === last ? fields.gvid : occurrence.id, path:file.path,
 					title:occurrence.title, body:occurrence.body, parent:occurrence.parent, date:occurrence.date,
@@ -290,8 +329,33 @@ export class ArrangeStore {
 				specialReminderAt: typeof fields.special_reminder_at === 'string' && Number.isFinite(Date.parse(fields.special_reminder_at)) ? fields.special_reminder_at : null,
 				pinned: fields.pinned === true, developmentCompleted: fields.development_completed === true,
 				developmentProject: fields.development_project === true });
+			} catch (error) {
+				items.splice(startItems); rewards.splice(startRewards); archivedCompletions.splice(startArchived);
+				this.isolatedItems.set(file.path, '事项属性待确认');
+				const cached = this.links.get(file.path);
+				const scalar = (key: string): string | undefined => {
+					const line = raw.split('\n').find(line => line.startsWith(key + ':'));
+					const value = line?.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, '');
+					return value && /^[0-9a-f-]{36}$/i.test(value) ? value : undefined;
+				};
+				const id = typeof parsed?.gvid === 'string' ? parsed.gvid : cached?.id ?? scalar('gvid');
+				const parent = typeof parsed?.parent === 'string' ? parsed.parent : cached?.parent ?? scalar('parent');
+				if (id) this.uncertainIds.add(id);
+				if (parent) this.uncertainParents.add(parent);
+				if (!cached && !parsed && !parent) this.unknownRelations = true;
+				this.trace?.failure('v2.item.invalid', error, { stage: 'scan_item' });
+			}
 		}
-		this.rewards = rewards;
+		const healthy = items.filter(item => !this.isolatedItems.has(item.path) && !this.uncertainIds.has(item.id));
+		items.splice(0, items.length, ...healthy);
+		const byId = new Map(items.map(item => [item.id, item]));
+		for (const id of this.uncertainParents) { const parent = byId.get(id)?.parent; if (parent) this.uncertainParents.add(parent); }
+		// A missing goal may still be in transit; absence is never completion/deletion.
+		if (state.dailyGoal?.id && (!seenIds.has(state.dailyGoal.id) || this.uncertainIds.has(state.dailyGoal.id) || this.uncertainParents.has(state.dailyGoal.id))) {
+			this.goalIssue = new ArrangeGoalIssue('dependency'); this.goalIssue.message = '目标相关事项待确认；其他事项可正常使用。';
+		}
+		try { if (linksChanged) this.storage?.setItem(this.recoveryKey + ':links', JSON.stringify([...this.links])); } catch { /* optional */ }
+		this.rewards = rewards.filter(reward => !this.uncertainIds.has(reward.id));
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
 		this.state = state;
@@ -299,8 +363,7 @@ export class ArrangeStore {
 		if (!this.configIssue && !this.goalIssue) {
 			this.notifiedConfig = null;
 			try { this.storage?.removeItem(this.recoveryKey + ':notice'); } catch { /* optional */ }
-			this.lastGood = copyState(state);
-			try { this.storage?.setItem(this.recoveryKey, JSON.stringify(state)); } catch { /* display still works */ }
+
 		}
 		this.archivedCompletions = archivedCompletions;
 		this.archivedDailyGoalCompletedAt = archivedDailyGoalCompletedAt;
@@ -315,7 +378,7 @@ export class ArrangeStore {
 				state.order = [previous.id, ...state.order.filter(id => id !== previous.id)];
 				state.dailyGoal = { day: today, id: null, returnedId: previous.id };
 			} else state.dailyGoal = null;
-			await this.saveState('day_rollover');
+			await this.saveState('day_rollover', previous && !previous.completedAt ? { kind: 'front', ids: [previous.id], pins: [] } : undefined);
 			this.trace?.record('day_rollover.ok', { run: context.run });
 		}
 		context.stage = 'done';
@@ -326,12 +389,8 @@ export class ArrangeStore {
 	private serial<T>(trigger: string, action: () => Promise<T>, presentation = false): Promise<T> {
 		const next = this.queue.then(async () => {
 			await this.load('before_' + trigger);
-			const initialize = this.configIssue?.fingerprint === 'missing' && ['create', 'configure', 'enableRewards'].includes(trigger);
-			if (this.configIssue && !presentation && !initialize) throw this.configIssue;
 			if (this.goalIssue && trigger === 'setDailyGoal') throw this.goalIssue;
-			this.explicitInitialize = initialize;
-			if (initialize) { this.configIssue = null; this.loadedFields = {}; }
-			try { return await action(); } finally { this.explicitInitialize = false; }
+			return await action();
 		});
 		this.queue = next.catch(() => {});
 		return next;
@@ -340,82 +399,57 @@ export class ArrangeStore {
 		if (!(this.app.vault.getAbstractFileByPath(path) instanceof TFolder))
 			throw Error(`请先确认信息库已有目录「${path}」；插件不会改变一级、二级目录`);
 	}
-	private async saveState(trigger = 'internal'): Promise<void> {
-		if (this.configIssue || !this.loadedFields) throw this.configIssue ?? new ArrangeConfigError('missing', Error('配置尚未到达'));
-		const keys = (Object.keys(this.state) as (keyof ArrangeState)[]).filter(key => !sameValue(this.state[key], this.loadedState[key]));
-		if (['complete', 'archive', 'toggle_pin', 'batch_pin_slots'].includes(trigger) && !keys.includes('order') && !sameValue(this.state.order, this.loadedFields.order)) keys.push('order');
-		if (this.goalIssue && keys.includes('dailyGoal')) throw this.goalIssue;
-		if (!keys.length) return;
-		const base = this.loadedFields, proposed = copyState(this.state);
-		const run = this.trace?.nextRun() ?? 0;
-		this.trace?.record('write.start', { run, trigger, keys });
-		const file = this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
-		if (!(file instanceof TFile)) {
-			if (!this.explicitInitialize) throw new ArrangeConfigError('missing', Error('配置已移走'));
-			await this.requireFolder('settings/gvkit');
-			const next = markdown({ gvkit_arrange_state: 1, ...proposed }, '# 安排\n');
-			const candidateFingerprint = configFingerprint(next).fingerprint!;
-			this.trace?.record('write.candidate', { run, trigger, keys, ...configFingerprint(next),
-				sourceFingerprint: 'missing', candidateFingerprint });
-			const created = await this.app.vault.create(ARRANGE_STATE_PATH, next);
-			this.trace?.record('write.process.ok', { run, trigger, keys, sourceFingerprint: 'missing', candidateFingerprint });
-			try {
-				const observed = configFingerprint(await this.app.vault.read(created));
-				this.trace?.record(observed.fingerprint === candidateFingerprint ? 'write.readback.ok' : 'write.readback.mismatch',
-					{ run, trigger, keys, ...observed, sourceFingerprint: 'missing',
-						candidateFingerprint, readbackFingerprint: observed.fingerprint });
-			} catch (error) {
-				this.trace?.failure('write.readback.fail', error, { run, trigger, stage: 'post_create', candidateFingerprint });
-			}
-			this.loadedFields = { gvkit_arrange_state: 1, ...proposed }; this.loadedState = proposed;
-			return;
+	private pins(): string[] { return this.items.filter(item => item.pinned && !item.completedAt).map(item => item.id); }
+	private async saveState(trigger = 'internal', order?: OrderIntent): Promise<void> {
+		const changes: Record<string, unknown> = {};
+		for (const key of Object.keys(this.state) as (keyof ArrangeState)[]) {
+			if (key === 'order' || key === 'achievedDays' || sameValue(this.state[key], this.loadedState[key])) continue;
+			changes[key] = this.state[key];
 		}
-		let writeFingerprint = '', candidateFingerprint = '';
-		try {
-			let committedFields = base;
-			await this.app.vault.process(file, source => {
-				writeFingerprint = configFingerprint(source).fingerprint!;
-				this.trace?.record('write.source', { run, trigger, keys, ...configFingerprint(source) });
-				let fields: Record<string, unknown>, body: string;
-				try { ({ fields, body } = documentParts(source)); validateConfig(fields); }
-				catch (error) { throw new ArrangeConfigError(configFingerprint(source).fingerprint!, error); }
-				const changed = keys.filter(key => !sameValue(fields[key], proposed[key]));
-				for (const key of changed) if (!sameValue(fields[key], base[key])) {
-					this.trace?.record('write.conflict', { run, trigger, ...configFingerprint(source) });
-					throw Error('安排配置已被其他操作更新，本次配置未覆盖，请刷新后重试');
-				}
-				if (!changed.length) { committedFields = fields; return source; }
-				const nextFields = { ...fields };
-				for (const key of changed) nextFields[key] = proposed[key];
-				validateConfig(nextFields);
-				committedFields = nextFields;
-				const next = markdown(nextFields, body);
-				candidateFingerprint = configFingerprint(next).fingerprint!;
-				this.trace?.record('write.candidate', { run, trigger, keys, ...configFingerprint(next),
-					sourceFingerprint: writeFingerprint, candidateFingerprint });
-				return next;
-			});
-			this.trace?.record(candidateFingerprint ? 'write.process.ok' : 'write.noop', {
-				run, trigger, keys, sourceFingerprint: writeFingerprint, candidateFingerprint,
-			});
-			// Observe the actual bytes after process; a later Sync merge may replace them.
-			// Readback is diagnostic only: a read failure must not undo a successful commit.
-			try {
-				const after = await this.app.vault.read(file), observed = configFingerprint(after);
-				this.trace?.record(candidateFingerprint && candidateFingerprint !== observed.fingerprint
-					? 'write.readback.mismatch' : 'write.readback.ok',
-					{ run, trigger, keys, ...observed, sourceFingerprint: writeFingerprint,
-						candidateFingerprint, readbackFingerprint: observed.fingerprint });
-			} catch (error) {
-				this.trace?.failure('write.readback.fail', error, { run, trigger, stage: 'post_process',
-					sourceFingerprint: writeFingerprint, candidateFingerprint });
-			}
-			this.loadedFields = committedFields;
-			this.loadedState = proposed;
-		} catch (error) {
-			this.trace?.failure('save.fail', error, { run, trigger, stage: 'config_commit', fingerprint: writeFingerprint, candidateFingerprint });
-			throw error;
+		for (const day of new Set([...this.state.achievedDays, ...this.loadedState.achievedDays])) {
+			if (this.state.achievedDays.includes(day) !== this.loadedState.achievedDays.includes(day)) changes['achieved:' + day] = this.state.achievedDays.includes(day);
 		}
+		if (this.goalIssue && 'dailyGoal' in changes) throw this.goalIssue;
+		// Reconcile only newly observed/restored or now-completed IDs; never a global order snapshot.
+		const shared = this.v2.projection?.state.order ?? [], known = new Set(shared);
+		const added = this.loadedState.order.flatMap((id, index) => known.has(id) ? [] : [{ id, before: this.loadedState.order[index + 1] }]).reverse();
+		const active = new Map(this.items.map(item => [item.id, item]));
+		const removed = shared.filter(id => active.get(id)?.completedAt);
+		if (!order && (added.length || removed.length) && ['toggle_pin', 'batch_pin_slots'].includes(trigger)) order = {kind:'remove',ids:[],pins:[]};
+		if (order) order = { ...order, ...(added.length ? { added } : {}), ...(removed.length ? { removed } : {}) };
+		if (!Object.keys(changes).length && !order) return;
+		const automatic = trigger === 'day_rollover' || trigger === 'special_reminders'
+			? { kind: trigger === 'day_rollover' ? 'rollover' as const : 'reminder' as const, day: dayKey(new Date(), this.state.timezone) } : undefined;
+		const projected = await this.v2.commit(changes, order, automatic);
+		this.state = clone(projected.state);
+		this.state.order = pendingOrder(this.items, this.state.order);
+		this.loadedState = copyState(this.state);
+	}
+
+	private validateItem(fields: Record<string, unknown>): void {
+		if (typeof fields.gvid !== 'string' || !fields.gvid) throw Error('事项身份缺失');
+		for (const key of ['parent', 'completed_at', 'date'] as const) if (fields[key] != null && typeof fields[key] !== 'string') throw Error('事项属性类型错误');
+		if (fields.completed_at && !Number.isFinite(Date.parse(String(fields.completed_at)))) throw Error('完成时间无效');
+		if (fields.date && !validDate(fields.date)) throw Error('事项日期无效');
+		for (const key of ['repeat_history', 'repeat_reopened'] as const) {
+			const records = fields[key]; if (records === undefined) continue;
+			if (!Array.isArray(records)) throw Error('重复记录无效');
+			const ids = new Set<string>();
+			for (const value of records) {
+				if (!value || typeof value !== 'object' || typeof value.id !== 'string' || ids.has(value.id)
+					|| typeof value.completed_at !== 'string' || !Number.isFinite(Date.parse(value.completed_at))
+					|| typeof value.title !== 'string' || typeof value.body !== 'string'
+					|| (value.parent !== null && typeof value.parent !== 'string')
+					|| (value.date !== null && !validDate(value.date))
+					|| (value.reward_awarded !== undefined && (typeof value.reward_awarded !== 'number' || !Number.isFinite(value.reward_awarded)))) throw Error('重复记录不完整');
+				ids.add(value.id);
+			}
+		}
+		repeatRule(fields.repeat);
+	}
+	private requireDependencies(id: string): void {
+		if (this.uncertainIds.has(id) || this.uncertainParents.has(id)
+			|| (this.unknownRelations && this.items.some(item => item.parent === id))) throw Error('相关事项待确认，请先修正异常事项后重试');
 	}
 
 	private file(id: string): TFile {
@@ -459,7 +493,7 @@ export class ArrangeStore {
 			try {
 				if (completedParent) await this.changeCompletion(completedParent.id, false);
 				this.state.order = moveInOrder(this.state.order, this.items, id);
-				await this.saveState('create');
+				await this.saveState('create', { kind: 'move', ids: [id], pins: this.pins() });
 				// Commit the child last: preceding failures cannot leave an extra child.
 				await this.app.vault.create(path, markdown({ gvid: id, gvkit_arrange: true,
 					title: title.trim(), parent, date, completed_at: null, pinned: false, ...(repeat ? {repeat,repeat_instance:createGvid()} : {}) }, ''));
@@ -475,7 +509,7 @@ export class ArrangeStore {
 						if (parentFile.path !== completedParent.path) await this.app.fileManager.renameFile(parentFile, completedParent.path);
 					}
 					this.state.order = oldOrder;
-					await this.saveState('create_restore');
+					await this.saveState('create_restore', { kind: 'remove', ids: [id], pins: [] });
 					await this.load();
 				} catch {
 					throw Error('新增失败，未创建下级；上级状态恢复失败，请刷新检查；输入已保留');
@@ -514,6 +548,7 @@ export class ArrangeStore {
 		if (!item || Boolean(item.completedAt) === done) return false;
 		if (expected && (expected.date !== item.date || expected.occurrenceId !== item.occurrenceId || expected.repeatInstance !== item.repeatInstance)) return false;
 		if (done) {
+			this.requireDependencies(id);
 			const parents = [id], visited = new Set(parents);
 			for (const parent of parents) {
 				for (const child of this.items.filter(value => value.parent === parent)) {
@@ -529,7 +564,7 @@ export class ArrangeStore {
 		}
 		const destination = `${folder}/${this.file(id).name}`;
 		if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
-		if (done && !this.state.rewardsEnabledAt) {
+		if (done && !this.state.rewardsEnabledAt && !this.configIssue) {
 			this.state.rewardsEnabledAt = new Date().toISOString();
 			await this.saveState('complete_enable_rewards');
 		}
@@ -539,13 +574,13 @@ export class ArrangeStore {
 		const file = this.file(id);
 		await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
 		await this.load();
-		await this.saveState('complete');
+		if (!this.configIssue) await this.saveState('complete', { kind: done ? 'remove' : 'move', ids: [id], pins: this.pins() });
 		return true;
 	}
 
 	/** One atomic Markdown process commits both the completion and its successor. */
 	private async changeRepeatCompletion(item: ArrangeItem, done: boolean): Promise<boolean> {
-		if (done && !this.state.rewardsEnabledAt) {
+		if (done && !this.state.rewardsEnabledAt && !this.configIssue) {
 			this.state.rewardsEnabledAt = new Date().toISOString();
 			await this.saveState('complete_enable_rewards');
 		}
@@ -681,6 +716,7 @@ export class ArrangeStore {
 	}
 	setDailyGoal(id: string): Promise<void> {
 		return this.serial('setDailyGoal', async () => {
+			this.requireDependencies(id);
 			const item = this.items.find(item => item.id === id);
 			const day = dayKey(new Date(), this.state.timezone);
 			if (!item || (item.completedAt && dayKey(new Date(item.completedAt), this.state.timezone) !== day))
@@ -709,7 +745,7 @@ export class ArrangeStore {
 			// A move preserves the original Markdown and every completion fact.
 			await this.app.fileManager.renameFile(file, destination);
 			await this.load();
-			await this.saveState('archive');
+			if (!this.configIssue) await this.saveState('archive', { kind: 'remove', ids: [id], pins: [] });
 		});
 	}
 	/** Called only on actual presentation, never on background load/refresh. */
@@ -723,7 +759,7 @@ export class ArrangeStore {
 			this.trace?.record('special_reminders.start', { trigger });
 			this.state = { ...previous, order: reminderTopInOrder(previous.order, this.items), specialReminderDay: day };
 			try {
-				await this.saveState('special_reminders');
+				await this.saveState('special_reminders', sameValue(previous.order, this.state.order) ? undefined : { kind: 'top', ids: this.state.order.filter(id => this.items.some(item => item.id === id && item.specialReminderAt && !item.completedAt)), pins: this.pins() });
 				this.trace?.record('special_reminders.ok', { trigger });
 			}
 			catch {
@@ -769,7 +805,7 @@ export class ArrangeStore {
 		return this.serial('move', async () => {
 			if (!this.state.order.includes(id)) return;
 			this.state.order = moveInOrder(this.state.order, this.items, id, before, after);
-			await this.saveState('move');
+			await this.saveState('move', { kind: 'move', ids: [id], before, after, pins: this.pins() });
 		});
 	}
 	/** Top releases only the target pin slot; all other pinned ranks stay fixed. */
@@ -780,14 +816,14 @@ export class ArrangeStore {
 			const next = topInOrder(previous, this.items, [id]);
 			if (next.every((value, index) => value === previous[index])) return;
 			this.state.order = next;
-			try { await this.saveState('top'); }
+			try { await this.saveState('top', { kind: 'top', ids: [id], pins: this.pins() }); }
 			catch (error) { this.state.order = previous; throw error; }
 		});
 	}
 	private async batchSaved(item: ArrangeItem, action: ArrangeBatchAction, order?: string[]): Promise<boolean> {
 		if(action.kind==='top'){
-			const file=this.app.vault.getAbstractFileByPath(ARRANGE_STATE_PATH);
-			return file instanceof TFile && JSON.stringify(documentParts(await this.app.vault.read(file)).fields.order)===JSON.stringify(order);
+			const projection = await this.v2.load();
+			return !!projection && sameValue(pendingOrder(this.items, projection.state.order), order);
 		}
 		const fields=documentParts(await this.app.vault.read(this.file(item.id))).fields;
 		if(fields.gvid!==(item.occurrenceOf??item.id))return false;
@@ -836,7 +872,7 @@ export class ArrangeStore {
 				expectedOrder=next;
 				try {
 					if (next.some((id, index) => id !== previous[index])) {
-						this.state.order = next; await this.saveState('batch_top');
+						this.state.order = next; await this.saveState('batch_top', { kind: 'top', ids: next.filter(id => current.some(item => item.id === id)), pins: this.pins() });
 					}
 					result.applied = current.map(item => item.id);
 				} catch (error) {
@@ -889,10 +925,14 @@ export class ArrangeStore {
 		});
 	}
 	configure(changes: Partial<Omit<ArrangeState, 'order' | 'achievedDays'>>): Promise<void> {
-		return this.serial('configure', async () => { Object.assign(this.state, changes); await this.saveState('configure'); });
+		return this.serial('configure', async () => {
+			if ('order' in changes) throw Error('请通过移动事项调整顺序');
+			Object.assign(this.state, changes); await this.saveState('configure');
+		});
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {
 		return this.serial('setAchieved', async () => {
+			if (achieved && this.isolatedItems.size) throw Error('部分事项待确认，暂不能确认全部达成');
 			this.state.achievedDays = this.state.achievedDays.filter(value => value !== day);
 			if (achieved) this.state.achievedDays.push(day);
 			await this.saveState('set_achieved');

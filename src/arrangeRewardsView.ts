@@ -23,8 +23,8 @@ export class ArrangeRewardsView {
  levels() { return periods.map(period => rewardProgress(this.total(period), period).level); }
  paint(): void {
   this.top.empty();
-  this.top.disabled = Boolean(this.store.configIssue);
-  if (this.store.configIssue) {
+  this.top.disabled = Boolean(this.store.configIssue) || this.store.isolatedItems.size > 0;
+  if (this.store.configIssue || this.store.isolatedItems.size) {
    this.open = false; this.panel.hidden = true;
    this.top.createSpan({text:'奖励暂不可确认'});
    this.top.setAttribute('aria-label','配置异常，奖励暂不可确认');
@@ -123,6 +123,7 @@ export class ArrangeRewardsView {
   effect.style.left = `${Math.max(8, Math.min((rect?.left ?? this.root.getBoundingClientRect().left) + 8, win.innerWidth - 110))}px`;
   effect.style.top = `${Math.max(80, rect?.top ?? this.root.getBoundingClientRect().top + 100)}px`;
   this.removeLater(effect, 2400);
+  if (this.store.isolatedItems.size || this.store.configIssue) return;
   const after = this.levels();
   const upgrades = periods.filter((_, index) => after[index]! > before[index]!).map(period => `${REWARD_LABELS[period]}·${rewardProgress(this.total(period), period).name}`);
   if (upgrades.length) {

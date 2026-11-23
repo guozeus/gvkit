@@ -3,10 +3,12 @@
 const LIMIT = 240;
 const INCIDENT_LIMIT = 6;
 const INCIDENT_CONTEXT = 36;
-const IMPORTANT_EVENT = /^(?:plugin\.initialize|view\.open|load\.start|config\.read\.ok|config\.parse\.ok|day_rollover\.(?:start|ok)|special_reminders\.(?:start|ok)|write\.(?:start|source|candidate|process\.ok|readback\.ok|readback\.mismatch|noop)|vault\.(?:modify|observe))$|fail|invalid|conflict|mismatch/;
+const IMPORTANT_EVENT = /^v2\.|^(?:plugin\.initialize|view\.open|load\.start|config\.read\.ok|config\.parse\.ok|day_rollover\.(?:start|ok)|special_reminders\.(?:start|ok)|write\.(?:start|source|candidate|process\.ok|readback\.ok|readback\.mismatch|noop)|vault\.(?:modify|observe))$|fail|invalid|conflict|mismatch/;
 const IS_ANOMALY = /fail|invalid|conflict|mismatch/;
 
 export interface ArrangeTraceDetail {
+  operationId?: string;
+  epoch?: string;
   run?: number;
   trigger?: string;
   stage?: string;
