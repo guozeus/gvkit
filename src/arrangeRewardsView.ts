@@ -23,8 +23,8 @@ export class ArrangeRewardsView {
  levels() { return periods.map(period => rewardProgress(this.total(period), period).level); }
  paint(): void {
   this.top.empty();
-  this.top.disabled = Boolean(this.store.configIssue) || this.store.isolatedItems.size > 0;
-  if (this.store.configIssue || this.store.isolatedItems.size) {
+  this.top.disabled = Boolean(this.store.configIssue) || this.store.isolatedItems.size > 0 || this.store.hasConfigConflict('timezone', 'rewardsEnabledAt');
+  if (this.store.configIssue || this.store.isolatedItems.size || this.store.hasConfigConflict('timezone', 'rewardsEnabledAt')) {
    this.open = false; this.panel.hidden = true;
    this.top.createSpan({text:'奖励暂不可确认'});
    this.top.setAttribute('aria-label','配置异常，奖励暂不可确认');

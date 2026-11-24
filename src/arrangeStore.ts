@@ -360,6 +360,9 @@ export class ArrangeStore {
 		this.items = items;
 		this.state = state;
 		this.loadedState = copyState(state);
+		if (this.hasConfigConflict('dailyGoal', 'timezone') || (state.dailyGoal && state.dailyGoal.day < today && this.hasConfigConflict('order'))) {
+			this.goalIssue = new ArrangeGoalIssue('conflict'); this.goalIssue.message = '目标相关设置待确认，请点击“设置待确认”选择保留值';
+		}
 		if (!this.configIssue && !this.goalIssue) {
 			this.notifiedConfig = null;
 			try { this.storage?.removeItem(this.recoveryKey + ':notice'); } catch { /* optional */ }
@@ -384,6 +387,13 @@ export class ArrangeStore {
 		context.stage = 'done';
 	}
 	refresh(trigger = 'view_reload'): Promise<void> { return this.serial(trigger, async () => {}, true); }
+	hasConfigConflict(...fields: string[]): boolean { return fields.some(field => this.v2.projection?.pending.has(field)); }
+	private requireConfigFields(...fields: string[]): void {
+		if (this.hasConfigConflict(...fields)) throw Error('相关设置待确认，请先点击“设置待确认”选择保留值');
+	}
+	resolveConfigConflict(field: string, ids: string[], choice?: string): Promise<void> {
+		return this.serial('resolve_config', async () => { await this.v2.resolve(field, ids, choice); await this.load(); });
+	}
 	facts() { return todayFacts(this.items, this.state, new Date(), this.archivedCompletions); }
 
 	private serial<T>(trigger: string, action: () => Promise<T>, presentation = false): Promise<T> {
@@ -420,7 +430,9 @@ export class ArrangeStore {
 		if (!Object.keys(changes).length && !order) return;
 		const automatic = trigger === 'day_rollover' || trigger === 'special_reminders'
 			? { kind: trigger === 'day_rollover' ? 'rollover' as const : 'reminder' as const, day: dayKey(new Date(), this.state.timezone) } : undefined;
-		const projected = await this.v2.commit(changes, order, automatic);
+		let projected;
+		try { projected = await this.v2.commit(changes, order, automatic); }
+		catch (error) { this.state = copyState(this.loadedState); throw error; }
 		this.state = clone(projected.state);
 		this.state.order = pendingOrder(this.items, this.state.order);
 		this.loadedState = copyState(this.state);
@@ -542,6 +554,7 @@ export class ArrangeStore {
 		return this.serial('complete', () => this.changeCompletion(id, done, expected));
 	}
 	private async changeCompletion(id: string, done: boolean, expected?: ArrangeItem): Promise<boolean> {
+		this.requireConfigFields('timezone', 'rewardsEnabledAt');
 		const folder = done ? DONE : TODO;
 		await this.requireFolder(folder);
 		const item = this.items.find(item => item.id === id);
@@ -574,7 +587,7 @@ export class ArrangeStore {
 		const file = this.file(id);
 		await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
 		await this.load();
-		if (!this.configIssue) await this.saveState('complete', { kind: done ? 'remove' : 'move', ids: [id], pins: this.pins() });
+		if (!this.configIssue && !this.hasConfigConflict('order')) await this.saveState('complete', { kind: done ? 'remove' : 'move', ids: [id], pins: this.pins() });
 		return true;
 	}
 
@@ -745,14 +758,15 @@ export class ArrangeStore {
 			// A move preserves the original Markdown and every completion fact.
 			await this.app.fileManager.renameFile(file, destination);
 			await this.load();
-			if (!this.configIssue) await this.saveState('archive', { kind: 'remove', ids: [id], pins: [] });
+			if (!this.configIssue && !this.hasConfigConflict('order')) await this.saveState('archive', { kind: 'remove', ids: [id], pins: [] });
 		});
 	}
 	/** Called only on actual presentation, never on background load/refresh. */
 	enter(trigger = 'enter'): Promise<void> {
 		return this.serial(trigger, async () => {
 			if (this.configIssue) return;
-			if (!this.state.rewardsEnabledAt) { this.state.rewardsEnabledAt = new Date().toISOString(); await this.saveState('enable_rewards'); }
+			if (!this.state.rewardsEnabledAt && !this.hasConfigConflict('rewardsEnabledAt')) { this.state.rewardsEnabledAt = new Date().toISOString(); await this.saveState('enable_rewards'); }
+			if (this.hasConfigConflict('specialReminderDay', 'order', 'dailyGoal', 'timezone')) return;
 			const day = dayKey(new Date(), this.state.timezone);
 			if (this.state.specialReminderDay === day) return;
 			const previous = this.state;
@@ -927,11 +941,13 @@ export class ArrangeStore {
 	configure(changes: Partial<Omit<ArrangeState, 'order' | 'achievedDays'>>): Promise<void> {
 		return this.serial('configure', async () => {
 			if ('order' in changes) throw Error('请通过移动事项调整顺序');
+			this.requireConfigFields(...Object.keys(changes));
 			Object.assign(this.state, changes); await this.saveState('configure');
 		});
 	}
 	setAchieved(day: string, achieved: boolean): Promise<void> {
 		return this.serial('setAchieved', async () => {
+			this.requireConfigFields('dailyGoal', 'timezone', 'achieved:' + day);
 			if (achieved && this.isolatedItems.size) throw Error('部分事项待确认，暂不能确认全部达成');
 			this.state.achievedDays = this.state.achievedDays.filter(value => value !== day);
 			if (achieved) this.state.achievedDays.push(day);

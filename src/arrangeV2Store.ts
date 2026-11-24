@@ -94,13 +94,14 @@ export class ArrangeV2Store {
     try { this.storage?.removeItem(this.key + 'pending:' + id); } catch { /* idempotent retry */ }
     this.trace?.record('v2.write.readback.ok', { operationId: id, epoch: this.base!.epoch });
   }
-  async commit(changes: Record<string, unknown>, order?: OrderIntent, automatic?: ArrangeOperation['automatic']): Promise<Projection> {
+  async commit(changes: Record<string, unknown>, order?: OrderIntent, automatic?: ArrangeOperation['automatic'], resolves?: ArrangeOperation['resolves']): Promise<Projection> {
     if (!this.base || !this.projection) throw Error('配置正在等待同步，请稍后重试；普通事项仍可使用');
     const fields = [...Object.keys(changes), ...(order ? ['order'] : [])];
     if (automatic && !fields.includes('dailyGoal')) fields.push('dailyGoal');
+    if (fields.some(field => this.projection!.pending.has(field) && !equal(resolves?.[field]?.slice().sort(), this.projection!.pending.get(field)))) throw Error('设置有冲突，请先点击“设置待确认”选择保留值');
     const expected = Object.fromEntries(fields.map(key => [key, this.projection!.versions[key] ?? '']));
     const op: ArrangeOperation = { schema: 2, epoch: this.base.epoch, id: createGvid(), clock: this.projection.clock + 1,
-      parents: [...new Set(Object.values(expected).filter(Boolean))], expected, changes, ...(order ? { order } : {}), ...(automatic ? { automatic } : {}) };
+      parents: [...new Set(Object.values(expected).filter(Boolean))], expected, changes, ...(order ? { order } : {}), ...(automatic ? { automatic } : {}), ...(resolves ? { resolves } : {}) };
     operation(op);
     const raw = encodeV2(op);
     // Durability precedes shared creation. Recovery always retries these exact bytes/ID.
@@ -110,7 +111,25 @@ export class ArrangeV2Store {
     this.rebuild();
     try { await this.publish(op.id, raw); }
     catch (error) { this.trace?.failure('v2.outbox.fail', error, { operationId: op.id, epoch: op.epoch }); }
+    if (!this.projection!.applied.has(op.id)) throw Error('设置尚未生效，请在“设置待确认”中检查');
     return this.projection!;
+  }
+  conflictChoices(field: string): { id: string; value: unknown; order?: OrderIntent }[] {
+    return (this.projection?.pending.get(field) ?? []).flatMap(id => {
+      const op = this.records.get(id)?.op;
+      if (!op) return [];
+      if (field === 'order') return op.order ? [{ id, value: op.order, order: op.order }] : [];
+      return Object.prototype.hasOwnProperty.call(op.changes, field) ? [{ id, value: op.changes[field] }] : [];
+    });
+  }
+  async resolve(field: string, ids: string[], choice?: string): Promise<Projection> {
+    await this.load();
+    if (!equal(ids, this.projection?.pending.get(field))) throw Error('冲突内容已变化，请重新打开确认');
+    const selected = choice ? this.conflictChoices(field).find(value => value.id === choice) : undefined;
+    if (choice && !selected) throw Error('待确认记录已变化，请重新打开确认');
+    const state = this.projection!.state;
+    const value = selected ? selected.value : field.startsWith('achieved:') ? state.achievedDays.includes(field.slice(9)) : (state as unknown as Record<string, unknown>)[field];
+    return this.commit(field === 'order' ? {} : { [field]: field === 'specialReminderDay' ? value ?? null : value }, field === 'order' ? selected?.order ?? {kind:'remove',ids:[],pins:[]} : undefined, undefined, { [field]: ids });
   }
   get pending(): boolean { return this.outbox.size > 0; }
 }

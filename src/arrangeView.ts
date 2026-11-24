@@ -1,3 +1,4 @@
+import { showConfigConflict } from './arrangeConflictView';
 import { V2_ROOT } from './arrangeV2';
 import { repeatLabel, type RepeatRule } from './arrangeRepeat';
 import { ArrangeDatePicker, appendBatchFailures } from './arrangeDatePicker';
@@ -859,11 +860,16 @@ export class ArrangeView extends ItemView {
 		this.today = facts.day;
 		this.rewardsView?.paint();
 		this.headline.empty();
+		const uncertainToday = this.store.hasConfigConflict('dailyGoal', 'timezone', 'achieved:' + facts.day);
 		const statusIcon = this.headline.createSpan({ cls: 'gvkit-arrange-status-icon', attr: { 'aria-hidden': 'true' } });
-		setIcon(statusIcon, facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
-		this.headline.createSpan({ text: this.store.configIssue ? '配置等待同步' : this.store.isolatedItems.size ? '部分事项待确认' : `今天达成 ${facts.x}/${facts.y}${this.store.isolatedItems.size ? ' · 部分事项待确认' : this.store.goalIssue ? ' · 目标待确认' : this.store.v2.pending ? ' · 已保存在本机' : ''}` });
+		setIcon(statusIcon, uncertainToday || facts.color === 'red' ? 'circle-alert' : facts.color === 'gold' ? 'trophy' : 'circle-check');
+		this.headline.createSpan({ text: this.store.configIssue ? '配置等待同步' : this.store.isolatedItems.size ? '部分事项待确认' : uncertainToday ? '今日状态待确认' : `今天达成 ${facts.x}/${facts.y}${this.store.isolatedItems.size ? ' · 部分事项待确认' : this.store.goalIssue ? ' · 目标待确认' : this.store.v2.pending ? ' · 已保存在本机' : ''}` });
 		this.headline.setAttribute('aria-label', this.store.configIssue ? '配置等待同步，普通事项可继续使用' : this.store.goalIssue ? '昨日目标返回状态待确认，普通事项可正常保存' : `今天达成 ${facts.x}/${facts.y}，今天必做剩余 ${facts.remaining} 项。点击切换今日必做与完成事项`);
-		this.headline.dataset.color = facts.color;
+		if (this.store.v2.projection?.pending.size) {
+			this.headline.createSpan({text:' · 设置待确认'});
+			this.headline.setAttribute('aria-label', '设置待确认，可点击列表中的处理入口或打开更多菜单');
+		}
+		this.headline.dataset.color = uncertainToday ? 'red' : facts.color;
 		this.headline.setAttribute('aria-pressed', String(this.filter === 'today' && !this.searchOpen && !this.choosingParent));
 		this.headline.disabled = Boolean(this.choosingParent) || Boolean(this.store.configIssue);
 		this.moreButton.disabled = Boolean(this.choosingParent);
@@ -876,6 +882,9 @@ export class ArrangeView extends ItemView {
 		this.contentEl.dataset.rootItemStyle = this.store.state.rootItemStyle;
 		const scroll = this.list.scrollTop;
 		this.list.empty();
+		if (this.store.v2.projection?.pending.size) this.list.createEl('button', {
+			text:'设置待确认 · 点击处理', cls:'gvkit-arrange-conflict-choice', attr:{type:'button'},
+		}).onclick = () => this.resolveConfigConflict();
 		const goal = this.dailyGoalItem();
 		if (!this.choosingParent) {
 			if (goal) this.row(this.list, goal, true);
@@ -910,6 +919,7 @@ export class ArrangeView extends ItemView {
 		this.pruneMulti();this.syncMulti();
 	}
 	private dailyGoalItem(): ArrangeItem | undefined {
+		if (this.store.goalIssue) return undefined;
 		const facts=this.store.facts();
 		return this.store.state.dailyGoal?.day === facts.day
 			? (this.store.items.find(item => item.occurrenceOf === this.store.state.dailyGoal!.id && item.completedAt && dayKey(new Date(item.completedAt),this.store.state.timezone)===facts.day) ?? this.store.items.find(item => item.id === this.store.state.dailyGoal!.id)) : undefined;
@@ -1755,6 +1765,7 @@ export class ArrangeView extends ItemView {
 		const menu = new Menu();
 		menu.addItem(item => item.setTitle(facts.achieved ? '撤销今天基础特产投入达标' : '确认今天基础特产投入已达标').setIcon('sun').onClick(() => { this.tips.start(); void this.run(() => this.store.setAchieved(facts.day, !facts.achieved)); }));
 		menu.addItem(item => item.setTitle('检查逾期事项').setIcon('calendar-clock').onClick(() => { this.tips.start(); this.setFilter('overdue'); }));
+		if (this.store.v2.projection?.pending.size) menu.addItem(item => item.setTitle('设置待确认').setIcon('circle-alert').onClick(() => this.resolveConfigConflict()));
 		menu.addItem(item => item.setTitle('安排界面设置').setIcon('settings').onClick(() => { this.tips.start(); this.settings(); }));
 		menu.addItem(item => item.setTitle('复制手机快捷入口').setIcon('link').onClick(async () => {
 			this.tips.start();
@@ -1765,6 +1776,9 @@ export class ArrangeView extends ItemView {
 		menu.addItem(item => item.setTitle('复制交互诊断（含配置 Trace）').setIcon('clipboard-list').onClick(() => { this.tips.start(); void this.copyInteractionDiagnostics(); }));
 		menu.showAtMouseEvent(event);
 	}
+	private resolveConfigConflict(): void {
+		showConfigConflict(this.app, this.store, () => { this.applyComposerSettings(); this.paintLists(); });
+	}
 	private settings(): void {
 		const modal = new Modal(this.app);
 		modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
@@ -1772,6 +1786,7 @@ export class ArrangeView extends ItemView {
 		modal.contentEl.addEventListener('change', event => this.tips.interaction(event), true); modal.setTitle('安排界面设置');
 		modal.contentEl.createEl('p', { text: '设置自动保存，并随同一 Vault 同步到其他设备。完成时播放轻音；触觉反馈取决于设备支持与系统设置，不支持震动的平台仅播放音效。' });
 		modal.contentEl.dataset.ignoreSwipe = 'true';
+		if (this.store.v2.projection?.pending.size) modal.contentEl.createEl('button', {text:'设置待确认 · 点击处理', attr:{type:'button'}}).onclick = () => { modal.close(); this.resolveConfigConflict(); };
 		let rowActions = [...this.store.state.rowActions];
 		const configure = (changes: Parameters<ArrangeStore['configure']>[0]) => {
 			void this.store.configure(changes).then(() => { this.applyComposerSettings(); this.paintLists(); }).catch(error => this.error(error));

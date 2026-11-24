@@ -18,10 +18,13 @@ export interface ArrangeOperation {
   parents: string[]; expected: Record<string, string>;
   changes: Record<string, unknown>; order?: OrderIntent;
   automatic?: { kind: 'rollover' | 'reminder'; day: string };
+  /** Explicit user confirmation of the competing records seen for each field. */
+  resolves?: Record<string, string[]>;
 }
 export interface Projection {
   state: ArrangeState; versions: Record<string, string>; clock: number;
   applied: Set<string>; deferred: Set<string>; conflicts: Set<string>;
+  pending: Map<string, string[]>;
 }
 export const encodeV2 = (value: Activation | ArrangeOperation): string => `# GVKit Arrange v2\n\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\`\n`;
 export function decodeV2(source: string): unknown {
@@ -72,6 +75,9 @@ export function operation(value: unknown): ArrangeOperation {
     if (o.kind === 'move' && o.ids.length !== 1) throw Error('Invalid move targets');
   }
   if (value.automatic !== undefined && (!record(value.automatic) || !['rollover', 'reminder'].includes(String(value.automatic.kind)) || !validDate(value.automatic.day))) throw Error('Invalid business day');
+  if (value.resolves !== undefined && (!record(value.resolves) || value.automatic !== undefined
+    || !Object.entries(value.resolves).every(([field, ids]) => strings(ids) && ids.length > 0
+      && (Object.prototype.hasOwnProperty.call(value.changes, field) || (field === 'order' && value.order !== undefined))))) throw Error('Invalid conflict confirmation');
   const expected = value.expected;
   for (const key of [...Object.keys(value.changes), ...(value.order ? ['order'] : []), ...(value.automatic ? ['dailyGoal'] : [])]) {
     if (!Object.prototype.hasOwnProperty.call(expected, key) || (expected[key] && !value.parents.includes(String(expected[key])))) throw Error('Missing causal precondition');
@@ -105,13 +111,21 @@ export function project(base: Activation, operations: readonly ArrangeOperation[
   const seen = new Map<string, ArrangeOperation>();
   for (const op of sorted) { const previous = seen.get(op.id); if (previous && !equal(previous, op)) invalid.add(op.id); seen.set(op.id, op); }
   const business = new Map<string, ArrangeOperation>();
+  const pending = new Map<string, string[]>(), observed = new Set<string>();
+  const isolate = (op: ArrangeOperation, fields: string[]) => {
+    for (const field of fields) {
+      const ids = new Set(pending.get(field) ?? []);
+      if (versions[field]) ids.add(versions[field]!);
+      ids.add(op.id); pending.set(field, [...ids].sort()); conflicts.add(field);
+    }
+  };
   let remaining = [...seen.values()].filter(op => !invalid.has(op.id)), clock = 0;
   while (remaining.length) {
     const later: ArrangeOperation[] = []; let progressed = false;
     for (const op of remaining) {
       clock = Math.max(clock, op.clock);
-      if (op.parents.some(id => !applied.has(id))) { later.push(op); continue; }
-      progressed = true;
+      if (op.parents.some(id => !applied.has(id)) || Object.values(op.resolves ?? {}).flat().some(id => !observed.has(id) && !applied.has(id))) { later.push(op); continue; }
+      progressed = true; observed.add(op.id);
       const key = businessKey(op);
       if (key && applied.has(key)) {
         const accepted = business.get(key)!;
@@ -120,6 +134,15 @@ export function project(base: Activation, operations: readonly ArrangeOperation[
         continue;
       }
       const mismatches = Object.keys(op.expected).filter(field => (versions[field] ?? '') !== op.expected[field]);
+      const touchedFields = [...Object.keys(op.changes), ...(op.order ? ['order'] : [])];
+      const unresolved = Object.keys(op.expected).filter(field => pending.has(field)
+        && !equal(op.resolves?.[field]?.slice().sort(), pending.get(field)));
+      // A pending field is only a provisional display value. Never silently
+      // overwrite it or release dependent writes without explicit confirmation.
+      if (unresolved.length || (!op.automatic && mismatches.length)) {
+        isolate(op, [...new Set([...touchedFields, ...unresolved, ...mismatches])]);
+        continue;
+      }
       // One atomic conflict-resolution decision: concurrent manual order wins,
       // while a still-current goal can finish rollover. A newer goal supersedes
       // the entire old rollover, but its logical result still releases successors.
@@ -134,12 +157,15 @@ export function project(base: Activation, operations: readonly ArrangeOperation[
         else (state as unknown as Record<string, unknown>)[field] = clone(value);
       }
       if (op.order && !skipOrder) state.order = applyOrder(state.order, op.order);
-      for (const field of touched) versions[field] = key ?? op.id;
+      for (const field of touched) {
+        versions[field] = key ?? op.id;
+        if (op.resolves?.[field]) { pending.delete(field); conflicts.delete(field); }
+      }
       applied.add(op.id); if (key) { applied.add(key); business.set(key, op); }
     }
     if (!progressed) { for (const op of later) deferred.add(op.id); break; }
     remaining = later;
   }
   state.achievedDays.sort();
-  return { state, versions, clock, applied, deferred, conflicts };
+  return { state, versions, clock, applied, deferred, conflicts, pending };
 }
