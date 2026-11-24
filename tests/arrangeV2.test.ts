@@ -32,12 +32,15 @@ test('v2 production Store paths with isolated Markdown and durable device storag
    const reminder=x.ops().find((op:any)=>op.automatic?.kind==='reminder');assert.equal(reminder.order,undefined);
    const count=x.ops().length;await s.enter();assert.equal(x.ops().length,count);
   });
-  await t.test('next-day reminder chronology releases selected pins, preserves other slots and does not run in background',async()=>{
+  await t.test('next-day reminder uses normal top order and releases selected pins, preserves other slots and does not run in background',async()=>{
    const x=fixture(m,{order:['B','P','X','A'],specialReminderDay:'2026-11-22'});
    x.item('B',{pinned:true,special_reminder_at:'2026-11-02T00:00:00Z'});x.item('P',{pinned:true});x.item('X');x.item('A',{special_reminder_at:'2026-11-01T00:00:00Z'});
-   const s=x.store();await s.load();assert.deepEqual(s.state.order,['B','P','X','A']);await s.enter();assert.deepEqual(s.state.order,['A','P','B','X']);
+   const s=x.store();await s.load();assert.deepEqual(s.state.order,['B','P','X','A']);await s.enter();assert.deepEqual(s.state.order,['B','P','A','X']);
+   assert.deepEqual(x.ops().at(-1).order.ids,['B','A']);
+   const restarted=x.store();await restarted.load();assert.deepEqual(restarted.state.order,s.state.order);
+   assert.deepEqual(m.applyOrder(['B','P','X','A'],{kind:'top',ids:['A','B'],pins:['B','P']}),['A','P','B','X'],'previously written explicit reminder intent keeps its meaning');
    await s.top('X');const manual=[...s.state.order];await s.enter();assert.deepEqual(s.state.order,manual);
-   t.mock.timers.tick(86400000);await s.load();assert.deepEqual(s.state.order,manual);await s.enter();assert.deepEqual(s.state.order,['A','P','B','X']);
+   t.mock.timers.tick(86400000);await s.load();assert.deepEqual(s.state.order,manual);await s.enter();assert.deepEqual(s.state.order,['B','P','A','X']);
    t.mock.timers.setTime(new Date('2026-11-23T04:00:00Z').getTime());
   });
   await t.test('bad child and duplicate identity isolate dependencies; independent completion survives',async()=>{

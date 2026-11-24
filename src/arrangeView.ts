@@ -1051,6 +1051,7 @@ export class ArrangeView extends ItemView {
 		row.toggleClass('is-selected', item.id === this.selected);
 		row.toggleClass('is-multi-selected',!this.choosingParent&&this.multi.has(item.id));
 		row.toggleClass('is-pinned', item.pinned);
+		row.toggleClass('is-special-reminder', Boolean(item.specialReminderAt));
 		row.toggleClass('is-root-item', item.parent === null && this.store.items.some(child => child.parent === item.id));
 		row.toggleClass('is-development-project', Boolean(item.developmentProject));
 		row.toggleClass('is-completed', Boolean(item.completedAt));
@@ -1137,8 +1138,23 @@ export class ArrangeView extends ItemView {
 			let topDrop = false;
 			let axis: 'left' | 'other' | null = null;
 			let lastX = x, lastY = y;
+			const pressedBounds = row.getBoundingClientRect();
+			let preview: HTMLElement | null = null;
 			const beginDrag = () => {
 				if (this.busy || inMulti || item.pinned || item.completedAt || row.classList.contains('gvkit-arrange-daily-goal')) return;
+				// Keep the source in layout. A viewport preview cannot extend the
+				// list's scroll range or drift when edge scrolling moves the source.
+				preview = this.contentEl.cloneNode(false) as HTMLElement;
+				preview.removeAttribute('id');
+				preview.addClass('gvkit-arrange-drag-preview');
+				preview.style.cssText = this.contentEl.style.cssText;
+				Object.assign(preview.style, { position: 'fixed', left: `${pressedBounds.left}px`, top: `${pressedBounds.top}px`,
+					width: `${pressedBounds.width}px`, height: `${pressedBounds.height}px`, overflow: 'visible',
+					pointerEvents: 'none', zIndex: '1000', fontFamily: win.getComputedStyle(row).fontFamily });
+				preview.setAttribute('aria-hidden', 'true'); preview.inert = true;
+				const copy = row.cloneNode(true) as HTMLElement;
+				copy.addClass('is-dragging'); copy.style.removeProperty('transform');
+				preview.append(copy); doc.body.append(preview);
 				dragging = true; row.addClass('is-dragging'); this.tips.start();
 				this.trace('drag.begin');
 				suppressClickUntil = Infinity;
@@ -1153,6 +1169,7 @@ export class ArrangeView extends ItemView {
 				doc.removeEventListener('pointermove', mouseMove); doc.removeEventListener('pointerup', mouseEnd);
 				doc.removeEventListener('pointercancel', cancel); win.removeEventListener('blur', cancel);
 				row.removeClass('is-dragging'); row.style.removeProperty('transform'); target?.removeClass('is-drop-target');
+				preview?.remove(); preview = null;
 				if (dragging || moved || held) suppressClickUntil = Date.now() + 500;
 				if (this.cancelReorder === cancel) this.cancelReorder = null;
 			};
@@ -1178,7 +1195,7 @@ export class ArrangeView extends ItemView {
 					if (!dragging) return;
 				}
 				event.preventDefault();
-				row.style.transform = `translateY(${clientY - y}px)`;
+				if (preview) preview.style.transform = `translate3d(${clientX - x}px, ${clientY - y}px, 0)`;
 				target?.removeClass('is-drop-target');
 				const container = row.parentElement!;
 				const first = container.querySelector<HTMLElement>('.gvkit-arrange-row:not(.is-completed):not(.gvkit-arrange-daily-goal)');

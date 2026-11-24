@@ -192,7 +192,8 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange input[type="checkbox"].is-development-completed:not(:checked) { appearance: none; -webkit-appearance: none; border: 2px solid #2563eb; background: transparent; box-shadow: none; }
 .gvkit-arrange input[type="checkbox"].is-development-completed:not(:checked)::after { display: none; }
 .gvkit-arrange-item-menu .gvkit-arrange-menu-action.is-active { color: #2563eb; }
-.gvkit-arrange-row.is-dragging { opacity: .9; background: var(--background-primary); box-shadow: 0 4px 14px #0003; border-radius: 8px; z-index: 4; pointer-events: none; }
+.gvkit-arrange-row.is-dragging { opacity: .25; pointer-events: none; }
+.gvkit-arrange-drag-preview .gvkit-arrange-row.is-dragging { opacity: .9; background: var(--background-primary); box-shadow: 0 4px 14px #0003; border-radius: 8px; }
 .gvkit-arrange-row.is-drop-target::after { content: ''; position: absolute; left: 6px; right: 2px; top: 0; height: 2px; background: var(--color-blue, #448aff); pointer-events: none; }
 .gvkit-arrange-row.is-drop-target[data-drop-after="true"]::after { top: auto; bottom: -1px; }
 .gvkit-arrange-composer { --gvkit-arrange-composer-inset: max(7px, env(safe-area-inset-bottom)); flex: 0 0 auto; position: relative; padding: 0 0 var(--gvkit-arrange-composer-inset); border: 0; z-index: 3; }
@@ -277,6 +278,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-panel-grip { display: none; }
 .gvkit-arrange-empty { padding: 40px 16px; text-align: center; color: var(--text-muted); }
 .gvkit-arrange[data-root-item-style="background"] .gvkit-arrange-row.is-root-item:not(.gvkit-arrange-daily-goal):not(.is-completed):not(.is-selected):not(.is-dragging):not(.is-invalid-parent) { background: color-mix(in srgb, var(--color-purple, #9860d6) 12%, var(--background-primary)); }
+.gvkit-arrange .gvkit-arrange-row.is-special-reminder:not(.is-selected):not(.is-multi-selected):not(.is-dragging):not(.is-invalid-parent) { background: color-mix(in srgb, var(--color-purple, #9860d6) 12%, var(--background-primary)); }
 .gvkit-arrange[data-root-item-style="text"] .gvkit-arrange-row.is-root-item:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title:not(.is-overdue) { color: var(--color-purple, #9860d6); }
 .gvkit-arrange .gvkit-arrange-row.is-development-project:not(.is-completed):not(.is-invalid-parent) .gvkit-arrange-title,
 .gvkit-arrange .gvkit-arrange-detail-title-row.is-development-project:not(.is-completed) .gvkit-arrange-detail-title { color: var(--color-purple, #9860d6); }

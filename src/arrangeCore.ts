@@ -165,16 +165,10 @@ export function topInOrder(order: string[], items: ArrangeItem[], ids: readonly 
 	return order.map(id => fixed.has(id) ? id : movable[cursor++]!);
 }
 
-/** Daily reminder Top has its own order; manual/multi Top retains global order. */
+/** Daily reminders use the same free slots and selected order as manual Top. */
 export function reminderTopInOrder(order: string[], items: ArrangeItem[]): string[] {
-	const reminders = new Map(items.filter(item => !item.completedAt && !item.occurrenceId && item.specialReminderAt)
-		.map(item => [item.id, Date.parse(item.specialReminderAt!)]));
-	const chosen = order.filter(id => reminders.has(id)).sort((a, b) => reminders.get(a)! - reminders.get(b)!);
-	const selected = new Set(chosen);
-	const fixed = new Set(items.filter(item => item.pinned && !item.completedAt && !selected.has(item.id)).map(item => item.id));
-	const movable = [...chosen, ...order.filter(id => !selected.has(id) && !fixed.has(id))];
-	let cursor = 0;
-	return order.map(id => fixed.has(id) ? id : movable[cursor++]!);
+	const reminders = items.filter(item => !item.completedAt && !item.occurrenceId && item.specialReminderAt).map(item => item.id);
+	return topInOrder(order, items, reminders);
 }
 
 export function validParent(items: ArrangeItem[], id: string, parent: string | null): boolean {

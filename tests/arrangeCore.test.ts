@@ -175,9 +175,9 @@ test('batch top is stable and releases only explicitly chosen pin slots', () => 
 });
 
 
-test('reminder Top sorts by enabling time, releases its pins and keeps other absolute slots', () => {
+test('reminder Top uses manual selected order and keeps other absolute slots', () => {
  const items=[item('B',{pinned:true,specialReminderAt:'2026-11-15T02:00:00Z'}),item('P',{pinned:true}),item('X'),item('A',{specialReminderAt:'2026-11-15T01:00:00Z'})];
- assert.deepEqual(reminderTopInOrder(['B','P','X','A'],items),['A','P','B','X']);
+ assert.deepEqual(reminderTopInOrder(['B','P','X','A'],items),['B','P','A','X']);
  const equal=items.map(x=>({...x,specialReminderAt:x.specialReminderAt?'2026-11-15T01:00:00Z':null}));
  assert.deepEqual(reminderTopInOrder(['B','P','X','A'],equal),['B','P','A','X']);
  assert.deepEqual(topInOrder(['B','P','X','A'],items,['A','B']),['B','P','A','X'],'manual/multi Top still preserves global chosen order');
