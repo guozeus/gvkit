@@ -22,6 +22,7 @@ import { DeviceZhouyouSecret } from './publishSecretSettings';
 import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
 import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
 import { registerArrange } from './arrangeView';
+import { registerSyncStatus } from './syncStatus';
 import { registerIndexNavigation } from './indexNavigationView';
 import { DocumentReadAloud } from './readAloud';
 import { ReadAloudEmbeds } from './readAloudEmbeds';
@@ -189,6 +190,7 @@ export default class GvkitPlugin extends Plugin {
 	onload(): void {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
+		registerSyncStatus(this);
 		registerArrange(this);
 		registerIndexNavigation(this);
 		const embeds = new ReadAloudEmbeds(this.app);
