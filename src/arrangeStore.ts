@@ -69,6 +69,7 @@ export interface ArrangeBatchResult {
 
 export class ArrangeStore {
 	items: ArrangeItem[] = [];
+	readonly parentIds = new Set<string>();
 	rewards: RewardRecord[] = [];
 	state = defaultArrangeState();
 	archivedDailyGoalCompletedAt: string | null = null;
@@ -111,9 +112,9 @@ export class ArrangeStore {
 		} catch { /* never restore an invalid local snapshot */ }
 	}
 
-	async load(trigger = 'direct'): Promise<void> {
+	async load(trigger = 'direct', presentation = false): Promise<void> {
 		const run = this.trace?.nextRun() ?? 0;
-		const context = { run, stage: 'start', trigger };
+		const context = { run, stage: 'start', trigger, presentation };
 		this.trace?.record('load.start', { run, trigger });
 		try {
 			await this.loadInner(context);
@@ -124,7 +125,7 @@ export class ArrangeStore {
 		}
 	}
 
-	private async loadInner(context: { run: number; stage: string; trigger: string }): Promise<void> {
+	private async loadInner(context: { run: number; stage: string; trigger: string; presentation: boolean }): Promise<void> {
 		let state = defaultArrangeState();
 		this.configIssue = null;
 		this.goalIssue = null;
@@ -260,6 +261,8 @@ export class ArrangeStore {
 		const rewards: (RewardRecord & { path: string })[] = [];
 		let archivedDailyGoal: { path: string; completedAt: string } | null = null;
 		const today = dayKey(new Date(), state.timezone);
+		// A refresh that can roll over yesterday's goal still reads business facts live.
+		const cached = context.presentation && (!state.dailyGoal || state.dailyGoal.day >= today);
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (![TODO, DONE, HISTORY].some(folder => file.path.startsWith(folder + '/'))) continue;
 			const startItems = items.length, startRewards = rewards.length, startArchived = archivedCompletions.length;
@@ -270,10 +273,9 @@ export class ArrangeStore {
 				// files need their real fields; mtime selects reads, never counts completions.
 				let fields = this.app.metadataCache?.getFileCache(file)?.frontmatter;
 				const changedToday = file.stat && dayKey(new Date(file.stat.mtime), state.timezone) === today;
-				const rewardHistory = state.rewardsEnabledAt && (!file.stat || file.stat.mtime >= Date.parse(state.rewardsEnabledAt));
-				const currentMonth = file.path.startsWith(`${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`);
-				if (changedToday || (!fields && (currentMonth || rewardHistory))) {
-					const source = raw = await this.readItemSource(file);
+				// A missing index must not hide completion facts in an older folder.
+				if (changedToday || !fields) {
+					const source = raw = await this.readItemSource(file, cached);
 					fields = getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange') ? documentParts(source).fields : undefined;
 				}
 				if (fields?.gvkit_arrange === true) { parsed = fields; this.validateItem(fields); claimIdentity(fields, file.path); }
@@ -296,7 +298,7 @@ export class ArrangeStore {
 				continue;
 			}
 			if (!file.path.startsWith(`${TODO}/`) && !file.path.startsWith(`${DONE}/`)) continue;
-			const source = raw = await this.readItemSource(file);
+			const source = raw = await this.readItemSource(file, cached);
 			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
 			const { fields, body } = documentParts(source);
 			if (fields.gvkit_arrange !== true) continue;
@@ -362,6 +364,8 @@ export class ArrangeStore {
 			.map(({path, ...reward}) => reward);
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
+		this.parentIds.clear();
+		for (const item of items) if (item.parent) this.parentIds.add(item.parent);
 		this.state = state;
 		this.loadedState = copyState(state);
 		if (this.hasConfigConflict('dailyGoal', 'timezone') || (state.dailyGoal && state.dailyGoal.day < today && this.hasConfigConflict('order'))) {
@@ -402,7 +406,7 @@ export class ArrangeStore {
 
 	private serial<T>(trigger: string, action: () => Promise<T>, presentation = false): Promise<T> {
 		const next = this.queue.then(async () => {
-			await this.load('before_' + trigger);
+			await this.load('before_' + trigger, presentation);
 			if (this.goalIssue && trigger === 'setDailyGoal') throw this.goalIssue;
 			return await action();
 		});
@@ -442,8 +446,9 @@ export class ArrangeStore {
 		this.loadedState = copyState(this.state);
 	}
 
-	private async readItemSource(file: TFile): Promise<string> {
-		const raw = await this.app.vault.read(file);
+	private async readItemSource(file: TFile, cached = false): Promise<string> {
+		const raw = cached && typeof this.app.vault.cachedRead === 'function'
+			? await this.app.vault.cachedRead(file) : await this.app.vault.read(file);
 		if (!getFrontMatterInfo(raw).frontmatter.includes('gvkit_arrange')) return raw;
 		try {
 			const { fields } = documentParts(raw);
@@ -452,6 +457,8 @@ export class ArrangeStore {
 			this.history.forget(file.path);
 			return raw;
 		} catch { /* only damaged items may read history */ }
+		// Confirm damaged cached bytes from disk before attempting any repair.
+		if (cached) return this.readItemSource(file);
 		const repairIdentity = (id: string): string | null => {
 			// Identity is stable; title, body, parent, dates and rewards are not.
 			if (file.basename !== id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
@@ -865,7 +872,7 @@ export class ArrangeStore {
 				this.state = previous;
 				throw Error('特别提醒置顶未保存，请重新进入自御重试');
 			}
-		}, true);
+		});
 	}
 	toggleSpecialReminder(id: string): Promise<void> {
 		return this.serial('toggleSpecialReminder', async () => {

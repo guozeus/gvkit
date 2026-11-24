@@ -951,7 +951,7 @@ export class ArrangeView extends ItemView {
 			// Relationships come from all loaded items, before any visibility filter.
 			if (this.hierarchyFilter === 'roots') items = items.filter(item => item.parent === null);
 			if (this.hierarchyFilter === 'leaves') {
-				const parents = new Set(this.store.items.map(item => item.parent).filter(Boolean));
+				const parents = this.store.parentIds;
 				items = items.filter(item => !parents.has(item.id));
 			}
 			// Only the default main list folds projects. Search/date views can still
@@ -1052,7 +1052,7 @@ export class ArrangeView extends ItemView {
 		row.toggleClass('is-multi-selected',!this.choosingParent&&this.multi.has(item.id));
 		row.toggleClass('is-pinned', item.pinned);
 		row.toggleClass('is-special-reminder', Boolean(item.specialReminderAt));
-		row.toggleClass('is-root-item', item.parent === null && this.store.items.some(child => child.parent === item.id));
+		row.toggleClass('is-root-item', item.parent === null && this.store.parentIds.has(item.id));
 		row.toggleClass('is-development-project', Boolean(item.developmentProject));
 		row.toggleClass('is-completed', Boolean(item.completedAt));
 		if (this.choosingParent) {
@@ -1082,7 +1082,7 @@ export class ArrangeView extends ItemView {
 			const selecting = this.selected !== item.id;
 			void this.select(selecting ? item.id : null, selecting && parent === this.children && !Platform.isMobileApp);
 		};
-		if (this.store.items.some(child => child.parent === item.id)) {
+		if (this.store.parentIds.has(item.id)) {
 			const indicator = row.createSpan({ cls: 'gvkit-arrange-has-children', attr: { title: '有直接下级事项', 'aria-label': '有直接下级事项' } });
 			setIcon(indicator, 'list-tree');
 		}
