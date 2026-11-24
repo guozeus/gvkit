@@ -1,5 +1,6 @@
 import { App, TFile } from 'obsidian';
 import { createGvid } from './fileIdCore';
+import { ArrangeHistory, repairOriginal, uniqueOriginal } from './arrangeRecovery';
 import type { ArrangeTrace } from './arrangeTrace';
 import { activation, businessKey, clone, decodeV2, encodeV2, equal, operation, project, V2_ACTIVATION, V2_ROOT,
   type Activation, type ArrangeOperation, type OrderIntent, type Projection } from './arrangeV2';
@@ -14,23 +15,30 @@ export class ArrangeV2Store {
   private signatures = new Map<string, string>();
   private outbox = new Map<string, string>();
   private dirty = true;
+  private baseRaw: string | null = null;
+  private competing = new Set<string>();
+  private history: ArrangeHistory;
   private key: string;
   constructor(private app: App, private storage: Storage | null, private trace?: ArrangeTrace) {
+    this.history = new ArrangeHistory(app);
     this.key = `gvkit:arrange:v2:${app.vault.getName?.() ?? ''}:`;
     try {
       const raw = storage?.getItem(this.key + 'activation');
-      if (raw) this.base = activation(decodeV2(raw));
+      if (raw) { this.base = activation(decodeV2(raw)); this.baseRaw = raw; }
+    } catch { /* a bad activation must not hide this device's durable ops */ }
+    try {
       for (let i = 0; storage && i < storage.length; i++) {
         const key = storage.key(i)!;
         if (!key.startsWith(this.key + 'op:')) continue;
         try {
           const raw = storage.getItem(key)!, op = operation(decodeV2(raw));
+          if (key !== this.key + 'op:' + op.id) continue;
           this.records.set(op.id, { raw, op });
           if (storage.getItem(this.key + 'pending:' + op.id)) this.outbox.set(op.id, raw);
-        } catch { /* isolate this local record */ }
+        } catch { /* preserve the invalid local bytes until a verified original arrives */ }
       }
-      this.rebuild();
-    } catch { /* shared immutable originals can rebuild a missing local cache */ }
+    } catch { /* unavailable local storage does not prevent reading shared originals */ }
+    this.rebuild();
   }
   invalidate(path: string): void { this.signatures.delete(path); }
   private remember(key: string, raw: string, required = false): void {
@@ -47,32 +55,118 @@ export class ArrangeV2Store {
     if (this.projection.deferred.size || this.projection.conflicts.size || this.invalid.size)
       this.trace?.record('v2.projection.conflict', { stage: 'rebuild', size: this.invalid.size + this.projection.deferred.size + this.projection.conflicts.size });
   }
+  private readOperation(raw: string, id: string): ArrangeOperation {
+    const op = operation(decodeV2(raw));
+    if (op.id !== id || op.epoch !== this.base?.epoch) throw Error('Wrong operation identity');
+    return op;
+  }
+  private hasCompeting(key: string): boolean {
+    try { return this.competing.has(key) || !!this.storage?.getItem(this.key + 'conflict:' + key); }
+    catch { return true; }
+  }
+  private markCompeting(key: string, raw: string): void {
+    this.competing.add(key);
+    // Retain the first legal alternative across restarts; do not choose it.
+    try { if (!this.storage?.getItem(this.key + 'conflict:' + key)) this.remember('conflict:' + key, raw); } catch { /* still isolated in memory */ }
+  }
+  private clearCompeting(key: string): void {
+    this.competing.delete(key);
+    try { this.storage?.removeItem(this.key + 'conflict:' + key); } catch { /* a later exact read can retry */ }
+  }
+  private restoreLocal(key: string, raw: string, validate: (raw: string) => unknown): void {
+    const current = this.storage?.getItem(this.key + key);
+    if (current === raw) return;
+    if (current != null) {
+      let valid = false;
+      try { validate(current); valid = true; } catch { /* damaged copy */ }
+      if (valid) { this.markCompeting(key, current); throw Error('Immutable local record changed'); }
+      this.remember('recovery:' + key + ':' + createGvid(), current, true);
+      if (this.storage?.getItem(this.key + key) !== current) throw Error('Local record changed during recovery');
+    }
+    this.remember(key, raw, current != null);
+  }
   async load(): Promise<Projection | null> {
     const file = this.app.vault.getAbstractFileByPath(V2_ACTIVATION);
-    if (file instanceof TFile) {
-      try {
-        const raw = await this.app.vault.read(file), next = activation(decodeV2(raw));
-        if (this.base && !equal(this.base, next)) throw Error('Activation is immutable');
+    try {
+      if (file instanceof TFile) {
+        let raw = await this.app.vault.read(file);
+        let next: Activation;
+        try { next = activation(decodeV2(raw)); }
+        catch (error) {
+          if (this.hasCompeting('activation')) throw error;
+          if (this.baseRaw) {
+            activation(decodeV2(this.baseRaw));
+            this.restoreLocal('activation', this.baseRaw, value => activation(decodeV2(value)));
+            raw = await repairOriginal(this.app, file, raw, this.baseRaw);
+          } else {
+            let epoch: unknown;
+            try { epoch = (decodeV2(raw) as Partial<Activation>)?.epoch; } catch { /* unreadable envelope */ }
+            raw = await this.history.recover(file, raw, sources => uniqueOriginal(sources, value => {
+              const candidate = activation(decodeV2(value));
+              if (typeof epoch === 'string' && candidate.epoch !== epoch) throw Error('Wrong activation epoch');
+              return candidate;
+            }));
+          }
+          next = activation(decodeV2(raw));
+        }
+        if (this.baseRaw && this.baseRaw !== raw) { this.markCompeting('activation', raw); throw Error('Activation is immutable'); }
+        this.restoreLocal('activation', raw, value => activation(decodeV2(value)));
         if (!this.base) { this.base = next; this.dirty = true; }
-        this.remember('activation', raw);
-      } catch (error) { this.trace?.failure('v2.activation.invalid', error); }
+        this.baseRaw = raw; this.clearCompeting('activation'); this.history.forget(file.path);
+      }
+    } catch (error) {
+      this.trace?.failure('v2.activation.invalid', error);
+      this.projection = null; this.dirty = true;
+      return null;
     }
     if (!this.base) return null;
     for (const file of this.app.vault.getMarkdownFiles()) {
       if (!file.path.startsWith(V2_ROOT + '/ops/')) continue;
       const signature = `${file.stat?.mtime}:${file.stat?.size}`;
-      if (this.signatures.get(file.path) === signature) continue;
+      const id = file.basename;
+      if (!this.invalid.has(id) && this.signatures.get(file.path) === signature) continue;
+      if (file.path !== `${V2_ROOT}/ops/${id}.md`) continue;
       try {
-        const raw = await this.app.vault.read(file), op = operation(decodeV2(raw));
-        if (op.epoch !== this.base.epoch || file.path !== `${V2_ROOT}/ops/${op.id}.md`) throw Error('Wrong operation identity');
-        const previous = this.records.get(op.id);
-        if (previous && previous.raw !== raw) { this.invalid.add(op.id); this.dirty = true; throw Error('Immutable record changed'); }
-        if (!previous) { this.records.set(op.id, { raw, op }); this.dirty = true; this.remember('op:' + op.id, raw); }
+        let raw = await this.app.vault.read(file);
+        const previous = this.records.get(id);
+        let op: ArrangeOperation;
+        try { op = this.readOperation(raw, id); }
+        catch (error) {
+          if (this.hasCompeting('op:' + id)) throw error;
+          let envelope: Partial<ArrangeOperation> | undefined;
+          try { envelope = decodeV2(raw) as Partial<ArrangeOperation>; } catch { /* unreadable envelope */ }
+          if ((typeof envelope?.epoch === 'string' && envelope.epoch !== this.base.epoch)
+            || (typeof envelope?.id === 'string' && envelope.id !== id)) throw Error('Wrong damaged record identity');
+          // A structurally valid record of another identity/epoch is not damage
+          // that we can decide to overwrite.
+          let structurallyValid = false;
+          try { operation(decodeV2(raw)); structurallyValid = true; } catch { /* malformed */ }
+          if (structurallyValid) { this.markCompeting('op:' + id, raw); throw Error('Valid foreign record'); }
+          if (previous) {
+            this.readOperation(previous.raw, id);
+            this.restoreLocal('op:' + id, previous.raw, value => operation(decodeV2(value)));
+            raw = await repairOriginal(this.app, file, raw, previous.raw);
+          } else {
+            raw = await this.history.recover(file, raw, sources => uniqueOriginal(sources, value => this.readOperation(value, id)));
+          }
+          op = this.readOperation(raw, id);
+        }
+        if (previous && previous.raw !== raw) { this.markCompeting('op:' + id, raw); throw Error('Immutable record changed'); }
+        this.restoreLocal('op:' + id, raw, value => operation(decodeV2(value)));
+        if (!previous) { this.records.set(id, { raw, op }); this.dirty = true; }
+        if (this.invalid.delete(id)) this.dirty = true;
+        this.clearCompeting('op:' + id);
+        this.history.forget(file.path);
         this.signatures.set(file.path, signature);
-      } catch (error) { this.trace?.failure('v2.operation.invalid', error, { stage: 'read' }); }
+      } catch (error) {
+        this.invalid.add(id); this.dirty = true;
+        this.trace?.failure('v2.operation.invalid', error, { stage: 'read' });
+      }
     }
     for (const [id, raw] of this.outbox) {
-      try { await this.publish(id, raw); } catch (error) { this.trace?.failure('v2.outbox.fail', error, { operationId: id }); }
+      if (this.invalid.has(id)) continue;
+      try { this.readOperation(raw, id); await this.publish(id, raw); }
+      catch (error) { this.trace?.failure('v2.outbox.fail', error, { operationId: id }); }
     }
     this.rebuild();
     return this.projection;

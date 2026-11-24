@@ -1,4 +1,5 @@
 import { ArrangeV2Store } from './arrangeV2Store';
+import { ArrangeHistory, repairOriginal } from './arrangeRecovery';
 import { clone, type OrderIntent } from './arrangeV2';
 import { nextRepeatDate, repeatRule, sameRepeatCadence, validDate, type RepeatRule, type RepeatCompletion } from './arrangeRepeat';
 import { rewardRecord, rewardValue, type RewardRecord } from './arrangeRewards';
@@ -82,6 +83,7 @@ export class ArrangeStore {
 	private uncertainIds = new Set<string>();
 	private links = new Map<string, { id: string; parent: string | null }>();
 	private unknownRelations = false;
+	private history: ArrangeHistory;
 	claimConfigNotice(fingerprint: string): boolean {
 		if (this.notifiedConfig === fingerprint) return false;
 		this.notifiedConfig = fingerprint;
@@ -94,6 +96,7 @@ export class ArrangeStore {
 	private readonly recoveryKey: string;
 	private readonly storage: Storage | null;
 	constructor(private app: App, readonly trace?: ArrangeTrace) {
+		this.history = new ArrangeHistory(app);
 		this.recoveryKey = 'gvkit:arrange:last-valid:v1:' + (app.vault.getName?.() ?? '');
 		let storage: Storage | null = null;
 		try { storage = typeof window !== 'undefined' ? window.localStorage : null; } catch { /* optional local recovery */ }
@@ -270,7 +273,7 @@ export class ArrangeStore {
 				const rewardHistory = state.rewardsEnabledAt && (!file.stat || file.stat.mtime >= Date.parse(state.rewardsEnabledAt));
 				const currentMonth = file.path.startsWith(`${HISTORY}/${today.slice(0, 4)}/${today.slice(5, 7)}/`);
 				if (changedToday || (!fields && (currentMonth || rewardHistory))) {
-					const source = raw = await this.app.vault.read(file);
+					const source = raw = await this.readItemSource(file);
 					fields = getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange') ? documentParts(source).fields : undefined;
 				}
 				if (fields?.gvkit_arrange === true) { parsed = fields; this.validateItem(fields); claimIdentity(fields, file.path); }
@@ -293,7 +296,7 @@ export class ArrangeStore {
 				continue;
 			}
 			if (!file.path.startsWith(`${TODO}/`) && !file.path.startsWith(`${DONE}/`)) continue;
-			const source = raw = await this.app.vault.read(file);
+			const source = raw = await this.readItemSource(file);
 			if (!getFrontMatterInfo(source).frontmatter.includes('gvkit_arrange')) continue;
 			const { fields, body } = documentParts(source);
 			if (fields.gvkit_arrange !== true) continue;
@@ -438,8 +441,53 @@ export class ArrangeStore {
 		this.loadedState = copyState(this.state);
 	}
 
+	private async readItemSource(file: TFile): Promise<string> {
+		const raw = await this.app.vault.read(file);
+		if (!getFrontMatterInfo(raw).frontmatter.includes('gvkit_arrange')) return raw;
+		try {
+			const { fields } = documentParts(raw);
+			if (fields.gvkit_arrange !== true) return raw;
+			this.validateItem(fields);
+			this.history.forget(file.path);
+			return raw;
+		} catch { /* only damaged items may read history */ }
+		const repairIdentity = (id: string): string | null => {
+			// Identity is stable; title, body, parent, dates and rewards are not.
+			if (file.basename !== id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+			const info = getFrontMatterInfo(raw);
+			const ids = info.frontmatter.split('\n').filter(line => line.startsWith('gvid:'));
+			if (ids.length !== 1) return null;
+			const line = ids[0]!;
+			const damagedId = line.slice(5).trim().replace(/^['"]|['"]$/g, '');
+			if (damagedId.length < 9 || damagedId.length >= id.length || !id.startsWith(damagedId)) return null;
+			const start = raw.indexOf(line);
+			const candidate = raw.slice(0, start) + 'gvid: ' + id + raw.slice(start + line.length);
+			try {
+				const { fields } = documentParts(candidate);
+				if (fields.gvkit_arrange !== true || fields.gvid !== id) return null;
+				this.validateItem(fields);
+			} catch { return null; }
+			return candidate;
+		};
+		const known = this.links.get(file.path);
+		const candidate = known && repairIdentity(known.id);
+		if (candidate) return repairOriginal(this.app, file, raw, candidate);
+		return this.history.recover(file, raw, sources => {
+			const ids = new Set<string>();
+			for (const source of sources) {
+				try {
+					const { fields } = documentParts(source);
+					if (fields.gvkit_arrange !== true) continue;
+					this.validateItem(fields); ids.add(fields.gvid as string);
+				} catch { /* an invalid snapshot cannot prove identity */ }
+			}
+			return ids.size === 1 ? repairIdentity([...ids][0]!) : null;
+		});
+	}
+
 	private validateItem(fields: Record<string, unknown>): void {
 		if (typeof fields.gvid !== 'string' || !fields.gvid) throw Error('事项身份缺失');
+		if (/^[0-9a-f]{8}-/i.test(fields.gvid) && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(fields.gvid)) throw Error('事项身份不完整');
 		for (const key of ['parent', 'completed_at', 'date'] as const) if (fields[key] != null && typeof fields[key] !== 'string') throw Error('事项属性类型错误');
 		if (fields.completed_at && !Number.isFinite(Date.parse(String(fields.completed_at)))) throw Error('完成时间无效');
 		if (fields.date && !validDate(fields.date)) throw Error('事项日期无效');
