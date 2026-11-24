@@ -239,7 +239,7 @@ export class ArrangeStore {
 		this.configIssue = new ArrangeConfigError('v2_pending', Error('等待 v2 激活同步'));
 		}
 		context.stage = 'scan_items';
-		const items: ArrangeItem[] = [], archivedCompletions: string[] = [];
+		const items: ArrangeItem[] = [], archivedCompletions: { path: string; completedAt: string }[] = [];
 		const identities = new Map<string, string>();
 		const seenIds = new Set<string>();
 		let linksChanged = false;
@@ -257,8 +257,8 @@ export class ArrangeStore {
 			const link = { id, parent: typeof fields.parent === 'string' ? fields.parent : null };
 			if (!sameValue(this.links.get(path), link)) { this.links.set(path, link); linksChanged = true; }
 		};
-		const rewards: RewardRecord[] = [];
-		let archivedDailyGoalCompletedAt: string | null = null;
+		const rewards: (RewardRecord & { path: string })[] = [];
+		let archivedDailyGoal: { path: string; completedAt: string } | null = null;
 		const today = dayKey(new Date(), state.timezone);
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (![TODO, DONE, HISTORY].some(folder => file.path.startsWith(folder + '/'))) continue;
@@ -279,19 +279,19 @@ export class ArrangeStore {
 				if (fields?.gvkit_arrange === true) { parsed = fields; this.validateItem(fields); claimIdentity(fields, file.path); }
 				const history = fields?.repeat_history as RepeatCompletion[] | undefined;
 				for (const occurrence of history ?? []) {
-					rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded ?? 0});
+					rewards.push({path:file.path, id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded ?? 0});
 					if (dayKey(new Date(occurrence.completed_at), state.timezone) === today) {
-						archivedCompletions.push(occurrence.completed_at);
-						if(state.dailyGoal?.day===today && (fields?.gvid===state.dailyGoal.id || occurrence.id===state.dailyGoal.id)) archivedDailyGoalCompletedAt=occurrence.completed_at;
+						archivedCompletions.push({path:file.path, completedAt:occurrence.completed_at});
+						if(state.dailyGoal?.day===today && (fields?.gvid===state.dailyGoal.id || occurrence.id===state.dailyGoal.id)) archivedDailyGoal={path:file.path, completedAt:occurrence.completed_at};
 					}
 				}
 				const record = fields && rewardRecord(fields);
-				if (record) rewards.push(record);
+				if (record) rewards.push({...record, path:file.path});
 				const completed = Array.isArray(fields?.repeat_history) ? null : fields?.completed_at;
 				if (fields?.gvkit_arrange === true && typeof completed === 'string' && Number.isFinite(Date.parse(completed))
 					&& dayKey(new Date(completed), state.timezone) === today) {
-					archivedCompletions.push(completed);
-					if (state.dailyGoal?.day === today && fields.gvid === state.dailyGoal.id) archivedDailyGoalCompletedAt = completed;
+					archivedCompletions.push({path:file.path, completedAt:completed});
+					if (state.dailyGoal?.day === today && fields.gvid === state.dailyGoal.id) archivedDailyGoal = {path:file.path, completedAt:completed};
 				}
 				continue;
 			}
@@ -303,7 +303,7 @@ export class ArrangeStore {
 			parsed = fields;
 			this.validateItem(fields);
 			const record = rewardRecord(fields);
-			if (record) rewards.push(record);
+			if (record) rewards.push({...record, path:file.path});
 			if (typeof fields.gvid !== 'string') throw Error(`事项缺少 GVID：${file.basename}`);
 			seenIds.add(fields.gvid);
 			claimIdentity(fields, file.path);
@@ -313,8 +313,8 @@ export class ArrangeStore {
 			const visible = history.filter(value => !value.archived);
 			const last = closed ? visible[visible.length-1] : undefined;
 			for (const occurrence of history) {
-				rewards.push({id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded ?? 0});
-				if (occurrence.archived) { archivedCompletions.push(occurrence.completed_at); continue; }
+				rewards.push({path:file.path, id:occurrence.id, completedAt:occurrence.completed_at, points:occurrence.reward_awarded ?? 0});
+				if (occurrence.archived) { archivedCompletions.push({path:file.path, completedAt:occurrence.completed_at}); continue; }
 				items.push({id:occurrence === last ? fields.gvid : occurrence.id, path:file.path,
 					title:occurrence.title, body:occurrence.body, parent:occurrence.parent, date:occurrence.date,
 					completedAt:occurrence.completed_at, rewardPoints:occurrence.reward_points, pinned:false,
@@ -358,7 +358,8 @@ export class ArrangeStore {
 			this.goalIssue = new ArrangeGoalIssue('dependency'); this.goalIssue.message = '目标相关事项待确认；其他事项可正常使用。';
 		}
 		try { if (linksChanged) this.storage?.setItem(this.recoveryKey + ':links', JSON.stringify([...this.links])); } catch { /* optional */ }
-		this.rewards = rewards.filter(reward => !this.uncertainIds.has(reward.id));
+		this.rewards = rewards.filter(reward => !this.isolatedItems.has(reward.path) && !this.uncertainIds.has(reward.id))
+			.map(({path, ...reward}) => reward);
 		state.order = pendingOrder(items, state.order);
 		this.items = items;
 		this.state = state;
@@ -371,8 +372,8 @@ export class ArrangeStore {
 			try { this.storage?.removeItem(this.recoveryKey + ':notice'); } catch { /* optional */ }
 
 		}
-		this.archivedCompletions = archivedCompletions;
-		this.archivedDailyGoalCompletedAt = archivedDailyGoalCompletedAt;
+		this.archivedCompletions = archivedCompletions.filter(value => !this.isolatedItems.has(value.path)).map(value => value.completedAt);
+		this.archivedDailyGoalCompletedAt = archivedDailyGoal && !this.isolatedItems.has(archivedDailyGoal.path) ? archivedDailyGoal.completedAt : null;
 		if (!this.configIssue && !this.goalIssue && state.dailyGoal && state.dailyGoal.day < today) {
 			context.stage = 'day_rollover';
 			this.trace?.record('day_rollover.start', { run: context.run, trigger: 'dailyGoal_day_changed' });
@@ -529,6 +530,11 @@ export class ArrangeStore {
 				Object.assign(occurrence, changes, body !== undefined ? {body} : {});
 				return markdown(current.fields, current.body);
 			}
+			const reopened = (current.fields.repeat_reopened as RepeatCompletion[] | undefined)?.find(value => value.id === current.fields.repeat_instance);
+			if (reopened) {
+				for (const key of ['title', 'parent'] as const) if (key in changes) Object.assign(reopened, {[key]:changes[key]});
+				if (body !== undefined) reopened.body = body;
+			}
 			return markdown({ ...current.fields, ...changes }, body ?? current.body);
 		});
 	}
@@ -547,11 +553,11 @@ export class ArrangeStore {
 			const completedParent = chosenParent?.completedAt ? chosenParent : this.items.find(item => item.id === parent && item.completedAt);
 			// Only the direct parent follows the existing manual undo contract.
 			const parentFile = completedParent ? this.file(completedParent.id) : null;
-			const parentSource = parentFile ? await this.app.vault.read(parentFile) : null;
+			let parentUndo: { before: string; after: string } | undefined;
 			const oldOrder = [...this.state.order];
 			const path = `${TODO}/${id}.md`;
 			try {
-				if (completedParent) await this.changeCompletion(completedParent.id, false);
+				if (completedParent) await this.changeCompletion(completedParent.id, false, undefined, (before, after) => { parentUndo = {before, after}; });
 				this.state.order = moveInOrder(this.state.order, this.items, id);
 				await this.saveState('create', { kind: 'move', ids: [id], pins: this.pins() });
 				// Commit the child last: preceding failures cannot leave an extra child.
@@ -562,10 +568,24 @@ export class ArrangeStore {
 				if (!completedParent) throw error;
 				if (this.app.vault.getAbstractFileByPath(path) instanceof TFile)
 					throw new ArrangeCreateError('下级已保存，上级已恢复未完成；刷新失败，请刷新查看，勿重复提交', id);
-				// Restore this parent's exact original bytes and path if child creation failed.
+				// Roll back only this undo, never later content or a newer completion.
 				try {
-					if (parentFile && parentSource !== null) {
-						await this.app.vault.process(parentFile, () => parentSource);
+					if (parentFile && parentUndo) {
+						const undo = parentUndo, before = documentParts(undo.before), after = documentParts(undo.after);
+						const keys = [...new Set([...Object.keys(before.fields), ...Object.keys(after.fields)])]
+							.filter(key => !sameValue(before.fields[key], after.fields[key]));
+						if (parentFile.path !== completedParent.path && this.app.vault.getAbstractFileByPath(completedParent.path)) throw Error('原路径已占用');
+						await this.app.vault.process(parentFile, source => {
+							if (source === undo.after) return undo.before;
+							const current = documentParts(source);
+							if (current.fields.gvid !== after.fields.gvid || current.fields.gvkit_arrange !== true
+								|| keys.some(key => !sameValue(current.fields[key], after.fields[key]))) throw Error('上级状态已有后续变更');
+							for (const key of keys) {
+								if (key in before.fields) current.fields[key] = before.fields[key];
+								else delete current.fields[key];
+							}
+							return markdown(current.fields, current.body);
+						});
 						if (parentFile.path !== completedParent.path) await this.app.fileManager.renameFile(parentFile, completedParent.path);
 					}
 					this.state.order = oldOrder;
@@ -601,7 +621,7 @@ export class ArrangeStore {
 		const expected = this.items.find(item => item.id === id);
 		return this.serial('complete', () => this.changeCompletion(id, done, expected));
 	}
-	private async changeCompletion(id: string, done: boolean, expected?: ArrangeItem): Promise<boolean> {
+	private async changeCompletion(id: string, done: boolean, expected?: ArrangeItem, onWrite?: (before: string, after: string) => void): Promise<boolean> {
 		this.requireConfigFields('timezone', 'rewardsEnabledAt');
 		const folder = done ? DONE : TODO;
 		await this.requireFolder(folder);
@@ -621,7 +641,7 @@ export class ArrangeStore {
 		}
 		const sourceFields = documentParts(await this.app.vault.read(this.file(id))).fields;
 		if (item.repeat || item.occurrenceId || Array.isArray(sourceFields.repeat_history)) {
-			return this.changeRepeatCompletion(item, done);
+			return this.changeRepeatCompletion(item, done, onWrite);
 		}
 		const destination = `${folder}/${this.file(id).name}`;
 		if (destination !== item.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
@@ -630,8 +650,19 @@ export class ArrangeStore {
 			await this.saveState('complete_enable_rewards');
 		}
 		const completedAt = done ? new Date().toISOString() : null;
-		await this.patch(id, { completed_at: completedAt, pinned: false,
-			reward_completed_at: completedAt, reward_awarded: done ? rewardValue(item.rewardPoints) : null });
+		let changed = false;
+		await this.app.vault.process(this.file(id), source => {
+			const {fields, body} = documentParts(source);
+			this.validateItem(fields);
+			if (fields.gvkit_arrange !== true || fields.gvid !== item.id || (fields.date ?? null) !== item.date
+				|| (fields.completed_at ?? null) !== item.completedAt || fields.repeat || Array.isArray(fields.repeat_history)) return source;
+			const next = markdown({...fields, completed_at:completedAt, pinned:false,
+				reward_completed_at:completedAt, reward_awarded:done ? rewardValue(fields.reward_points) : null}, body);
+			onWrite?.(source, next);
+			changed = true;
+			return next;
+		});
+		if (!changed) { await this.load(); return false; }
 		const file = this.file(id);
 		await this.app.fileManager.renameFile(file, `${folder}/${file.name}`);
 		await this.load();
@@ -640,7 +671,7 @@ export class ArrangeStore {
 	}
 
 	/** One atomic Markdown process commits both the completion and its successor. */
-	private async changeRepeatCompletion(item: ArrangeItem, done: boolean): Promise<boolean> {
+	private async changeRepeatCompletion(item: ArrangeItem, done: boolean, onWrite?: (before: string, after: string) => void): Promise<boolean> {
 		if (done && !this.state.rewardsEnabledAt && !this.configIssue) {
 			this.state.rewardsEnabledAt = new Date().toISOString();
 			await this.saveState('complete_enable_rewards');
@@ -648,6 +679,8 @@ export class ArrangeStore {
 		let changed = false;
 		await this.app.vault.process(this.file(item.id), source => {
 			const {fields, body} = documentParts(source);
+			this.validateItem(fields);
+			if (fields.gvkit_arrange !== true || fields.gvid !== (item.occurrenceOf ?? item.id)) return source;
 			const history = (fields.repeat_history ?? []) as RepeatCompletion[];
 			const reopened = (fields.repeat_reopened ?? []) as RepeatCompletion[];
 			if (!done) {
@@ -668,8 +701,8 @@ export class ArrangeStore {
 				const prior = reopened.shift();
 				const completedAt = new Date().toISOString();
 				const occurrence: RepeatCompletion = {id:prior?.id ?? (typeof fields.repeat_instance === 'string' ? fields.repeat_instance : createGvid()), date:item.date,
-					title:prior?.title ?? item.title, body:prior?.body ?? body, parent:prior ? prior.parent : item.parent, completed_at:completedAt,
-					reward_points:prior?.reward_points ?? rewardValue(item.rewardPoints), reward_awarded:prior?.reward_awarded ?? rewardValue(item.rewardPoints)};
+					title:prior?.title ?? String(fields.title ?? item.title), body:prior?.body ?? body, parent:prior ? prior.parent : (typeof fields.parent === 'string' ? fields.parent : null), completed_at:completedAt,
+					reward_points:prior?.reward_points ?? rewardValue(fields.reward_points), reward_awarded:prior?.reward_awarded ?? rewardValue(fields.reward_points)};
 				if (history.some(value => value.id === occurrence.id)) throw Error('这次完成已存在，请刷新后检查完成记录');
 				history.push(occurrence);
 				if (prior) {
@@ -689,8 +722,10 @@ export class ArrangeStore {
 			fields.reward_completed_at=null; fields.reward_awarded=null;
 			const file=this.file(item.id), destination=`${fields.repeat_closed ? DONE : TODO}/${file.name}`;
 			if(destination!==file.path && this.app.vault.getAbstractFileByPath(destination)) throw Error('目标目录已有同名文件，事项未改动');
+			const next = markdown(fields,body);
+			onWrite?.(source, next);
 			changed=true;
-			return markdown(fields,body);
+			return next;
 		});
 		if(changed) {
 			const file=this.file(item.id);
@@ -750,6 +785,8 @@ export class ArrangeStore {
      occurrence.reward_points=points; occurrence.reward_awarded=points;
      return markdown(fields,body);
     }
+    const reopened=(fields.repeat_reopened as RepeatCompletion[] | undefined)?.find(value=>value.id===fields.repeat_instance);
+    if (reopened) { reopened.reward_points=points; reopened.reward_awarded=points; }
     // Correct only this explicit award. Old completed notes are never backfilled.
     const changes = rewardRecord(fields) ? { reward_awarded: points } : {};
     return markdown({ ...fields, reward_points: points, ...changes }, body);
