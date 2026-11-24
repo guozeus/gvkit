@@ -858,7 +858,7 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		const dateRegion = root.querySelector<HTMLButtonElement>('.gvkit-arrange-detail-date')!;
 		assert.equal(dateRegion.tagName, 'BUTTON'); assert.equal(dateRegion.hidden, false);
 		dateRegion.click();
-		assert.ok(window.document.querySelector('.gvkit-arrange-date-menu [aria-label="选择日期"]'));
+		assert.ok(window.document.querySelector('.gvkit-arrange-date-menu .gvkit-arrange-calendar-days'));
 		window.document.querySelector('.gvkit-arrange-date-menu')!.remove();
 		view.itemMenu(store.items.find((x: any) => x.id === family), new window.MouseEvent('click'));
 		const batch4Menu = window.document.querySelector('.gvkit-arrange-item-menu')!;
@@ -956,48 +956,42 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		assert.equal(hint.classList.contains('is-overdue'), true);
 		await view.toggleComplete(family);
 		assert.equal(view.detail.querySelector('.gvkit-arrange-detail-date').textContent.includes('逾期'), false);
-		// Date menu: all ten operations share one field; rapid taps persist in order.
+		// Date operations close after persistence on desktop and mobile; clear stays open.
 		for (const isMobile of [true, false]) {
 			const { Platform } = await import(pathToFileURL(join(dir, 'view.mjs')).href);
 			Platform.isMobileApp = isMobile;
 			await store.setDate(second, '2028-01-31');
 			const preserved = store.items.find((x: any) => x.id === second);
 			const order = [...store.state.order];
-			view.dateMenu(preserved, new window.MouseEvent('click'));
-			const menu = window.document.querySelectorAll('.gvkit-arrange-date-menu');
-			const panel = menu[menu.length - 1];
-			const button = (label: string) => panel.querySelector(`[aria-label="${label}"]`) as any;
-			assert.deepEqual([...panel.querySelectorAll('.gvkit-arrange-date-actions button')].map(x => x.textContent), ['今天','明天','后天','下周','选择']);
-			assert.deepEqual([...panel.querySelectorAll('.gvkit-arrange-date-shifts button')].map(x => x.textContent), ['+1天','-1天','+1周','+1月','重复']);
-			const waitDate = async (date: string | null) => {
-				for(let n=0;n<200 && (store.items.find((x:any)=>x.id===second).date!==date || view.busy);n++) await new Promise(r=>setTimeout(r,2));
-				assert.equal(store.items.find((x:any)=>x.id===second).date,date);
+			const openDate = () => {
+				view.dateMenu(store.items.find((x:any)=>x.id===second),new window.MouseEvent('click'));
+				return (window as any).lastModal.contentEl as HTMLElement;
 			};
-			button('推一月').click(); await waitDate('2028-02-29');
-			button('推一天').click(); button('推一天').click(); button('提前一天').click();
-			assert.ok(panel.textContent.includes('2028-03-01'), 'date updates immediately before disk writes finish');
-			await waitDate('2028-03-01');
-			button('推一周').click(); await waitDate('2028-03-08');
-			button('清除日期').click(); await waitDate(null);
-			button('提前一天').click(); await waitDate(new Date(Date.parse(today+'T12:00:00Z')-86400000).toISOString().slice(0,10));
-			for(const [label,days] of [['今天',0],['明天',1],['后天',2],['下周',7]] as const) {
-				button(label).click(); await waitDate(new Date(Date.parse(today+'T12:00:00Z')+days*86400000).toISOString().slice(0,10));
+			let panel=openDate();
+			assert.deepEqual([...panel.querySelectorAll('.gvkit-arrange-date-actions button')].map(x=>x.textContent),['今天','明天','后天','下周']);
+			assert.deepEqual([...panel.querySelectorAll('.gvkit-arrange-date-shifts button')].map(x=>x.textContent),['+1天','-1天','+1周','+1月']);
+			assert.ok(panel.querySelector('.gvkit-arrange-date-heading [aria-label="重复"]'));
+			assert.equal(panel.querySelector('[aria-label="选择日期"]'),null);
+			const waitDate = async (date:string|null,closed=true) => {
+				for(let n=0;n<300&&(store.items.find((x:any)=>x.id===second).date!==date||view.busy||(closed&&panel.isConnected));n++)await new Promise(r=>setTimeout(r,5));
+				assert.equal(store.items.find((x:any)=>x.id===second).date,date);
+				assert.equal(panel.isConnected,!closed);
+			};
+			(panel.querySelector('[aria-label="推一月"]') as HTMLButtonElement).click();await waitDate('2028-02-29');
+			panel=openDate();(panel.querySelector('[aria-label="推一天"]') as HTMLButtonElement).click();
+			assert.ok(panel.textContent!.includes('2028-03-01'));await waitDate('2028-03-01');
+			panel=openDate();(panel.querySelector('[aria-label="清除日期"]') as HTMLButtonElement).click();await waitDate(null,false);
+			assert.equal(panel.querySelector('.gvkit-arrange-calendar-days [aria-pressed="true"]'),null);
+			for(const [label,days] of [['今天',0],['明天',1],['后天',2],['下周',7]] as const){
+				if(!panel.isConnected)panel=openDate();
+				(panel.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement).click();
+				await waitDate(new Date(Date.parse(today+'T12:00:00Z')+days*86400000).toISOString().slice(0,10));
 			}
-			button('选择日期').click();
-			const calendar = window.document.querySelector('.gvkit-arrange-calendar')!;
-			assert.ok(calendar.querySelector('button[aria-label^="'+today.slice(0,7)+'"]'), 'first click directly shows monthly days');
-			const calendarPanel = calendar.parentElement!;
-			(calendar.querySelector('[aria-label="下个月"]') as any).click();
-			const selected = calendar.querySelector('.gvkit-arrange-calendar-days button') as any;
-			const selectedDate = selected.getAttribute('aria-label'); selected.click();
-			([...calendarPanel.querySelectorAll('button')].find(x=>x.textContent==='完成') as any).click();
-			await waitDate(selectedDate);
-			await new Promise(r=>setTimeout(r,0));
-			assert.equal(calendarPanel.isConnected,false,'calendar completion closes its own modal');
-			assert.equal(panel.isConnected,false,'successful calendar completion exits the parent date flow');
-			assert.deepEqual(store.state.order,order);
-			assert.equal(store.items.find((x:any)=>x.id===second).pinned,preserved.pinned);
-			panel.remove();
+			panel=openDate();const calendar=panel.querySelector('.gvkit-arrange-calendar')!;
+			(calendar.querySelector('[aria-label="下个月"]') as HTMLButtonElement).click();
+			const selected=calendar.querySelector('.gvkit-arrange-calendar-days button') as HTMLButtonElement;
+			const selectedDate=selected.getAttribute('aria-label');selected.click();await waitDate(selectedDate);
+			assert.deepEqual(store.state.order,order);assert.equal(store.items.find((x:any)=>x.id===second).pinned,preserved.pinned);
 		}
 		const { Platform } = await import(pathToFileURL(join(dir, 'view.mjs')).href); Platform.isMobileApp=true;
 		view.input.value='带日期草稿'; view.updateComposer(); view.createDateButton.click();
@@ -1592,12 +1586,10 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 		finishPicker.open();
 		(finishPicker.contentEl.querySelector('[aria-label="推一天"]') as HTMLButtonElement).click();
 		await waitFor(()=>Boolean(releaseDateWrite));
-		(finishPicker.contentEl.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
-		let calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		let calendarMenu=finishPicker.contentEl;
 		(calendarMenu.querySelector('[aria-label="2026-11-20"]') as HTMLButtonElement).click();
-		(calendarMenu.querySelector('[aria-label="完成"]') as HTMLButtonElement).click();
 		assert.ok(finishPicker.contentEl.isConnected && calendarMenu.isConnected);
-		assert.match(calendarMenu.textContent,/正在保存/);
+		assert.equal(calendarMenu.textContent!.includes('正在保存'),false);
 		blockDateWrite=false;releaseDateWrite();
 		await waitFor(()=>!finishPicker.contentEl.isConnected);
 		assert.deepEqual(dateWrites,['2026-11-14','2026-11-20'],'pending earlier write is followed by the final calendar snapshot');
@@ -1607,11 +1599,9 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			if(calendarFails)return false;dateWrites.push(date);return true;
 		});
 		failedPicker.open();calendarFails=true;
-		(failedPicker.contentEl.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
-		calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		calendarMenu=failedPicker.contentEl;
 		(calendarMenu.querySelector('[aria-label="2026-11-21"]') as HTMLButtonElement).click();
-		(calendarMenu.querySelector('[aria-label="完成"]') as HTMLButtonElement).click();
-		await waitFor(()=>Boolean(calendarMenu.querySelector('[aria-label="重试"]')));
+		await waitFor(()=>!(calendarMenu.querySelector('[aria-label="重试"]') as HTMLButtonElement).hidden);
 		assert.ok(failedPicker.contentEl.isConnected && calendarMenu.isConnected);
 		assert.equal(calendarMenu.querySelector('[aria-label="2026-11-21"]')!.getAttribute('aria-pressed'),'true');
 		assert.match(calendarMenu.textContent,/未保存，请重试/);
@@ -1620,13 +1610,9 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 
 		const cancelPicker=new ArrangeDatePicker(app,'2026-11-13','2026-11-13',async date=>{dateWrites.push(date);return true;});
 		cancelPicker.open();const beforeCancel=dateWrites.length;
-		(cancelPicker.contentEl.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
-		calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
-		(calendarMenu.querySelector('[aria-label="2026-11-22"]') as HTMLButtonElement).click();
-		(calendarMenu.querySelector('[aria-label="取消"]') as HTMLButtonElement).click();
-		assert.ok(cancelPicker.contentEl.isConnected);assert.equal(calendarMenu.isConnected,false);
-		assert.equal(dateWrites.length,beforeCancel);assert.match(cancelPicker.contentEl.textContent,/2026-11-13/);
+		(cancelPicker.contentEl.querySelector('[aria-label="下个月"]') as HTMLButtonElement).click();
 		cancelPicker.close();await waitFor(()=>!cancelPicker.contentEl.isConnected);
+		assert.equal(dateWrites.length,beforeCancel,'browsing another month never writes a date');
 
 		// Selection, full-result actions, and the three independently identified picker/parent edges.
 		await view.select(null);tabletPlatform.isMobileApp=false;tabletPlatform.isTablet=false;
@@ -1688,13 +1674,11 @@ test('inline edits persist to Markdown, switch safely, and retain drafts on inva
 			assert.match(details.textContent!,/R2隔离写入拒绝/);
 		};
 		batchButton('date').click();batchPanel=(window as any).lastModal.contentEl;
-		(batchPanel.querySelector('[aria-label="选择日期"]') as HTMLButtonElement).click();
-		calendarMenu=window.document.querySelector('.gvkit-arrange-calendar-menu')!;
+		calendarMenu=batchPanel;
 		(calendarMenu.querySelector('[aria-label="2026-11-24"]') as HTMLButtonElement).click();
-		(calendarMenu.querySelector('[aria-label="完成"]') as HTMLButtonElement).click();
-		await waitFor(()=>Boolean(calendarMenu.querySelector('[aria-label="重试"]')));assertFailures(calendarMenu as HTMLElement);
+		await waitFor(()=>!(calendarMenu.querySelector('[aria-label="重试"]') as HTMLButtonElement).hidden);assertFailures(calendarMenu as HTMLElement);
 		assert.deepEqual(failedIds.map(id=>store.items.find((x:any)=>x.id===id).date),['2026-11-20','2026-11-20','2026-11-24']);
-		(calendarMenu.querySelector('[aria-label="取消"]') as HTMLButtonElement).click();assertFailures(batchPanel);
+		assertFailures(batchPanel);
 		(batchPanel.querySelector('[aria-label="结束设置"]') as HTMLButtonElement).click();
 		assert.equal(batchPanel.isConnected,false);assert.equal(view.multiReceipt.result.failed.length,2);assert.equal(view.multiDetails.hidden,false);
 		view.multiDetails.click();const failuresModal=(window as any).lastModal;assert.match(failuresModal.contentEl.textContent,/R2隔离写入拒绝/);failuresModal.close();

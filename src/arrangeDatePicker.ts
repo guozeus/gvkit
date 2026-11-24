@@ -56,6 +56,8 @@ export class ArrangeDatePicker extends Modal {
  private commitInput: (() => void) | null = null;
  private updateSummary: (() => void) | null = null;
  private exiting = false;
+ private closeAfterSave = false;
+ private paintCalendar: (() => void) | null = null;
  constructor(app: App, current: string | null, private day: string,
   private saveDate: (date: string | null) => Promise<boolean>, private repeat?: RepeatEditor,
   private interaction?: (event: Event) => void, private batch?: BatchDateOptions) {
@@ -103,7 +105,7 @@ export class ArrangeDatePicker extends Modal {
   this.updateSummary?.();
   // A no-op opening/return must never reset a legacy month-end anchor.
   this.dirty=!this.savedCertain||JSON.stringify(next)!==JSON.stringify(this.saved);
-  this.failed=false;this.status=this.dirty?'正在保存…':'';this.paintFeedback();
+  this.failed=false;this.status='';this.paintFeedback();
   if(this.timer!==null) clearTimeout(this.timer);
   this.timer=this.dirty ? setTimeout(()=>{this.timer=null;void this.persist();},220) : null;
  }
@@ -111,7 +113,7 @@ export class ArrangeDatePicker extends Modal {
   if(this.writing) return this.writing;
   this.writing=(async()=>{
    while(this.dirty) {
-    this.failed=false;this.status='正在保存…';this.paintFeedback();
+    this.failed=false;this.status='';this.paintFeedback();
     const snapshot=this.current;
     this.dirty=false;
     let ok=false;
@@ -126,6 +128,7 @@ export class ArrangeDatePicker extends Modal {
     this.dirty=JSON.stringify(this.current)!==JSON.stringify(snapshot);
    }
    this.failed=false;this.status='';this.paintFeedback();
+   if(this.closeAfterSave&&!this.invalid&&!this.exiting) {this.closeAfterSave=false;super.close();}
    return true;
   })().finally(()=>{this.writing=null;});
   return this.writing;
@@ -143,16 +146,19 @@ export class ArrangeDatePicker extends Modal {
   this.exiting=true;
   this.finishInput();
   void this.flush().then(ok=>{
-   if(ok) {if(this.invalid)new Notice(this.batch?this.invalid:'未完整的重复设置未保存');super.close();}
+   if(ok) {this.closeAfterSave=false;if(this.invalid)new Notice(this.batch?this.invalid:'未完整的重复设置未保存');super.close();}
   }).finally(()=>{this.exiting=false;});
  }
  override onClose(): void { this.batch?.onClose(); }
  private changeDate(date: string | null): void {
   if(date===null&&this.batch?.clearBlocked){this.invalid=this.batch.clearBlocked;this.paintFeedback();return;}
+  this.closeAfterSave=date!==null;
   this.mixed=false;this.anyDate=Boolean(date);
   let rule=this.current.rule;
   if(date!==this.current.date && rule) rule=date?{...rule,anchor:date}:null;
   this.request({date,rule});
+  this.paintCalendar?.();
+  void this.flush();
  }
  private showDate(): void {
   this.contentEl.empty();this.contentEl.removeClass('gvkit-arrange-repeat');
@@ -161,13 +167,13 @@ export class ArrangeDatePicker extends Modal {
   const clear=this.button(header,'清除',()=>this.changeDate(null),'gvkit-arrange-date-clear','calendar-x','清除日期');
   const status=header.createDiv({cls:'gvkit-arrange-date-current',attr:{'aria-live':'polite'}});
   const date=status.createSpan('gvkit-arrange-date-value');
-  const rule=status.createSpan('gvkit-arrange-date-rule');
-  header.createSpan({cls:'gvkit-arrange-date-spacer',attr:{'aria-hidden':'true'}});
+  const repeat=this.repeat?this.button(header,'',()=>this.showRepeat(),'gvkit-arrange-repeat-entry','repeat','重复'):null;
+  const rule=repeat?.createSpan('gvkit-arrange-date-rule');
   this.updateSummary=()=>{
    clear.hidden=!this.current.date&&!this.anyDate;
    date.textContent=(this.batch?`${this.batch.count}项 · `:'')+(this.mixed?'日期不同':this.current.date ? `${this.current.date} ` : '未设日期');
    date.toggleClass('is-empty',!this.current.date);
-   rule.textContent=repeatSummary(this.current.rule);rule.hidden=!this.current.rule;
+   if(rule){rule.textContent=repeatSummary(this.current.rule);rule.hidden=!this.current.rule;}
   };
   this.updateSummary();
   const quick=this.contentEl.createDiv('gvkit-arrange-date-actions');
@@ -176,8 +182,7 @@ export class ArrangeDatePicker extends Modal {
    ['明天','calendar-plus',()=>this.changeDate(offsetDay(this.day,1))],
    ['后天','calendar-days',()=>this.changeDate(offsetDay(this.day,2))],
    ['下周','calendar-range',()=>this.changeDate(offsetDay(this.day,7))],
-   ['选择','calendar',()=>this.calendar()],
-  ] as const) this.button(quick,label,action,'',icon,label==='选择'?'选择日期':label);
+  ] as const) this.button(quick,label,action,'',icon,label);
   const shifts=this.contentEl.createDiv('gvkit-arrange-date-shifts');
   for(const [label,aria,action] of [
    ['+1天','推一天',()=>this.changeDate(offsetDay(this.current.date??this.day,1))],
@@ -185,10 +190,11 @@ export class ArrangeDatePicker extends Modal {
    ['+1周','推一周',()=>this.changeDate(offsetDay(this.current.date??this.day,7))],
    ['+1月','推一月',()=>this.changeDate(shiftDateMonth(this.current.date??this.day,1))],
   ] as const) this.button(shifts,label,action,'gvkit-arrange-date-shift',undefined,aria);
-  if(this.repeat) this.button(shifts,'重复',()=>this.showRepeat(),'gvkit-arrange-repeat-entry','repeat');
+  this.calendar();
   this.footer();
  }
  private showRepeat(): void {
+  this.closeAfterSave=false;this.paintCalendar=null;
   const original=this.current.rule, startingDate=this.current.date??this.day;
   const base=original?.anchor??startingDate;
   const weekdays=new Set(original?.weekdays??[weekday(base)]);
@@ -303,11 +309,8 @@ export class ArrangeDatePicker extends Modal {
   renderChoices();this.footer();
  }
  private calendar(): void {
-  const modal=new Modal(this.app);modal.setTitle('选择日期');
-  modal.contentEl.addClass('gvkit-arrange-calendar-menu');
-  for(const name of ['click','input','change'])modal.contentEl.addEventListener(name,event=>this.interaction?.(event),true);
-  let selected=this.current.date??this.day, month=selected.slice(0,7);
-  const calendar=modal.contentEl.createDiv('gvkit-arrange-calendar');
+  let month=(this.current.date??this.day).slice(0,7);
+  const calendar=this.contentEl.createDiv('gvkit-arrange-calendar');
   const paint=()=>{
    calendar.empty();
    const header=calendar.createDiv('gvkit-arrange-calendar-header');
@@ -321,28 +324,11 @@ export class ArrangeDatePicker extends Modal {
    const count=Number(dateRange(`${month}-01`,'month').end.slice(8));
    for(let n=1;n<=count;n++) {
     const date=`${month}-${String(n).padStart(2,'0')}`;
-    const button=this.button(grid,String(n),()=>{selected=date;paint();},'',undefined,date);
-    button.setAttribute('aria-pressed',String(date===selected));
+    const button=this.button(grid,String(n),()=>this.changeDate(date),'',undefined,date);
+    button.setAttribute('aria-pressed',String(date===this.current.date));
    }
   };
+  this.paintCalendar=paint;
   paint();
-  const feedback=modal.contentEl.createDiv({cls:'gvkit-arrange-date-feedback',attr:{role:'status','aria-live':'polite'}});
-  feedback.hidden=true;
-  const controls=modal.contentEl.createDiv('gvkit-arrange-calendar-controls');
-  const cancel=this.button(controls,'取消',()=>modal.close());
-  const done=this.button(controls,'完成',()=>{
-   done.disabled=cancel.disabled=true;calendar.inert=true;
-   feedback.hidden=false;feedback.textContent='正在保存…';feedback.removeClass('is-error');
-   this.changeDate(selected);
-   void this.flush().then(ok=>{
-    if(ok) {modal.close();super.close();}
-    else {
-     feedback.textContent=this.batch?.failureMessage()||'未保存，请重试';feedback.addClass('is-error');
-     if(this.batch)appendBatchFailures(feedback,this.batch.failureDetails());
-     done.lastElementChild!.textContent='重试';done.setAttribute('aria-label','重试');
-    }
-   }).finally(()=>{done.disabled=cancel.disabled=false;calendar.inert=false;});
-  },'mod-cta');
-  modal.open();
  }
 }
