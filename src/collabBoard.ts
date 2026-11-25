@@ -39,6 +39,7 @@ export class CollabBoardPublisher {
   private busy = new Set<string>();
   private scheduled = new Map<string, ReturnType<typeof setTimeout>>();
   constructor(private app: App, private settings: PublishSettings, private fileIds: FileIdManager) {}
+  get hasPendingWork(): boolean { return this.busy.size > 0 || this.scheduled.size > 0; }
   stop(): void { for (const timer of this.scheduled.values()) clearTimeout(timer); this.scheduled.clear(); }
 
   private async call(method: 'GET'|'POST'|'PUT', suffix: string, body?: unknown): Promise<{ status: number; data: any }> {

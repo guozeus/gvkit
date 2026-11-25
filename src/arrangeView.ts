@@ -48,7 +48,10 @@ function titleCaretRect(input: HTMLTextAreaElement): DOMRect | null {
 	mirror.remove(); return rect;
 }
 
-export function registerArrange(plugin: Plugin): void {
+// Transient tab state survives only the automatic reload of this leaf.
+type ReloadLeaf = WorkspaceLeaf & { gvkitResumeArrange?: (view: ArrangeView) => void };
+
+export function registerArrange(plugin: Plugin) {
 	const platform = Platform.isIosApp ? 'ios' : Platform.isAndroidApp ? 'android' : Platform.isMobileApp ? 'mobile' : 'desktop';
 	const trace = deviceArrangeTrace(plugin.app.vault.getName(), plugin.manifest.version, platform);
 	trace.record('plugin.initialize');
@@ -89,6 +92,12 @@ export function registerArrange(plugin: Plugin): void {
 		plugin.app.workspace.onLayoutReady(syncChrome);
 		plugin.register(() => document.body.classList.remove('gvkit-arrange-active'));
 	}
+	const views = () => plugin.app.workspace.getLeavesOfType(ARRANGE_VIEW)
+		.map(leaf => leaf.view).filter((view): view is ArrangeView => view instanceof ArrangeView);
+	return {
+		busy: () => ArrangeStore.pendingOperations > 0 || views().some(view => view.holdAutoUpdate()),
+		beforeReload: () => views().forEach(view => view.rememberForUpdate()),
+	};
 }
 
 export class ArrangeView extends ItemView {
@@ -503,6 +512,11 @@ export class ArrangeView extends ItemView {
 			bindViewport();
 		}
 		await this.reload('view_open');
+		const leaf = this.leaf as ReloadLeaf;
+		if (leaf?.gvkitResumeArrange) {
+			leaf.gvkitResumeArrange(this);
+			delete leaf.gvkitResumeArrange;
+		}
 		let shown = this.isDisplayed(), active = this.app.workspace.getActiveViewOfType(ArrangeView) === this;
 		this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
 			const next = this.app.workspace.getActiveViewOfType(ArrangeView) === this;
@@ -534,6 +548,29 @@ export class ArrangeView extends ItemView {
 		if (this.editTimer !== null) window.clearTimeout(this.editTimer);
 		await this.saveEdit();
 		this.editing?.body.destroy();
+	}
+	holdAutoUpdate(): boolean {
+		const e = this.editing;
+		return !!(this.busy || this.savingEdit || this.reloadTask || this.choosingParent
+			|| this.input?.value || this.draftDate || this.multi.size || this.multiReceipt
+			|| this.cancelReorder || this.cancelResize || e && (e.composing || e.title.value !== e.savedTitle || e.body.value !== e.savedBody)
+			|| this.contentEl.contains(this.contentEl.ownerDocument.activeElement)
+				&& this.contentEl.ownerDocument.activeElement?.closest('textarea, input, [contenteditable=true]'));
+	}
+	rememberForUpdate(): void {
+		const { filter, hierarchyFilter, selected, full, searchOpen, searchScroll, searchDate, includeCompleted, scrolls } = this;
+		const query = this.searchInput.value, scroll = this.list.scrollTop, detailScroll = this.detailScroll?.scrollTop ?? 0;
+		const { height, maxHeight } = this.detail.style;
+		(this.leaf as ReloadLeaf).gvkitResumeArrange = view => {
+			Object.assign(view, { filter, hierarchyFilter, selected, full, searchOpen, searchScroll, searchDate, includeCompleted, scrolls });
+			view.searchInput.value = query;
+			view.syncSearch();
+			view.paintLists();
+			view.paintDetail();
+			Object.assign(view.detail.style, { height, maxHeight });
+			view.list.scrollTop = scroll;
+			if (view.detailScroll) view.detailScroll.scrollTop = detailScroll;
+		};
 	}
 	private isDisplayed(): boolean {
 		const bounds = this.contentEl.getBoundingClientRect();

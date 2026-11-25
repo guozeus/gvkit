@@ -429,6 +429,7 @@ export class ZhouyouAutoPublisher {
     document.querySelectorAll<HTMLElement>('.nav-file-title[data-path]').forEach(el =>
       el.classList.toggle('gvkit-zhouyou-published', !!published(el.dataset.path || '')));
   }
+  get hasPendingWork(): boolean { return this.busy.size > 0 || this.timers.size > 0; }
   stop(): void {
     this.active = false;
     for (const timer of this.timers.values()) clearTimeout(timer);

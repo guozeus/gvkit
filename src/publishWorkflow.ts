@@ -132,6 +132,7 @@ function sourceSnapshot(observation: WorkflowObservation): string {
 }
 /** Single-window lifecycle gate; not a substitute for server-side source/product CAS. */
 export class PublishWorkflow {
+	get hasPendingWork(): boolean { return this.writing.size > 0; }
 	private active = true;
 	private readonly writing = new Set<object>();
 	private readonly reviews = new WeakMap<object, LegacyReview>();

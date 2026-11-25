@@ -68,6 +68,8 @@ export interface ArrangeBatchResult {
 }
 
 export class ArrangeStore {
+	// Includes queued actions and direct loads, which can also repair an original file.
+	static pendingOperations = 0;
 	items: ArrangeItem[] = [];
 	readonly parentIds = new Set<string>();
 	rewards: RewardRecord[] = [];
@@ -116,13 +118,14 @@ export class ArrangeStore {
 		const run = this.trace?.nextRun() ?? 0;
 		const context = { run, stage: 'start', trigger, presentation };
 		this.trace?.record('load.start', { run, trigger });
+		ArrangeStore.pendingOperations++;
 		try {
 			await this.loadInner(context);
 			this.trace?.record('load.ok', { run });
 		} catch (error) {
 			this.trace?.failure('load.fail', error, { run, trigger, stage: context.stage });
 			throw error;
-		}
+		} finally { ArrangeStore.pendingOperations--; }
 	}
 
 	private async loadInner(context: { run: number; stage: string; trigger: string; presentation: boolean }): Promise<void> {
@@ -405,11 +408,12 @@ export class ArrangeStore {
 	facts() { return todayFacts(this.items, this.state, new Date(), this.archivedCompletions); }
 
 	private serial<T>(trigger: string, action: () => Promise<T>, presentation = false): Promise<T> {
+		ArrangeStore.pendingOperations++;
 		const next = this.queue.then(async () => {
 			await this.load('before_' + trigger, presentation);
 			if (this.goalIssue && trigger === 'setDailyGoal') throw this.goalIssue;
 			return await action();
-		});
+		}).finally(() => { ArrangeStore.pendingOperations--; });
 		this.queue = next.catch(() => {});
 		return next;
 	}

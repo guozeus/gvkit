@@ -163,6 +163,7 @@ export class DocumentReadAloud {
 		}
 	}
 
+	get isPlaying(): boolean { return this.playback !== null; }
 	stop(): void {
 		const playback = this.playback;
 		if (!playback) return;

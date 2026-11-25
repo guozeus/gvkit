@@ -21,6 +21,7 @@ import { openZhouyouPublishDialog } from './publishDialog';
 import { DeviceZhouyouSecret } from './publishSecretSettings';
 import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
 import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
+import { registerAutoUpdate, runningVersion } from './autoUpdate';
 import { registerArrange } from './arrangeView';
 import { registerSyncStatus } from './syncStatus';
 import { registerIndexNavigation } from './indexNavigationView';
@@ -166,6 +167,7 @@ class GvkitReadingRenderChild extends MarkdownRenderChild {
 }
 
 export default class GvkitPlugin extends Plugin {
+	readonly runningVersion = runningVersion;
 	private toolbarEl: HTMLDivElement | null = null;
 	private refreshFrame: number | null = null;
 	private refreshWindow: Window | null = null;
@@ -191,7 +193,10 @@ export default class GvkitPlugin extends Plugin {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 		registerSyncStatus(this);
-		registerArrange(this);
+		const arrange = registerArrange(this);
+		registerAutoUpdate(this, () => arrange.busy() || !!(this.autoPublisher?.hasPendingWork
+			|| this.collabBoard?.hasPendingWork || this.publishWorkflow?.hasPendingWork
+			|| this.readAloud?.isPlaying || this.publishSettings?.hasPendingSave), arrange.beforeReload);
 		registerIndexNavigation(this);
 		const embeds = new ReadAloudEmbeds(this.app);
 		this.register(() => embeds.destroy());
