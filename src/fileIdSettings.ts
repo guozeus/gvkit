@@ -83,7 +83,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 		if (!this.containerEl.isConnected) return null;
 		const draft: GvkitSettingsDraft = {};
 		this.containerEl.querySelectorAll<HTMLInputElement>('[data-gvkit-update-field]').forEach(input => {
-			if (input.value) draft[input.dataset.gvkitUpdateField as keyof GvkitSettingsDraft] = input.value;
+			draft[input.dataset.gvkitUpdateField as keyof GvkitSettingsDraft] = input.value;
 		});
 		return draft;
 	}

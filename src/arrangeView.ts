@@ -2,6 +2,7 @@ import { showConfigConflict } from './arrangeConflictView';
 import { V2_ROOT } from './arrangeV2';
 import { repeatLabel, type RepeatRule } from './arrangeRepeat';
 import { ArrangeDatePicker, appendBatchFailures, type DatePickerUpdate } from './arrangeDatePicker';
+import { GvkitUpdateDeferred } from './autoUpdate';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
@@ -97,8 +98,14 @@ export function registerArrange(plugin: Plugin, openCollab?: (target: CollabTarg
 	const views = () => plugin.app.workspace.getLeavesOfType(ARRANGE_VIEW)
 		.map(leaf => leaf.view).filter((view): view is ArrangeView => view instanceof ArrangeView);
 	return {
-		prepareForUpdate: async () => { for (const view of views()) await view.prepareForUpdate(); },
+		prepareForUpdate: async () => {
+			const openViews = views();
+			if (openViews.some(view => view.hasActiveComposition()))
+				throw new GvkitUpdateDeferred('GVKit editor composition in progress');
+			for (const view of openViews) await view.prepareForUpdate();
+		},
 		cancelUpdate: () => views().forEach(view => view.cancelUpdate()),
+		hasActiveComposition: () => views().some(view => view.hasActiveComposition()),
 	};
 }
 
@@ -553,18 +560,17 @@ export class ArrangeView extends ItemView {
 		await this.saveEdit();
 		this.editing?.body.destroy();
 	}
-	/** Close only an actual in-flight local commit; ordinary activity never delays updating. */
+	hasActiveComposition(): boolean { return this.composerComposing || Boolean(this.editing?.composing); }
+	/** Finish real local writes; never blur away a live IME candidate to force a reload. */
 	async prepareForUpdate(): Promise<void> {
 		if (this.closed) return;
-		if (this.composerComposing || this.editing?.composing) {
-			const active = this.contentEl.ownerDocument.activeElement as HTMLElement | null;
-			if (active && this.contentEl.contains(active)) active.blur();
-			await new Promise<void>(resolve => setTimeout(resolve, 0));
-		}
+		if (this.hasActiveComposition()) throw new GvkitUpdateDeferred('GVKit editor composition in progress');
 		if (this.reloadTask) await this.reloadTask;
 		await this.store.whenIdle();
+		if (this.hasActiveComposition()) throw new GvkitUpdateDeferred('GVKit editor composition in progress');
 		await this.saveEdit(); // Failed or invalid input is preserved below, not discarded.
 		await this.store.whenIdle();
+		if (this.hasActiveComposition()) throw new GvkitUpdateDeferred('GVKit editor composition in progress');
 		const picker = this.datePicker;
 		const dateUpdate = picker && picker.modal.modalEl.isConnected
 			? { kind: picker.kind, id: picker.id, state: await picker.modal.prepareForUpdate() } : null;

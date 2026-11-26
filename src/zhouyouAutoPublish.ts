@@ -237,8 +237,7 @@ export class ZhouyouAutoPublisher {
         || context.view.editor.getValue() !== raw))) throw new Error('当前笔记已变化，稍后重新核对。');
       const content = publishBody(raw), title = file.basename, hash = await sha256Utf8(content);
       let b = await this.binding(file, raw);
-      // Reload must not automatically re-send a request whose earlier outcome is unknown.
-      if (b.pending && !manual) return;
+      // A pending request may be read back automatically, but never re-sent blindly.
       if (b.blocked) throw new Error('这篇笔记的同步已暂停：' + b.blocked + '。请先核对两端内容。');
       if (!uuidOrNull(b.sourceId)) throw new Error('来源 ID 无效，已停止同步以保护原文档。');
       if ((b.documentId !== undefined && (!b.documentId || typeof b.documentId !== 'string'))
@@ -298,6 +297,15 @@ export class ZhouyouAutoPublisher {
           || b.pending.operationId !== b.pending.payload.operationId
           || b.pending.payload.sourceId !== b.sourceId) {
           throw new Error('待确认操作的地址或来源已变化，原操作保持，请先核对。');
+        }
+        if (!manual) {
+          const original = b.pending.payload;
+          // The original remote document must now contain the pending body,
+          // at a version after the request's original baseline.
+          if (!remote || remote.title !== original.title
+            || remote.contentHash !== original.sourceRevision
+            || (original.recordVersion !== null && remote.recordVersion <= original.recordVersion)) return;
+          b = await this.confirmed(file, b, remote);
         }
       }
       if (b.legacyEvidence?.newOperationId && b.legacyEvidence.blocked)

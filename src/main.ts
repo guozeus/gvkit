@@ -205,7 +205,7 @@ export default class GvkitPlugin extends Plugin {
 			this.publishSettings?.cancelReload();
 			delete (this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft;
 			delete (this.app as typeof this.app & { gvkitReadAloudResume?: ReadAloudResume }).gvkitReadAloudResume;
-		});
+		}, () => !arrange.hasActiveComposition());
 		registerIndexNavigation(this);
 		const embeds = new ReadAloudEmbeds(this.app);
 		this.register(() => embeds.destroy());
@@ -416,7 +416,7 @@ export default class GvkitPlugin extends Plugin {
 			if (!settings) return;
 			await settings.load();
 			if (this.publishLifecycleActive && this.gvkitSettingsTab?.containerEl.isConnected) this.gvkitSettingsTab.display();
-			else delete (this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft;
+			// A hidden settings tab consumes the draft when it is next displayed.
 			if (!this.publishLifecycleActive) return;
 			const quickSettings = new DocumentQuickSettings({
 				getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),

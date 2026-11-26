@@ -1,7 +1,9 @@
-import { Platform, requestUrl, requireApiVersion, type App, type Plugin } from 'obsidian';
+import { Notice, Platform, requestUrl, requireApiVersion, type App, type Plugin } from 'obsidian';
 import { version as runningVersion } from '../manifest.json';
 
 export { runningVersion };
+/** A live GVKit IME composition must finish before its editor can be replaced. */
+export class GvkitUpdateDeferred extends Error {}
 const id = 'gvkit';
 const releases = 'https://api.github.com/repos/guozeus/gvkit/releases/';
 const files = ['main.js', 'styles.css', 'manifest.json'] as const;
@@ -65,7 +67,7 @@ async function download(release: Release): Promise<Bundle> {
 }
 
 /** Prepare only GVKit's local state. A cancelled switch must leave the old instance usable. */
-export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Promise<void>, cancelReload: () => void): void {
+export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Promise<void>, cancelReload: () => void, canSwitch: () => boolean): void {
 	const app = plugin.app as Host & { [lastCheck]?: number };
 	const manager = app.plugins;
 	const dir = plugin.manifest.dir;
@@ -77,6 +79,7 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 	let disposed = false;
 	let checking = false;
 	let retry: number | undefined;
+	let deferredIme = false;
 
 	function current(): boolean { return !disposed && manager!.getPlugin(id) === plugin && manager!.enabledPlugins.has(id); }
 
@@ -111,6 +114,7 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 			if (!current()) { cancelReload(); return; }
 			const ready = await readFiles();
 			if (files.some(name => ready[name] !== before[name])) { cancelReload(); return; }
+			if (!canSwitch()) throw new GvkitUpdateDeferred('GVKit editor composition in progress');
 			await manager!.disablePlugin(id);
 			disabled = true;
 			if (manager!.getPlugin(id)) throw Error('GVKit still loaded after disable');
@@ -127,17 +131,40 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 			if (!disabled && manager!.getPlugin(id) !== plugin) disabled = true;
 			if (!disabled) cancelReload();
 			if (disabled) {
-				// Roll back only bytes this installer may have touched. Never erase a
-				// distinct BRAT/Sync package that arrived during the switch.
-				const disk = await readFiles();
-				if (files.every(name => disk[name] === before[name] || disk[name] === target[name])) {
-					if (manager!.getPlugin(id)) await manager!.disablePlugin(id);
-					for (const name of files) if (disk[name] !== previous[name])
-						await adapter.write(dir + '/' + name, previous[name]);
-					await load(runningVersion);
-				} else {
-					console.error('gvkit: external installer changed the package; cannot safely roll back', error);
-					// Never activate an unverified mixed package or overwrite external changes.
+				let recovered = false;
+				try {
+					const disk = await readFiles();
+					if (files.every(name => disk[name] === before[name] || disk[name] === target[name])) {
+						// Only restore our own known bytes; never overwrite a third installer.
+						if (manager!.getPlugin(id)) await manager!.disablePlugin(id);
+						for (const name of files) {
+							if (disk[name] === previous[name]) continue;
+							const path = dir + '/' + name;
+							if (await adapter.read(path) !== disk[name]) throw Error('Package changed while restoring GVKit');
+							await adapter.write(path, previous[name]);
+						}
+						await load(runningVersion);
+						recovered = true;
+					} else if (disk['manifest.json']) {
+						// A third installer may have completed a different official release.
+						// Verify the entire package before loading it without writing any bytes.
+						const externalVersion: unknown = JSON.parse(disk['manifest.json']).version;
+						if (typeof externalVersion === 'string' && stable(externalVersion)) {
+							const external = await download(await getRelease('tags/' + externalVersion));
+							const unchanged = await readFiles();
+							if (files.every(name => disk[name] === external[name] && unchanged[name] === disk[name])) {
+								if (manager!.getPlugin(id)) await manager!.disablePlugin(id);
+								await load(externalVersion);
+								recovered = true;
+							}
+						}
+					}
+				} catch (recoveryError) {
+					console.error('gvkit: automatic update recovery failed', recoveryError);
+				}
+				if (!recovered) {
+					console.error('gvkit: package conflict left GVKit disabled', error);
+					new Notice('GVKit 自动更新中断，插件无法自动恢复。请在 Obsidian 设置 → 第三方插件中通过 BRAT 或手动重新安装完整正式版，再启用 GVKit。', 20000);
 				}
 			}
 			throw error;
@@ -163,6 +190,11 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 			const [target, backup] = await Promise.all([download(latest), download(prior)]);
 			if (current()) await install(latest.tag_name, target, backup);
 		} catch (error) {
+			if (error instanceof GvkitUpdateDeferred) {
+				deferredIme = true;
+				app[lastCheck] = Date.now() - cooldown;
+				return; // Resume on this input's compositionend, not on general host activity.
+			}
 			console.warn('gvkit: automatic update failed', error);
 			later(5 * cooldown);
 		} finally { checking = false; }
@@ -170,6 +202,9 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 
 	function listen(d: Document): void {
 		plugin.registerDomEvent(d, 'visibilitychange', () => { if (!d.hidden) void check(); });
+		plugin.registerDomEvent(d, 'compositionend', () => {
+			if (deferredIme) { deferredIme = false; later(100); }
+		}, true);
 	}
 	listen(doc);
 	plugin.registerEvent(app.workspace.on('window-open', (_window, w) => listen(w.document)));

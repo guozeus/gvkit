@@ -3,7 +3,11 @@ import { dateRange, offsetDay, shiftDateMonth, shiftPeriod } from './arrangeCore
 import { firstRepeatDate, nextRepeatDate, repeatRule, repeatSummary, type RepeatRule } from './arrangeRepeat';
 
 type Snapshot = { date: string | null; rule: RepeatRule | null };
-export type DatePickerUpdate = { current: Snapshot; saved: Snapshot; failed: boolean; status: string; invalid: string };
+type RepeatDraft = { original: RepeatRule | null; startingDate: string; selected: string; interval: string; unit: string; weekdays: number[]; monthDays: number[];
+ yearDates: string[]; month: number; inputPending: boolean; focus: 'interval' | 'unit' | null };
+export type DatePickerUpdate = { current: Snapshot; saved: Snapshot; dirty: boolean; savedCertain: boolean;
+ mixed: boolean; anyDate: boolean; failed: boolean; status: string; invalid: string;
+ page: 'date' | 'repeat'; repeatDraft: RepeatDraft | null; calendarMonth: string | null };
 export interface RepeatEditor {
  rule: RepeatRule | null;
  save: (rule: RepeatRule | null, date: string | null) => Promise<boolean>;
@@ -59,6 +63,9 @@ export class ArrangeDatePicker extends Modal {
  private exiting = false;
  private closeAfterSave = false;
  private paintCalendar: (() => void) | null = null;
+ private page: 'date' | 'repeat' = 'date';
+ private captureRepeat: (() => RepeatDraft) | null = null;
+ private calendarMonth: string | null = null;
  constructor(app: App, current: string | null, private day: string,
   private saveDate: (date: string | null) => Promise<boolean>, private repeat?: RepeatEditor,
   private interaction?: (event: Event) => void, private batch?: BatchDateOptions, private dismissed?: () => void) {
@@ -140,17 +147,27 @@ export class ArrangeDatePicker extends Modal {
  }
  /** Finish this modal's own save, but retain a failed, editable selection across reload. */
  async prepareForUpdate(): Promise<DatePickerUpdate> {
-  this.finishInput();
+  // A half-typed interval belongs to the editor, not to a save request.
+  if(this.inputTimer!==null){clearTimeout(this.inputTimer);this.inputTimer=null;}
   await this.flush();
-  const snapshot = {current:this.current,saved:this.saved,failed:this.failed,status:this.status,invalid:this.invalid};
+  if(this.inputTimer!==null){clearTimeout(this.inputTimer);this.inputTimer=null;}
+  const snapshot = {current:this.current,saved:this.saved,dirty:this.dirty,savedCertain:this.savedCertain,
+   mixed:this.mixed,anyDate:this.anyDate,failed:this.failed,status:this.status,invalid:this.invalid,
+   page:this.page,repeatDraft:this.captureRepeat?.()??null,calendarMonth:this.calendarMonth};
+  // Closing a number input may fire onchange: it must not commit a draft.
+  const interval=this.contentEl.querySelector<HTMLInputElement>('input[aria-label="重复间隔"]');
+  if(interval){interval.onchange=null;interval.oninput=null;}
   super.close();
   return snapshot;
  }
  restoreFromUpdate(snapshot: DatePickerUpdate): void {
   this.current=snapshot.current;this.saved=snapshot.saved;
-  this.dirty=JSON.stringify(this.current)!==JSON.stringify(this.saved);
-  this.failed=snapshot.failed;this.status=snapshot.status;this.invalid=snapshot.invalid;
-  this.showDate();this.paintFeedback();
+  this.dirty=snapshot.dirty;this.savedCertain=snapshot.savedCertain;
+  this.mixed=snapshot.mixed;this.anyDate=snapshot.anyDate;
+  this.failed=snapshot.failed;this.status=snapshot.status;
+  if(snapshot.page==='repeat'&&this.repeat) this.showRepeat(snapshot.repeatDraft??undefined);
+  else this.showDate(snapshot.calendarMonth??undefined);
+  this.invalid=snapshot.invalid;this.paintFeedback();
  }
  private finishInput(): void {
   if(this.inputTimer!==null) {clearTimeout(this.inputTimer);this.inputTimer=null;}
@@ -175,7 +192,8 @@ export class ArrangeDatePicker extends Modal {
   this.paintCalendar?.();
   void this.flush();
  }
- private showDate(): void {
+ private showDate(calendarMonth?: string): void {
+  this.page='date';this.captureRepeat=null;
   this.contentEl.empty();this.contentEl.removeClass('gvkit-arrange-repeat');
   this.commitInput=null;this.inputPending=false;this.invalid='';
   const header=this.contentEl.createDiv('gvkit-arrange-date-heading');
@@ -205,22 +223,23 @@ export class ArrangeDatePicker extends Modal {
    ['+1周','推一周',()=>this.changeDate(offsetDay(this.current.date??this.day,7))],
    ['+1月','推一月',()=>this.changeDate(shiftDateMonth(this.current.date??this.day,1))],
   ] as const) this.button(shifts,label,action,'gvkit-arrange-date-shift',undefined,aria);
-  this.calendar();
+  this.calendar(calendarMonth);
   this.footer();
  }
- private showRepeat(): void {
+ private showRepeat(draft?: RepeatDraft): void {
+  this.page='repeat';
   this.closeAfterSave=false;this.paintCalendar=null;
-  const original=this.current.rule, startingDate=this.current.date??this.day;
+  const original=draft?draft.original:this.current.rule, startingDate=draft?draft.startingDate:this.current.date??this.day;
   const base=original?.anchor??startingDate;
-  const weekdays=new Set(original?.weekdays??[weekday(base)]);
-  const monthDays=new Set(original?.monthDays??[Number(base.slice(8))]);
-  const yearDates=new Set(original?.yearDates??[base.slice(5)]);
-  let month=Number(base.slice(5,7));
-  let selected:string='custom';
+  const weekdays=new Set(draft?.weekdays??original?.weekdays??[weekday(base)]);
+  const monthDays=new Set(draft?.monthDays??original?.monthDays??[Number(base.slice(8))]);
+  const yearDates=new Set(draft?.yearDates??original?.yearDates??[base.slice(5)]);
+  let month=draft?.month??Number(base.slice(5,7));
+  let selected:string=draft?.selected??'custom';
   const todayWeek=weekday(this.day), todayDate=Number(this.day.slice(8)), todayMonth=Number(this.day.slice(5,7));
   const presetRule=(kind:string):RepeatRule|null=>kind==='none'?null:repeatRule({unit:kind,interval:1,anchor:startingDate,
    ...(kind==='week'?{weekdays:[todayWeek]}:{}),...(kind==='month'?{monthDays:[todayDate]}:{}),...(kind==='year'?{yearDates:[this.day.slice(5)]}:{})});
-  for(const kind of ['none','day','week','month','year']) if(signature(original)===signature(presetRule(kind)))selected=kind;
+  if(!draft) for(const kind of ['none','day','week','month','year']) if(signature(original)===signature(presetRule(kind)))selected=kind;
   this.contentEl.empty();this.contentEl.addClass('gvkit-arrange-repeat');
   const heading=this.contentEl.createDiv('gvkit-arrange-repeat-heading');
   this.button(heading,'',()=>{
@@ -256,10 +275,16 @@ export class ArrangeDatePicker extends Modal {
   }
   const custom=this.contentEl.createDiv('gvkit-arrange-repeat-custom');
   custom.createSpan({text:'每'});
-  const interval=custom.createEl('input',{type:'number',value:String(original?.interval??1),attr:{min:'1',step:'1',inputmode:'numeric','aria-label':'重复间隔'}});
+  const interval=custom.createEl('input',{type:'number',value:draft?.interval??String(original?.interval??1),attr:{min:'1',step:'1',inputmode:'numeric','aria-label':'重复间隔'}});
   const unit=custom.createEl('select',{attr:{'aria-label':'间隔单位'}});
   for(const [value,text] of [['day','天'],['week','周'],['month','月'],['year','年']]) unit.createEl('option',{value,text});
-  unit.value=original?.unit??'day';
+  unit.value=draft?.unit??original?.unit??'day';
+  this.inputPending=draft?.inputPending??false;
+  this.captureRepeat=()=>({ original,startingDate,selected,interval:interval.value,unit:unit.value,
+   weekdays:[...weekdays],monthDays:[...monthDays],yearDates:[...yearDates],
+   month,inputPending:this.inputPending,
+   focus:this.contentEl.ownerDocument.activeElement===interval?'interval':
+    this.contentEl.ownerDocument.activeElement===unit?'unit':null });
   const choices=this.contentEl.createDiv('gvkit-arrange-repeat-choices');
   const note=this.contentEl.createDiv({cls:'gvkit-arrange-repeat-hint',text:'无此日期时跳过'});
   const paintSelection=()=>{
@@ -322,14 +347,17 @@ export class ArrangeDatePicker extends Modal {
   interval.onchange=()=>{this.finishInput();};
   unit.onchange=()=>{renderChoices();applyCustom();};
   renderChoices();this.footer();
+  if(draft?.focus==='interval') interval.focus();
+  else if(draft?.focus==='unit') unit.focus();
  }
- private calendar(): void {
-  let month=(this.current.date??this.day).slice(0,7);
+ private calendar(initialMonth?: string): void {
+  let month=initialMonth??(this.current.date??this.day).slice(0,7);
+  this.calendarMonth=month;
   const calendar=this.contentEl.createDiv('gvkit-arrange-calendar');
   const paint=()=>{
    calendar.empty();
    const header=calendar.createDiv('gvkit-arrange-calendar-header');
-   const shift=(direction:-1|1)=>{month=shiftPeriod(`${month}-01`,'month',direction).slice(0,7);paint();};
+   const shift=(direction:-1|1)=>{month=shiftPeriod(`${month}-01`,'month',direction).slice(0,7);this.calendarMonth=month;paint();};
    this.button(header,'',()=>shift(-1),'gvkit-arrange-icon','chevron-left','上个月');
    header.createSpan({text:month.replace('-','年')+'月',attr:{'aria-live':'polite'}});
    this.button(header,'',()=>shift(1),'gvkit-arrange-icon','chevron-right','下个月');
