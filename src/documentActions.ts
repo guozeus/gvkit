@@ -16,6 +16,7 @@ export interface DocumentActionsHost {
 	/** Supplied by the later workflow slice; never invoked for ineligible documents. */
 	onZhouyouTarget?: (context: PublishDocumentContext) => void | Promise<void>;
 	zhouyouStatusLabel?: (context: PublishDocumentContext) => string;
+	canPublishToCollab?: (file: TFile) => boolean;
     onCollabTarget?: (context: PublishDocumentContext) => void | Promise<void>;
 }
 
@@ -177,7 +178,7 @@ export class DocumentActions {
 	private openTargetMenu(entry: ViewEntry, event: MouseEvent | KeyboardEvent): void {
 		if (!this.isCurrent(entry)) return;
 		const menu = this.host.createMenu();
-		menu.addItem((item) => item.setTitle('发布到协作板').onClick(() => {
+		if (this.host.canPublishToCollab?.(entry.file) !== false) menu.addItem((item) => item.setTitle('协作板').onClick(() => {
             if (!this.isCurrent(entry)) return;
             const handler = this.host.onCollabTarget;
             if (!handler) { this.host.notify('协作板发布功能尚未初始化'); return; }

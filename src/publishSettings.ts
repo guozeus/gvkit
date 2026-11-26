@@ -36,12 +36,18 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 export const DEFAULT_COLLAB_SECRET_REF = 'gvkit-collab-board-device';
+export type CollabSourceKind = 'document' | 'arrange_root';
 export interface CollabSavedBinding {
   gvid: string; path: string; docId: string; epoch: number; revision: number;
-  locatorRevision: number; hash: string; pending?: { op: string; hash: string };
+  locatorRevision: number; hash: string | null; kind?: CollabSourceKind;
+  pending?: { op: string; hash: string };
   pendingRevoke?: string; revoked?: boolean;
 }
 export interface CollabPendingFirst { gvid: string; path: string; op: string; hash: string }
+export type CollabPendingAction = { gvid: string; op: string } & (
+    { operation: 'publish_live'; path: string; kind: CollabSourceKind; epoch: number } |
+    { operation: 'revoke'; docId: string | null; epoch: number | null }
+);
 
 export class PublishSettings {
 	private data: Record<string, unknown> = {};
@@ -145,7 +151,6 @@ export class PublishSettings {
         const rows = this.data.collabBindings;
         return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) as CollabSavedBinding[] : [];
     }
-    hasCollabPath(path: string): boolean { return this.getCollabBindings().some(b => b.path === path); }
     getCollabBinding(gvid: string): CollabSavedBinding | null {
         return this.getCollabBindings().find(b => b.gvid === gvid) ?? null;
     }
@@ -153,14 +158,28 @@ export class PublishSettings {
         const p = this.data.collabPendingFirst;
         return p && typeof p === 'object' ? JSON.parse(JSON.stringify(p)) as CollabPendingFirst : null;
     }
-    async saveCollabPendingFirst(pending: CollabPendingFirst): Promise<void> {
-        await this.updateNonSecret(d => { d.collabPendingFirst = pending; });
+    getCollabPendingActions(): CollabPendingAction[] {
+        const rows = this.data.collabPendingActions;
+        return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) as CollabPendingAction[] : [];
     }
-    async saveCollabBinding(binding: CollabSavedBinding, clearFirst = false): Promise<void> {
+    async saveCollabAction(action: CollabPendingAction): Promise<void> {
         await this.updateNonSecret(d => {
-            const rows = Array.isArray(d.collabBindings) ? d.collabBindings as CollabSavedBinding[] : [];
-            d.collabBindings = [...rows.filter(row => row.gvid !== binding.gvid), binding];
-            if (clearFirst) delete d.collabPendingFirst;
+            const rows = Array.isArray(d.collabPendingActions) ? d.collabPendingActions as CollabPendingAction[] : [];
+            d.collabPendingActions = [...rows, action];
+        });
+    }
+    async saveCollabBinding(binding?: CollabSavedBinding, completedOps: string[] = []): Promise<void> {
+        await this.updateNonSecret(d => {
+            if (binding) {
+                const rows = Array.isArray(d.collabBindings) ? d.collabBindings as CollabSavedBinding[] : [];
+                d.collabBindings = [...rows.filter(row => row.gvid !== binding.gvid), binding];
+            }
+            const first = d.collabPendingFirst as CollabPendingFirst | undefined;
+            if (first && completedOps.includes(first.op)) delete d.collabPendingFirst;
+            if (completedOps.length && Array.isArray(d.collabPendingActions)) {
+                d.collabPendingActions = (d.collabPendingActions as CollabPendingAction[])
+                    .filter(action => !completedOps.includes(action.op));
+            }
         });
     }
 

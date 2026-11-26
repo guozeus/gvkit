@@ -20,7 +20,8 @@ import { observeLegacyForCurrentNote } from './publishLegacy';
 import { openZhouyouPublishDialog } from './publishDialog';
 import { DeviceZhouyouSecret } from './publishSecretSettings';
 import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
-import { CollabBoardPublisher, confirmCollabPublish, validCollabPath } from './collabBoard';
+import { CollabBoardPublisher, type CollabTarget } from './collabBoard';
+import { validCollabPath } from './collabBoardCore';
 import { registerAutoUpdate, runningVersion } from './autoUpdate';
 import { registerArrange } from './arrangeView';
 import { registerSyncStatus } from './syncStatus';
@@ -193,7 +194,7 @@ export default class GvkitPlugin extends Plugin {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 		registerSyncStatus(this);
-		const arrange = registerArrange(this);
+		const arrange = registerArrange(this, target => this.openCollabBoard(target));
 		registerAutoUpdate(this, () => arrange.busy() || !!(this.autoPublisher?.hasPendingWork
 			|| this.collabBoard?.hasPendingWork || this.publishWorkflow?.hasPendingWork
 			|| this.readAloud?.isPlaying || this.publishSettings?.hasPendingSave), arrange.beforeReload);
@@ -482,21 +483,19 @@ export default class GvkitPlugin extends Plugin {
 			this.publishWorkflow = workflow;
             const collab = new CollabBoardPublisher(this.app, settings, this.fileIds!);
             this.collabBoard = collab;
-            void collab.resumeKnown();
+            collab.resumeKnown();
 			const actions = new DocumentActions({
 				getMarkdownLeaves: () => this.app.workspace.getLeavesOfType('markdown'),
 				isMarkdownFile: (file): file is TFile => file instanceof TFile && file.extension === 'md',
 				createMenu: () => new Menu(),
 				zhouyouStatusLabel: context => autoPublisher.statusLabel(context),
 				notify: (message) => { new Notice(message); },
-                onCollabTarget: async context => {
-                    if (!this.publishLifecycleActive || !context.isCurrent() || !validCollabPath(context.file.path)) {
-                        new Notice('当前文件不属于协作板可发布范围'); return;
-                    }
-                    if (!(await confirmCollabPublish(this.app, context.file.path)) || !context.isCurrent()) return;
-                    try { new Notice(await collab.publish(context), 8000); }
-                    catch (error) { new Notice(error instanceof Error ? error.message : '协作板发布结果未知', 10000); }
-                },
+                canPublishToCollab: file => validCollabPath(file.path),
+                onCollabTarget: context => this.openCollabBoard({
+                    file: context.file,
+                    isCurrent: context.isCurrent,
+                    editorText: () => context.view.editor.getValue(),
+                }),
 				onZhouyouTarget: async context => {
 					if (!this.publishLifecycleActive || !context.isCurrent()) return;
 					await autoPublisher.publish(context);
@@ -522,6 +521,11 @@ export default class GvkitPlugin extends Plugin {
 			if (this.publishLifecycleActive) new Notice('GVKit 发布入口暂不可用，请重新加载插件。');
 		}
 	}
+
+    private openCollabBoard(target: CollabTarget): void {
+        if (this.publishLifecycleActive && this.collabBoard && target.isCurrent()) this.collabBoard.open(target);
+        else new Notice('协作板暂不可用，请重新打开当前文档后再试。');
+    }
 
 	onunload(): void {
 		this.publishLifecycleActive = false;

@@ -11,7 +11,10 @@ export function validCollabPath(path: string): boolean {
 export function safeCurrent(value: unknown): CollabCurrent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const c = value as Record<string, unknown>;
-  return typeof c.server_doc_uuid === 'string' && /^[0-9a-f-]{36}$/i.test(c.server_doc_uuid) &&
+  const validKind = c.source_kind === undefined || ((c.source_kind === 'document' || c.source_kind === 'arrange_root') &&
+    c.content_sha256 === null && (c.link === 'https://grealm.net/collab-board/documents/' + c.server_doc_uuid ||
+      (c.active === false && c.link === undefined)));
+  return validKind && typeof c.server_doc_uuid === 'string' && /^[0-9a-f-]{36}$/i.test(c.server_doc_uuid) &&
     typeof c.active === 'boolean' && ['epoch','revision','source_locator_revision'].every(k => Number.isSafeInteger(c[k]) && (c[k] as number) >= 0) &&
     (c.content_sha256 === null || (typeof c.content_sha256 === 'string' && /^[0-9a-f]{64}$/.test(c.content_sha256))) ? c as unknown as CollabCurrent : null;
 }
