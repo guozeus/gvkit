@@ -791,7 +791,9 @@ export class ArrangeView extends ItemView {
 			if(!key)continue;
 			const reason=this.multiUnavailable(key,items);
 			button.setAttribute('aria-disabled',String(Boolean(reason)));
-			button.title=reason||actions[key].title;
+			const label=this.multiFromChildren&&key==='top'?'主列表置顶':this.multiFromChildren&&key==='pin'?'钉住主列表位置':actions[key].title;
+			button.title=reason||label;
+			button.setAttribute('aria-label',label);
 			if(key==='pin'||key==='developmentCompleted'){
 				const values=items.map(item=>Boolean(key==='pin'?item.pinned:item.developmentCompleted));
 				button.setAttribute('aria-pressed',values.length&&values.every(Boolean)?'true':values.some(Boolean)?'mixed':'false');
@@ -847,7 +849,10 @@ export class ArrangeView extends ItemView {
 			return false;
 		}
 		if(result.refreshError)new Notice(`已保存，刷新失败：${result.refreshError}`);
-		const label=action.kind==='pin'?(action.value?'已钉住':'已取消钉住'):action.kind==='developmentCompleted'?(action.value?'已设为AI已执行':'已取消AI已执行'):action.kind==='top'?'已置于最前可用位置':action.kind==='date'?'已设置日期':'已修改上级';
+		const label=action.kind==='pin'?(this.multiFromChildren?(action.value?'已钉住主列表位置':'已取消主列表钉住'):(action.value?'已钉住':'已取消钉住'))
+			:action.kind==='developmentCompleted'?(action.value?'已设为AI已执行':'已取消AI已执行')
+			:action.kind==='top'?(this.multiFromChildren?'已置顶主列表（子事项顺序不变）':'已置于最前可用位置')
+			:action.kind==='date'?'已设置日期':'已修改上级';
 		this.multiFeedback(`${label} · ${original.length}项`);
 		if(action.kind==='top'){
 			const ids=new Set(original.map(item=>item.id)),first=this.store.state.order.find(id=>ids.has(id));
@@ -1017,9 +1022,9 @@ export class ArrangeView extends ItemView {
 		return items;
 	}
 	private directChildren(id: string): ArrangeItem[] {
-		return [...this.ordered().filter(item => item.parent === id),
-			...(this.store.state.showCompletedChildren ? this.store.items.filter(item => item.parent === id && item.completedAt)
-				.sort((a, b) => Date.parse(a.completedAt!) - Date.parse(b.completedAt!)) : [])];
+		return this.store.items.filter(item => item.parent === id && (this.store.state.showCompletedChildren || !item.completedAt))
+			.sort((a, b) => (a.occurrenceOf ?? a.id).localeCompare(b.occurrenceOf ?? b.id)
+				|| (a.occurrenceId ?? a.repeatInstance ?? a.id).localeCompare(b.occurrenceId ?? b.repeatInstance ?? b.id));
 	}
 	private paintTitle(label: HTMLElement, title: string, searchable: boolean): void {
 		const query = searchable && this.searchOpen ? this.searchInput.value.trim().toLowerCase() : '';
@@ -1139,7 +1144,7 @@ export class ArrangeView extends ItemView {
 		const actionArea = row.createDiv('gvkit-arrange-actions');
 		for (const key of this.store.state.rowActions) {
 			if (dailyGoal && key === 'top' || !this.actionAvailable(key, item)) continue;
-			const button = iconButton(actionArea, actions[key].title, actions[key].icon, event => this.action(key, item, event, parent !== this.list));
+			const button = iconButton(actionArea, this.actionLabel(key, item), actions[key].icon, event => this.action(key, item, event, parent !== this.list));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'specialReminder') { button.toggleClass('is-active', Boolean(item.specialReminderAt)); button.setAttribute('aria-pressed', String(Boolean(item.specialReminderAt))); }
 			if (key === 'date' && item.date) button.addClass('is-active');
@@ -1180,7 +1185,7 @@ export class ArrangeView extends ItemView {
 			const pressedBounds = row.getBoundingClientRect();
 			let preview: HTMLElement | null = null;
 			const beginDrag = () => {
-				if (this.busy || inMulti || item.pinned || item.completedAt || row.classList.contains('gvkit-arrange-daily-goal')) return;
+				if (row.parentElement !== this.list || this.busy || inMulti || item.pinned || item.completedAt || row.classList.contains('gvkit-arrange-daily-goal')) return;
 				// Keep the source in layout. A viewport preview cannot extend the
 				// list's scroll range or drift when edge scrolling moves the source.
 				preview = this.contentEl.cloneNode(false) as HTMLElement;
@@ -1218,7 +1223,10 @@ export class ArrangeView extends ItemView {
 				lastX = clientX; lastY = clientY;
 				const distance=Math.hypot(clientX-x,clientY-y);
 				if(inMulti){if(distance>8)moved=true;return;}
-				if(previewing&&distance>8){previewing=false;this.setMulti([]);moved=true;axis='other';beginDrag();}
+				if(previewing&&distance>8){
+					if(row.parentElement!==this.list){moved=true;return;}
+					previewing=false;this.setMulti([]);moved=true;axis='other';beginDrag();
+				}
 				if (!dragging) {
 					const dx = clientX - x, dy = clientY - y;
 					if (Math.hypot(dx, dy) > 8) {
@@ -1334,6 +1342,11 @@ export class ArrangeView extends ItemView {
 			this.cancelResize = end;
 		};
 	}
+	private actionLabel(key: RowAction, item: ArrangeItem): string {
+		if (item.parent && key === 'top') return '主列表置顶';
+		if (item.parent && key === 'pin') return '钉住主列表位置';
+		return actions[key].title;
+	}
 	private actionAvailable(key: RowAction, item: ArrangeItem): boolean {
 		if (key === 'parent') return Boolean(item.parent && this.store.items.some(parent => parent.id === item.parent));
 		if (key === 'top') return !item.completedAt;
@@ -1350,9 +1363,13 @@ export class ArrangeView extends ItemView {
 				row?.scrollIntoView({ block: 'nearest' }); row?.addClass('is-located');
 			});
 		} else if (key === 'date') this.dateMenu(item, event);
-		else if (key === 'top') void this.run(() => this.store.top(item.id)).then(ok => { if (ok) this.reveal(item.id, fromChildren ? this.children : this.list); });
+		else if (key === 'top') void this.run(() => this.store.top(item.id)).then(ok => {
+			if (ok) { this.reveal(item.id, fromChildren ? this.children : this.list); if (item.parent) new Notice('已置顶主列表，子事项顺序不变'); }
+		});
 		else if (key === 'specialReminder') void this.run(() => this.store.toggleSpecialReminder(item.id)).then(ok => { if (ok) new Notice(this.store.items.find(value => value.id === item.id)?.specialReminderAt ? '已开启特别提醒' : '已关闭特别提醒'); });
-		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id));
+		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id)).then(ok => {
+			if (ok && item.parent) new Notice('已更新主列表钉住位置，子事项顺序不变');
+		});
 		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
 		else if (key === 'developmentProject') void this.run(() => this.store.toggleDevelopmentProject(item.id));
 		else if (key === 'changeParent') void this.changeParent(item.id);
@@ -1395,10 +1412,10 @@ export class ArrangeView extends ItemView {
 			return row;
 		};
 		for (const key of ARRANGE_ACTIONS) {
-			const title = key === 'pin' && item.pinned ? '取消钉住'
+			const title = key === 'pin' && item.pinned ? (item.parent ? '取消主列表钉住' : '取消钉住')
 				: key === 'specialReminder' ? (item.specialReminderAt ? '关闭特别提醒' : '开启特别提醒')
 				: key === 'developmentCompleted' && item.developmentCompleted ? '取消AI已执行'
-				: key === 'developmentProject' && item.developmentProject ? '取消开发工程' : actions[key].title;
+				: key === 'developmentProject' && item.developmentProject ? '取消开发工程' : this.actionLabel(key, item);
 			const row = entry(title, actions[key].icon, () => this.action(key, item, event));
 			if (key === 'specialReminder') {
 				const button = row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!;
@@ -1698,7 +1715,7 @@ export class ArrangeView extends ItemView {
 		strip.empty();
 		for (const key of this.store.state.detailActions) {
 			if (!this.actionAvailable(key, item)) continue;
-			const label = key === 'date' && item.date ? `日期：${item.date}` : actions[key].title;
+			const label = key === 'date' && item.date ? `日期：${item.date}` : this.actionLabel(key, item);
 			const button = iconButton(strip, label, actions[key].icon, event => this.action(key, item, event));
 			button.toggleClass('is-active', key === 'date' && Boolean(item.date) || key === 'pin' && item.pinned
 				|| key === 'developmentCompleted' && Boolean(item.developmentCompleted)
