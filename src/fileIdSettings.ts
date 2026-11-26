@@ -5,6 +5,7 @@ import { SafeMoveManager } from './safeMove';
 import { SAFE_MOVE_PLAN_PATH } from './safeMoveCore';
 import { PublishSettings, checkZhouyouUrl, DEFAULT_ZHOUYOU_SECRET_REF } from './publishSettings';
 import { DeviceZhouyouSecret, guardIosSettingsInputs } from './publishSecretSettings';
+import { getLatestReleaseVersion, newer, runningVersion } from './autoUpdate';
 
 class LargeBackfillConfirmModal extends Modal {
 	private resolved = false;
@@ -83,6 +84,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		this.dispose();
 		containerEl.empty();
+		this.renderVersion();
 		containerEl.createEl('h2', { text: '文件 ID' });
 		containerEl.createEl('p', {
 			text: '新建 Markdown 文件自动获得永久唯一的 gvid，采用 UUID v7。实际模板源目录 settings/模板/ 与 settings/gvkit/ 控制文件不参与赋 ID。',
@@ -174,6 +176,28 @@ export class GvkitSettingTab extends PluginSettingTab {
 		const prefs = this.publishSettings();
 		if (prefs?.isLoaded()) { this.renderZhouyou(prefs); this.renderCollab(prefs); }
 		else this.containerEl.createEl('p', { text: '宙游文档中心设置初始化中，请重新打开设置页。' });
+	}
+
+	private renderVersion(): void {
+		const row = new Setting(this.containerEl).setName('当前运行版本 ' + runningVersion);
+		row.addButton(button => {
+			const check = async () => {
+				button.setDisabled(true);
+				row.setDesc('正在查询最新正式版…');
+				try {
+					const latest = await getLatestReleaseVersion();
+					const status = newer(latest, runningVersion) ? '有新版本'
+						: newer(runningVersion, latest) ? '当前运行版本高于公开正式版' : '已是最新';
+					row.setDesc('最新正式版 ' + latest + ' · ' + status);
+				} catch {
+					row.setDesc('最新正式版：暂无法确认');
+				} finally {
+					button.setDisabled(false);
+				}
+			};
+			button.setButtonText('重新检查').onClick(check);
+			void check();
+		});
 	}
 
     private renderCollab(prefs: PublishSettings): void {

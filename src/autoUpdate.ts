@@ -31,7 +31,7 @@ const cooldown = 60_000;
 // A failed reload can create a fresh instance of the old plugin in the same app.
 const lastCheck = Symbol.for('gvkit.lastReleaseCheck');
 const stable = (v: string) => typeof v === 'string' && /^\d+\.\d+\.\d+$/.test(v);
-function newer(a: string, b: string): boolean {
+export function newer(a: string, b: string): boolean {
 	const previous = b.split('.').map(Number);
 	for (const [i, n] of a.split('.').map(Number).entries()) {
 		if (n !== previous[i]) return n > previous[i]!;
@@ -44,6 +44,10 @@ async function getRelease(path: string): Promise<Release> {
 	if (release.draft !== false || release.prerelease !== false || !stable(release.tag_name))
 		throw Error('Invalid stable release');
 	return release;
+}
+
+export async function getLatestReleaseVersion(): Promise<string> {
+	return (await getRelease('latest')).tag_name;
 }
 
 async function download(release: Release): Promise<Bundle> {
