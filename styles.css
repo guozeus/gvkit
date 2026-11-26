@@ -267,6 +267,7 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange .gvkit-arrange-body-copy { display: inline-flex; vertical-align: text-bottom; width: 1em; min-width: 1em; height: 1em; min-height: 0; margin: 0 0 0 1em; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--text-muted); font-size: var(--gvkit-arrange-body-font, 16px); line-height: 1; cursor: pointer; }
 .gvkit-arrange .gvkit-arrange-body-copy svg { width: 1em; height: 1em; }
 .gvkit-arrange .gvkit-arrange-parent-name { display: flex; align-items: center; justify-content: flex-start; gap: 4px; width: 100%; min-width: 0; min-height: 32px; padding: 0; border: 0; box-shadow: none; background: transparent; color: var(--text-muted); font-size: var(--gvkit-arrange-parent-font, 13px); line-height: 20px; text-align: left; }
+.gvkit-arrange[data-show-parent-navigation="false"] .gvkit-arrange-parent-name { display: none; }
 .gvkit-arrange-parent-name > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gvkit-arrange-parent-chevron { display: flex; flex-shrink: 0; }
 .gvkit-arrange-parent-chevron svg { width: calc(var(--gvkit-arrange-parent-font, 13px) + 3px); height: calc(var(--gvkit-arrange-parent-font, 13px) + 3px); }

@@ -56,6 +56,7 @@ export interface ArrangeState {
 	swipeAction: RowAction | 'none';
 	pullDownClose: boolean;
 	showCompletedChildren: boolean;
+	showParentNavigation: boolean;
 	listFontSize: number;
 	rowHeight: number;
 	rowDividers: boolean;
@@ -105,7 +106,7 @@ export function defaultArrangeState(): ArrangeState {
 		detailShadow: 24, bodyPlaceholder: '记录正文、链接、思路…', completedStyle: 'background', rootItemStyle: 'background',
 		composerMaxRows: 6, bodyMinRows: 3, pinColor: 'gold', checkboxScale: 80, rowRightGap: 2, completionSound: 'chime',
 		rowActions: ['parent', 'date', 'top'], detailActions: ['parent', 'date', 'top', 'pin', 'changeParent'],
-		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true,
+		swipeAction: 'date', pullDownClose: true, showCompletedChildren: true, showParentNavigation: true,
 		listFontSize: 17, rowHeight: 44, rowDividers: true,
 		selectedBreathePeriod: 2.8, selectedBreatheLight: 8, selectedBreatheDark: 55,
 		gripHeight: 32, gripWidth: 36,

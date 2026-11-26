@@ -657,6 +657,7 @@ export class ArrangeView extends ItemView {
 			'toolbar-height': state.toolbarHeight, 'parent-font': state.parentFontSize,
 		})) this.contentEl.style.setProperty(`--gvkit-arrange-${name}`, `${value}px`);
 		this.contentEl.dataset.rowDividers = String(state.rowDividers);
+		this.contentEl.dataset.showParentNavigation = String(state.showParentNavigation);
 		this.contentEl.style.setProperty('--gvkit-arrange-selected-period', `${state.selectedBreathePeriod}s`);
 		this.contentEl.style.setProperty('--gvkit-arrange-selected-light', `${state.selectedBreatheLight}%`);
 		this.contentEl.style.setProperty('--gvkit-arrange-selected-dark', `${state.selectedBreatheDark}%`);
@@ -1492,8 +1493,24 @@ export class ArrangeView extends ItemView {
 	private paintDetailState(): void {
 		const item = this.store.items.find(item => item.id === this.selected);
 		if (!item) return;
-		if (!this.store.items.some(parent => parent.id === item.parent))
-			this.detail.querySelector('.gvkit-arrange-parent-name')?.remove();
+		// Refresh the parent link in place so live relation changes keep the editor intact.
+		const scroll = this.editing?.id === item.id ? this.detailScroll : null;
+		if (scroll) {
+			const parent = this.store.items.find(candidate => candidate.id === item.parent);
+			let nav = scroll.querySelector<HTMLButtonElement>('.gvkit-arrange-parent-name');
+			if (!parent) nav?.remove();
+			else {
+				if (!nav) {
+					nav = scroll.createEl('button', { cls: 'gvkit-arrange-parent-name', attr: { type: 'button' } });
+					nav.createSpan();
+					setIcon(nav.createSpan({ cls: 'gvkit-arrange-parent-chevron' }), 'chevron-right');
+					scroll.querySelector('.gvkit-arrange-detail-title-row')?.before(nav);
+				}
+				nav.firstElementChild!.textContent = parent.title;
+				nav.title = parent.title;
+				nav.onclick = () => { void this.select(parent.id); };
+			}
+		}
 		const label = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-date');
 		if (label) {
 			label.hidden = !item.date;
@@ -1561,15 +1578,6 @@ export class ArrangeView extends ItemView {
 		this.paintDetailActions();
 		iconButton(tools, '事项更多', 'more-horizontal', event => this.itemMenu(item, event));
 		this.detailScroll = this.detail.createDiv('gvkit-arrange-detail-scroll');
-		if (item.parent) {
-			const parent = this.store.items.find(candidate => candidate.id === item.parent);
-			if (parent) {
-				const nav = this.detailScroll.createEl('button', { cls: 'gvkit-arrange-parent-name', attr: { title: parent.title } });
-				nav.createSpan({ text: parent.title });
-				setIcon(nav.createSpan({ cls: 'gvkit-arrange-parent-chevron' }), 'chevron-right');
-				nav.onclick = () => { void this.select(parent.id); };
-			}
-		}
 		const titleRow = this.detailScroll.createDiv('gvkit-arrange-detail-title-row');
 		const complete = titleRow.createEl('input', { type: 'checkbox' });
 		complete.onclick = () => { complete.checked = Boolean(this.store.items.find(value => value.id === item.id)?.completedAt); void this.toggleComplete(item.id, complete.getBoundingClientRect()); };
@@ -1958,6 +1966,8 @@ export class ArrangeView extends ItemView {
 		new Setting(modal.contentEl).setName('完成音效')
 			.addDropdown(dropdown => dropdown.addOptions(COMPLETION_SOUNDS)
 				.setValue(this.store.state.completionSound).onChange(value => configure({ completionSound: value as ArrangeState['completionSound'] })));
+		new Setting(modal.contentEl).setName('详情显示上级事项')
+			.addToggle(toggle => toggle.setValue(this.store.state.showParentNavigation).onChange(value => configure({ showParentNavigation: value })));
 		new Setting(modal.contentEl).setName('事项详情显示已完成下级')
 			.addToggle(toggle => toggle.setValue(this.store.state.showCompletedChildren).onChange(value => configure({ showCompletedChildren: value })));
 		new Setting(modal.contentEl).setName('事项左滑操作')
