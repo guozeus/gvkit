@@ -12,6 +12,7 @@ import { configFingerprint, deviceArrangeTrace } from './arrangeTrace';
 import { ArrangeFeedback } from './arrangeFeedback';
 import { ArrangeBodyEditor } from './arrangeBodyEditor';
 import { ArrangeTips, renderArrangeTipsSettings } from './arrangeTips';
+import { isUuidV7 } from './fileIdCore';
 
 export const ARRANGE_VIEW = 'gvkit-arrange';
 const actions: Record<RowAction, { title: string; icon: string }> = {
@@ -794,6 +795,7 @@ export class ArrangeView extends ItemView {
 			const label=this.multiFromChildren&&key==='top'?'主列表置顶':this.multiFromChildren&&key==='pin'?'钉住主列表位置':actions[key].title;
 			button.title=reason||label;
 			button.setAttribute('aria-label',label);
+			if(key==='top'||key==='pin')button.lastElementChild!.textContent=this.multiFromChildren?(key==='top'?'主列表置顶':'主列表钉住'):(key==='top'?'置顶':'钉住');
 			if(key==='pin'||key==='developmentCompleted'){
 				const values=items.map(item=>Boolean(key==='pin'?item.pinned:item.developmentCompleted));
 				button.setAttribute('aria-pressed',values.length&&values.every(Boolean)?'true':values.some(Boolean)?'mixed':'false');
@@ -868,7 +870,10 @@ export class ArrangeView extends ItemView {
 		if(key==='copy'){
 			this.multiReceipt=null;
 			try{
-				const text=items.map(item=>this.editing?.id===item.id?this.editing.title.value:item.title).join('\n');
+				const copyItems=this.multiFromChildren&&this.selected
+					?[...new Map([...this.directChildren(this.selected),...items].map(item=>[item.id,item])).values()].filter(item=>this.multi.has(item.id))
+					:items;
+				const text=copyItems.map(item=>this.editing?.id===item.id?this.editing.title.value:item.title).join('\n');
 				await navigator.clipboard.writeText(text);this.multiReceipt=null;this.multiFeedback(`已复制${items.length}项标题`);
 			}catch{this.multiFeedback('复制失败，请重试',true);}return;
 		}
@@ -1023,8 +1028,14 @@ export class ArrangeView extends ItemView {
 	}
 	private directChildren(id: string): ArrangeItem[] {
 		return this.store.items.filter(item => item.parent === id && (this.store.state.showCompletedChildren || !item.completedAt))
-			.sort((a, b) => (a.occurrenceOf ?? a.id).localeCompare(b.occurrenceOf ?? b.id)
-				|| (a.occurrenceId ?? a.repeatInstance ?? a.id).localeCompare(b.occurrenceId ?? b.repeatInstance ?? b.id));
+			.sort((a, b) => {
+				const aId = a.occurrenceOf ?? a.id, bId = b.occurrenceOf ?? b.id;
+				const aTimed = isUuidV7(aId), bTimed = isUuidV7(bId);
+				if (aTimed !== bTimed) return aTimed ? 1 : -1;
+				if (!aTimed) return 0; // Keep the loaded order of legacy identities.
+				return aId.localeCompare(bId)
+					|| (a.occurrenceId ?? a.repeatInstance ?? a.id).localeCompare(b.occurrenceId ?? b.repeatInstance ?? b.id);
+			});
 	}
 	private paintTitle(label: HTMLElement, title: string, searchable: boolean): void {
 		const query = searchable && this.searchOpen ? this.searchInput.value.trim().toLowerCase() : '';
@@ -1224,9 +1235,10 @@ export class ArrangeView extends ItemView {
 				const distance=Math.hypot(clientX-x,clientY-y);
 				if(inMulti){if(distance>8)moved=true;return;}
 				if(previewing&&distance>8){
-					if(row.parentElement!==this.list){moved=true;return;}
+					if(row.parentElement!==this.list){previewing=false;this.setMulti([]);moved=true;return;}
 					previewing=false;this.setMulti([]);moved=true;axis='other';beginDrag();
 				}
+				if(held&&row.parentElement!==this.list)return;
 				if (!dragging) {
 					const dx = clientX - x, dy = clientY - y;
 					if (Math.hypot(dx, dy) > 8) {
@@ -1364,11 +1376,11 @@ export class ArrangeView extends ItemView {
 			});
 		} else if (key === 'date') this.dateMenu(item, event);
 		else if (key === 'top') void this.run(() => this.store.top(item.id)).then(ok => {
-			if (ok) { this.reveal(item.id, fromChildren ? this.children : this.list); if (item.parent) new Notice('已置顶主列表，子事项顺序不变'); }
+			if (ok) { this.reveal(item.id, fromChildren ? this.children : this.list); if (fromChildren) new Notice('已置顶主列表，子事项顺序不变'); }
 		});
 		else if (key === 'specialReminder') void this.run(() => this.store.toggleSpecialReminder(item.id)).then(ok => { if (ok) new Notice(this.store.items.find(value => value.id === item.id)?.specialReminderAt ? '已开启特别提醒' : '已关闭特别提醒'); });
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id)).then(ok => {
-			if (ok && item.parent) new Notice('已更新主列表钉住位置，子事项顺序不变');
+			if (ok && fromChildren) new Notice('已更新主列表钉住位置，子事项顺序不变');
 		});
 		else if (key === 'developmentCompleted') void this.run(() => this.store.toggleDevelopmentCompleted(item.id));
 		else if (key === 'developmentProject') void this.run(() => this.store.toggleDevelopmentProject(item.id));
