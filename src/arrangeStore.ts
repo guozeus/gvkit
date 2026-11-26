@@ -397,6 +397,8 @@ export class ArrangeStore {
 		}
 		context.stage = 'done';
 	}
+	/** Only already-queued local configuration writes, not remote requests or UI idleness. */
+	whenIdle(): Promise<void> { return this.queue.then(() => undefined); }
 	refresh(trigger = 'view_reload'): Promise<void> { return this.serial(trigger, async () => {}, true); }
 	hasConfigConflict(...fields: string[]): boolean { return fields.some(field => this.v2.projection?.pending.has(field)); }
 	private requireConfigFields(...fields: string[]): void {

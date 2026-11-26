@@ -8,7 +8,7 @@ import { gvkitEditorDecorations } from './editorDecorations';
 import { resolveEditorSelectionRect, resolveToolbarPosition, type CodeMirrorSelectionGeometry } from './toolbarSelection';
 import { renderGvkitStyles } from './readingView';
 import { FileIdManager } from './fileIds';
-import { GvkitSettingTab } from './fileIdSettings';
+import { GvkitSettingTab, type GvkitSettingsDraft } from './fileIdSettings';
 import { SafeMoveManager } from './safeMove';
 import { createBlockSearchInsertion, type BlockLinkKind } from './blockLinks';
 import { DocumentActions, isPublishableMarkdownPath, type PublishDocumentContext } from './documentActions';
@@ -26,7 +26,7 @@ import { registerAutoUpdate, runningVersion } from './autoUpdate';
 import { registerArrange } from './arrangeView';
 import { registerSyncStatus } from './syncStatus';
 import { registerIndexNavigation } from './indexNavigationView';
-import { DocumentReadAloud } from './readAloud';
+import { DocumentReadAloud, type ReadAloudResume } from './readAloud';
 import { ReadAloudEmbeds } from './readAloudEmbeds';
 import { DocumentQuickSettings, QuickSettingsModal } from './quickSettings';
 
@@ -195,9 +195,17 @@ export default class GvkitPlugin extends Plugin {
 		registerGvkitIcons();
 		registerSyncStatus(this);
 		const arrange = registerArrange(this, target => this.openCollabBoard(target));
-		registerAutoUpdate(this, () => arrange.busy() || !!(this.autoPublisher?.hasPendingWork
-			|| this.collabBoard?.hasPendingWork || this.publishWorkflow?.hasPendingWork
-			|| this.readAloud?.isPlaying || this.publishSettings?.hasPendingSave), arrange.beforeReload);
+		registerAutoUpdate(this, async () => {
+			await arrange.prepareForUpdate();
+			await this.publishSettings?.prepareForReload();
+			(this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft = this.gvkitSettingsTab?.captureForUpdate() ?? undefined;
+			(this.app as typeof this.app & { gvkitReadAloudResume?: ReadAloudResume }).gvkitReadAloudResume = this.readAloud?.resumeSnapshot() ?? undefined;
+		}, () => {
+			arrange.cancelUpdate();
+			this.publishSettings?.cancelReload();
+			delete (this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft;
+			delete (this.app as typeof this.app & { gvkitReadAloudResume?: ReadAloudResume }).gvkitReadAloudResume;
+		});
 		registerIndexNavigation(this);
 		const embeds = new ReadAloudEmbeds(this.app);
 		this.register(() => embeds.destroy());
@@ -222,6 +230,12 @@ export default class GvkitPlugin extends Plugin {
 			notify: message => { new Notice(message); },
 		});
 		this.readAloud = readAloud;
+		const handoff = this.app as typeof this.app & { gvkitReadAloudResume?: ReadAloudResume };
+		if (handoff.gvkitReadAloudResume) {
+			const snapshot = handoff.gvkitReadAloudResume;
+			delete handoff.gvkitReadAloudResume;
+			this.app.workspace.onLayoutReady(() => readAloud.resumeFrom(snapshot));
+		}
 		this.registerEvent(this.app.workspace.on('layout-change', () => readAloud.refresh()));
 		this.registerEvent(this.app.workspace.on('file-open', () => readAloud.refresh()));
 		this.registerEvent(this.app.workspace.on('active-leaf-change', () => readAloud.refresh()));
@@ -402,6 +416,7 @@ export default class GvkitPlugin extends Plugin {
 			if (!settings) return;
 			await settings.load();
 			if (this.publishLifecycleActive && this.gvkitSettingsTab?.containerEl.isConnected) this.gvkitSettingsTab.display();
+			else delete (this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft;
 			if (!this.publishLifecycleActive) return;
 			const quickSettings = new DocumentQuickSettings({
 				getLeaves: () => this.app.workspace.getLeavesOfType('markdown'),

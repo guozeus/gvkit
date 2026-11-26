@@ -351,7 +351,7 @@ export class CollabBoardPublisher {
     });
   }
 
-  private async revokeSnapshot(binding: CollabSavedBinding): Promise<CollabCurrent> {
+  private async revokeSnapshot(binding: CollabSavedBinding, resumeOnly = false): Promise<CollabCurrent> {
     const op = binding.pendingRevoke!;
     const { response, current } = await this.readReceipt(binding.gvid, op);
     if (!current || current.server_doc_uuid !== binding.docId) throw Error('待撤回来源身份不匹配。');
@@ -360,6 +360,8 @@ export class CollabBoardPublisher {
       return current;
     }
     if (current.epoch !== binding.epoch || committed(response, op, 'revoke')) throw Error('协作板状态有变化，请重新查看。');
+    // Reload reconciliation is read-only: an unknown previous send is not a new authorization.
+    if (resumeOnly) throw Error('撤回尚未确认，保留原操作记录。');
     const result = await this.submit({ operation: 'revoke', gvid: binding.gvid, op, docId: binding.docId, epoch: binding.epoch });
     const observed = safeCurrent(result.data?.current);
     if (!observed || observed.active || !committed(result, op, 'revoke'))
@@ -372,7 +374,7 @@ export class CollabBoardPublisher {
     for (const binding of this.settings.getCollabBindings()) {
       if (binding.kind || binding.revoked) continue;
       if (binding.pendingRevoke) {
-        void this.withSource(binding.gvid, () => this.revokeSnapshot(binding)).catch(() => { /* keep the original action */ });
+        void this.withSource(binding.gvid, () => this.revokeSnapshot(binding, true)).catch(() => { /* keep the original action */ });
         continue;
       }
       const file = this.app.vault.getFileByPath(binding.path);

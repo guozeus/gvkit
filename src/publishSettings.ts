@@ -61,6 +61,13 @@ export class PublishSettings {
 	private pendingSaves = 0;
 	get hasPendingSave(): boolean { return this.pendingSaves > 0; }
 	private saveTail: Promise<void> = Promise.resolve();
+	private reloading = false;
+	/** Finish queued local saves; late remote replies retain their staged pending operations. */
+	async prepareForReload(): Promise<void> {
+		this.reloading = true;
+		await this.saveTail;
+	}
+	cancelReload(): void { this.reloading = false; }
 	private readonly store: PublishDataStore;
 
 	constructor(store: PublishDataStore) {
@@ -206,6 +213,7 @@ export class PublishSettings {
 
 	/** All writers of ordinary plugin data must share this ordered persistence queue. */
 	updateNonSecret(change: (data: Record<string, unknown>) => void): Promise<void> {
+		if (this.reloading) return Promise.reject(new Error('GVKit is reloading; pending operation retained'));
 		this.requireLoaded();
 		this.pendingSaves++;
 		const work = this.saveTail.then(async () => {

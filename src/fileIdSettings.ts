@@ -61,6 +61,8 @@ function formatFailureSuffix(inspectFailures: number, writeFailures: number): st
 	return total > 0 ? `；另有 ${total} 个文件因读取或 frontmatter 错误未处理` : '';
 }
 
+/** Unsaved local fields live only in app memory during the same-process hot switch. */
+export type GvkitSettingsDraft = Partial<Record<'zhouyouUrl' | 'zhouyouKey' | 'collabKey', string>>;
 export class GvkitSettingTab extends PluginSettingTab {
 	private cleanPublish: (() => void) | null = null;
 	private readonly publishSettings: () => PublishSettings | null;
@@ -76,6 +78,15 @@ export class GvkitSettingTab extends PluginSettingTab {
 		this.publishSettings = publishSettings;
 	}
 
+	/** Do not write passwords into plugin data, Vault files or diagnostic logs. */
+	captureForUpdate(): GvkitSettingsDraft | null {
+		if (!this.containerEl.isConnected) return null;
+		const draft: GvkitSettingsDraft = {};
+		this.containerEl.querySelectorAll<HTMLInputElement>('[data-gvkit-update-field]').forEach(input => {
+			if (input.value) draft[input.dataset.gvkitUpdateField as keyof GvkitSettingsDraft] = input.value;
+		});
+		return draft;
+	}
 	dispose(): void { this.cleanPublish?.(); this.cleanPublish = null; }
 
 	hide(): void { this.dispose(); super.hide(); }
@@ -174,8 +185,17 @@ export class GvkitSettingTab extends PluginSettingTab {
 				});
 			});
 		const prefs = this.publishSettings();
-		if (prefs?.isLoaded()) { this.renderZhouyou(prefs); this.renderCollab(prefs); }
-		else this.containerEl.createEl('p', { text: '宙游文档中心设置初始化中，请重新打开设置页。' });
+		if (prefs?.isLoaded()) {
+			this.renderZhouyou(prefs); this.renderCollab(prefs);
+			const handoff = this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft };
+			if (handoff.gvkitSettingsDraft) {
+				this.containerEl.querySelectorAll<HTMLInputElement>('[data-gvkit-update-field]').forEach(input => {
+					const value = handoff.gvkitSettingsDraft?.[input.dataset.gvkitUpdateField as keyof GvkitSettingsDraft];
+					if (value !== undefined) input.value = value;
+				});
+				delete handoff.gvkitSettingsDraft;
+			}
+		} else this.containerEl.createEl('p', { text: '宙游文档中心设置初始化中，请重新打开设置页。' });
 	}
 
 	private renderVersion(): void {
@@ -222,6 +242,7 @@ export class GvkitSettingTab extends PluginSettingTab {
             .addText(input => {
                 input.setPlaceholder('粘贴发布 Key');
                 input.inputEl.type = 'password';
+                input.inputEl.dataset.gvkitUpdateField = 'collabKey';
                 input.inputEl.autocomplete = 'off';
                 input.inputEl.style.fontSize = '16px';
                 readKey = () => input.getValue();
@@ -262,6 +283,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 		new Setting(root).setName('地址').setDesc('支持 HTTP 和 HTTPS。')
 			.addText(text => {
 				urlInput = text;
+				text.inputEl.dataset.gvkitUpdateField = 'zhouyouUrl';
 				text.setValue(prefs.getZhouyouUrl()).setPlaceholder('填写完整同步接口地址');
 				text.inputEl.setAttribute('autocomplete', 'off');
 				text.inputEl.setAttribute('autocapitalize', 'off');
@@ -297,6 +319,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 			.setDesc(supported ? '仅保存在本设备。' : '当前 Obsidian 不支持机密存储，请更新后保存 Key。')
 			.addText(text => {
 				keyInput = text;
+				text.inputEl.dataset.gvkitUpdateField = 'zhouyouKey';
 				text.inputEl.type = 'password';
 				text.inputEl.setAttribute('autocomplete', 'new-password');
 				text.inputEl.setAttribute('autocapitalize', 'off');

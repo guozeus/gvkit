@@ -237,6 +237,8 @@ export class ZhouyouAutoPublisher {
         || context.view.editor.getValue() !== raw))) throw new Error('当前笔记已变化，稍后重新核对。');
       const content = publishBody(raw), title = file.basename, hash = await sha256Utf8(content);
       let b = await this.binding(file, raw);
+      // Reload must not automatically re-send a request whose earlier outcome is unknown.
+      if (b.pending && !manual) return;
       if (b.blocked) throw new Error('这篇笔记的同步已暂停：' + b.blocked + '。请先核对两端内容。');
       if (!uuidOrNull(b.sourceId)) throw new Error('来源 ID 无效，已停止同步以保护原文档。');
       if ((b.documentId !== undefined && (!b.documentId || typeof b.documentId !== 'string'))

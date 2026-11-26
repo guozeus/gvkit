@@ -63,7 +63,9 @@ export interface ReadAloudHost {
 }
 
 interface Entry { leaf: WorkspaceLeaf; view: MarkdownView; button: HTMLElement }
+export interface ReadAloudResume { leaf: WorkspaceLeaf; path: string; chunk: number }
 interface Playback {
+	chunk: number;
 	entry: Entry;
 	file: MarkdownView['file'];
 	synth: SpeechSynthesis;
@@ -104,7 +106,7 @@ export class DocumentReadAloud {
 	}
 
 	/** Deliberately synchronous: iOS must receive speak() inside the user's tap. */
-	toggle(leaf: WorkspaceLeaf): void {
+	toggle(leaf: WorkspaceLeaf, fromChunk = 0): void {
 		if (this.disposed) return;
 		if (this.playback) { this.stop(); return; }
 		const entry = this.entries.get(leaf);
@@ -123,13 +125,14 @@ export class DocumentReadAloud {
 			if (!chunks.length) { this.host.notify('当前文档没有可朗读的正文。'); return; }
 			const preferences = this.host.getPreferences?.() ?? { voiceURI: '', rate: 1, pitch: 1 };
 			const voice = preferences.voiceURI ? synth.getVoices().find(value => value.voiceURI === preferences.voiceURI) : undefined;
-			const playback: Playback = { entry, file: entry.view.file, synth, utterance: null, timer: null };
+			const playback: Playback = { entry, file: entry.view.file, synth, utterance: null, timer: null, chunk: fromChunk };
 			this.playback = playback;
 			synth.cancel();
 			this.label(entry, '正在启动朗读，点击停止', true);
-			let index = 0;
+			let index = Math.max(0, Math.min(fromChunk, chunks.length - 1));
 			const next = () => {
 				if (this.playback !== playback) return;
+				playback.chunk = index;
 				const chunk = chunks[index++];
 				if (chunk === undefined) { this.stop(); return; }
 				const utterance = new Utterance(chunk);
@@ -164,6 +167,16 @@ export class DocumentReadAloud {
 	}
 
 	get isPlaying(): boolean { return this.playback !== null; }
+	/** Transient, same-process handoff only; iOS may require a fresh tap for speech. */
+	resumeSnapshot(): ReadAloudResume | null {
+		const p = this.playback;
+		return p?.file ? {leaf:p.entry.leaf,path:p.file.path,chunk:p.chunk} : null;
+	}
+	resumeFrom(snapshot: ReadAloudResume): void {
+		this.refresh();
+		const entry = this.entries.get(snapshot.leaf);
+		if (entry?.view.file?.path === snapshot.path) this.toggle(snapshot.leaf, snapshot.chunk);
+	}
 	stop(): void {
 		const playback = this.playback;
 		if (!playback) return;

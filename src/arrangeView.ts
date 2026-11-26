@@ -1,7 +1,7 @@
 import { showConfigConflict } from './arrangeConflictView';
 import { V2_ROOT } from './arrangeV2';
 import { repeatLabel, type RepeatRule } from './arrangeRepeat';
-import { ArrangeDatePicker, appendBatchFailures } from './arrangeDatePicker';
+import { ArrangeDatePicker, appendBatchFailures, type DatePickerUpdate } from './arrangeDatePicker';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
@@ -97,8 +97,8 @@ export function registerArrange(plugin: Plugin, openCollab?: (target: CollabTarg
 	const views = () => plugin.app.workspace.getLeavesOfType(ARRANGE_VIEW)
 		.map(leaf => leaf.view).filter((view): view is ArrangeView => view instanceof ArrangeView);
 	return {
-		busy: () => ArrangeStore.pendingOperations > 0 || views().some(view => view.holdAutoUpdate()),
-		beforeReload: () => views().forEach(view => view.rememberForUpdate()),
+		prepareForUpdate: async () => { for (const view of views()) await view.prepareForUpdate(); },
+		cancelUpdate: () => views().forEach(view => view.cancelUpdate()),
 	};
 }
 
@@ -151,6 +151,8 @@ export class ArrangeView extends ItemView {
 	private createDateButton!: HTMLButtonElement;
 	private draftDate: string | null = null;
 	private draftRepeat: RepeatRule | null = null;
+	private datePicker: { modal: ArrangeDatePicker; kind: 'composer' | 'item' | 'batch'; id?: string } | null = null;
+	private updateDateRestore: {kind: 'composer' | 'item' | 'batch'; id?: string; state: DatePickerUpdate} | null = null;
 	private repeatNotice: Notice | null = null;
 	private keyboardBackdrop: HTMLElement | null = null;
 	private headline!: HTMLButtonElement;
@@ -374,7 +376,7 @@ export class ArrangeView extends ItemView {
 		this.createButton = iconButton(composer, '创建事项', 'arrow-up', () => { void this.create(); });
 		this.createButton.addClass('gvkit-arrange-submit');
 		this.createDateButton = iconButton(composer, '设置新事项日期', 'calendar', event => {
-			this.chooseDate(this.draftDate, async date => { this.draftDate = date; if(this.draftRepeat) this.draftRepeat=date ? {...this.draftRepeat,anchor:date} : null; this.updateComposer(); return true; }, event, {rule:this.draftRepeat,save:async(rule,date)=>{this.draftRepeat=rule;this.draftDate=date;this.updateComposer();return true;}});
+			this.chooseDate(this.draftDate, async date => { this.draftDate = date; if(this.draftRepeat) this.draftRepeat=date ? {...this.draftRepeat,anchor:date} : null; this.updateComposer(); return true; }, event, {rule:this.draftRepeat,save:async(rule,date)=>{this.draftRepeat=rule;this.draftDate=date;this.updateComposer();return true;}}, {kind:'composer'});
 		});
 		this.createDateButton.addClass('gvkit-arrange-composer-date');
 		this.registerDomEvent(this.input, 'input', () => this.updateComposer());
@@ -551,18 +553,58 @@ export class ArrangeView extends ItemView {
 		await this.saveEdit();
 		this.editing?.body.destroy();
 	}
-	holdAutoUpdate(): boolean {
-		const e = this.editing;
-		return !!(this.busy || this.savingEdit || this.reloadTask || this.choosingParent
-			|| this.input?.value || this.draftDate || this.multi.size || this.multiReceipt
-			|| this.cancelReorder || this.cancelResize || e && (e.composing || e.title.value !== e.savedTitle || e.body.value !== e.savedBody)
-			|| this.contentEl.contains(this.contentEl.ownerDocument.activeElement)
-				&& this.contentEl.ownerDocument.activeElement?.closest('textarea, input, [contenteditable=true]'));
+	/** Close only an actual in-flight local commit; ordinary activity never delays updating. */
+	async prepareForUpdate(): Promise<void> {
+		if (this.closed) return;
+		if (this.composerComposing || this.editing?.composing) {
+			const active = this.contentEl.ownerDocument.activeElement as HTMLElement | null;
+			if (active && this.contentEl.contains(active)) active.blur();
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+		}
+		if (this.reloadTask) await this.reloadTask;
+		await this.store.whenIdle();
+		await this.saveEdit(); // Failed or invalid input is preserved below, not discarded.
+		await this.store.whenIdle();
+		const picker = this.datePicker;
+		const dateUpdate = picker && picker.modal.modalEl.isConnected
+			? { kind: picker.kind, id: picker.id, state: await picker.modal.prepareForUpdate() } : null;
+		this.cancelReorder?.(); this.cancelResize?.();
+		this.updateDateRestore = dateUpdate;
+		this.rememberForUpdate(dateUpdate);
 	}
-	rememberForUpdate(): void {
-		const { filter, hierarchyFilter, selected, full, searchOpen, searchScroll, searchDate, includeCompleted, scrolls } = this;
+	/** A failed external switch must restore the old instance's local editor. */
+	cancelUpdate(): void {
+		delete (this.leaf as ReloadLeaf).gvkitResumeArrange;
+		if (this.updateDateRestore && !this.closed) this.restoreUpdateDate(this.updateDateRestore);
+		this.updateDateRestore = null;
+	}
+	private restoreUpdateDate(snapshot: {kind: 'composer' | 'item' | 'batch'; id?: string; state: DatePickerUpdate}): void {
+		if (snapshot.kind === 'composer') this.createDateButton.click();
+		else if (snapshot.kind === 'batch') void this.multiAction('date', {} as MouseEvent);
+		else {
+			const item = this.store.items.find(item => item.id === snapshot.id);
+			if (item) this.dateMenu(item, {} as MouseEvent);
+		}
+		this.datePicker?.modal.restoreFromUpdate(snapshot.state);
+	}
+	private rememberForUpdate(dateUpdate: {kind: 'composer' | 'item' | 'batch'; id?: string; state: DatePickerUpdate} | null): void {
+		const { filter, hierarchyFilter, selected, full, searchOpen, searchScroll, searchDate, includeCompleted } = this;
+		const scrolls = new Map(this.scrolls);
 		const query = this.searchInput.value, scroll = this.list.scrollTop, detailScroll = this.detailScroll?.scrollTop ?? 0;
 		const { height, maxHeight } = this.detail.style;
+		const draft = { text: this.input.value, date: this.draftDate, repeat: this.draftRepeat,
+			start: this.input.selectionStart, end: this.input.selectionEnd };
+		const edit = this.editing, active = this.contentEl.ownerDocument.activeElement;
+		const editing = edit ? { id: edit.id, title: edit.title.value, body: edit.body.value,
+			savedTitle: edit.savedTitle, savedBody: edit.savedBody,
+			titleStart: edit.title.selectionStart, titleEnd: edit.title.selectionEnd,
+			anchor: edit.body.editor.state.selection.main.anchor, head: edit.body.editor.state.selection.main.head } : null;
+		const focus = active === this.input ? 'composer' : active === edit?.title ? 'title'
+			: edit?.body.dom.contains(active) ? 'body' : null;
+		const multi = [...this.multi], multiReceipt = this.multiReceipt, multiMessage = this.multiMessage;
+		const multiFromChildren = this.multiFromChildren, multiPreview = this.multiPreview;
+		const choosingParent = this.choosingParent ? {...this.choosingParent} : null;
+		const parentError = this.parentError.textContent, parentErrorHidden = this.parentError.hidden;
 		(this.leaf as ReloadLeaf).gvkitResumeArrange = view => {
 			Object.assign(view, { filter, hierarchyFilter, selected, full, searchOpen, searchScroll, searchDate, includeCompleted, scrolls });
 			view.searchInput.value = query;
@@ -572,6 +614,34 @@ export class ArrangeView extends ItemView {
 			Object.assign(view.detail.style, { height, maxHeight });
 			view.list.scrollTop = scroll;
 			if (view.detailScroll) view.detailScroll.scrollTop = detailScroll;
+			view.input.value = draft.text; view.draftDate = draft.date; view.draftRepeat = draft.repeat;
+			view.input.setSelectionRange(draft.start, draft.end);
+			view.multi = new Set(multi); view.multiReceipt = multiReceipt; view.multiMessage = multiMessage;
+			view.multiFromChildren = multiFromChildren; view.multiPreview = multiPreview;
+			view.choosingParent = choosingParent;
+			view.parentBar.hidden = !choosingParent;
+			if (choosingParent) {
+				view.parentBar.querySelector('span')!.textContent = choosingParent.targets ? `为${choosingParent.targets.length}项选择上级`
+					: choosingParent.id === null ? '请选择今天特产基础产出事项' : '选择上一级事项';
+				view.parentBar.querySelector('button')!.hidden = choosingParent.id === null;
+				view.parentBar.toggleClass('gvkit-arrange-goal-picker', choosingParent.id === null);
+				view.detail.hidden = true;
+			}
+			view.parentError.textContent = parentError; view.parentError.hidden = parentErrorHidden;
+			view.updateComposer(); view.syncMulti();
+			if (editing && view.editing?.id === editing.id) {
+				const next = view.editing;
+				next.title.value = editing.title;
+				next.title.setSelectionRange(editing.titleStart, editing.titleEnd);
+				next.body.value = editing.body;
+				next.body.editor.dispatch({ selection: { anchor: editing.anchor, head: editing.head } });
+				// Preserve old saved baselines so a failed save remains an unsaved edit.
+				next.savedTitle = editing.savedTitle; next.savedBody = editing.savedBody;
+			}
+			if (dateUpdate) view.restoreUpdateDate(dateUpdate);
+			if (focus === 'composer') view.input.focus();
+			else if (focus === 'title') view.editing?.title.focus();
+			else if (focus === 'body') view.editing?.body.editor.focus();
 		};
 	}
 	private isDisplayed(): boolean {
@@ -880,14 +950,15 @@ export class ArrangeView extends ItemView {
 		if(key==='date'){
 			this.multiReceipt=null;this.multiDate=true;
 			const dates=new Set(items.map(item=>item.date));
-			new ArrangeDatePicker(this.app,dates.size===1?items[0]!.date:null,this.store.facts().day,
+			const picker = new ArrangeDatePicker(this.app,dates.size===1?items[0]!.date:null,this.store.facts().day,
 				date=>this.performBatch(targets,{kind:'date',value:date}),undefined,event=>this.tips.interaction(event),{
 					count:items.length,mixed:dates.size>1,anyDate:items.some(item=>Boolean(item.date)),
 					clearBlocked:items.some(item=>!item.occurrenceId&&item.repeat)?'重复事项需单独清除日期':undefined,
 					failureMessage:()=>this.multiMessage,
 					failureDetails:()=>this.batchFailureDetails(),
 					onClose:()=>{this.multiDate=false;this.paintLists();this.updateComposer();},
-				}).open();return;
+				}, () => { if(this.datePicker?.modal===picker) this.datePicker=null; });
+			this.datePicker = {modal:picker,kind:'batch'};picker.open();return;
 		}
 		if(key==='changeParent'){this.multiReceipt=null;void this.changeParent(targets[0]!.id,targets);return;}
 		if(key==='top'){await this.performBatch(targets,{kind:'top'});return;}
@@ -1478,10 +1549,12 @@ export class ArrangeView extends ItemView {
 		});
 	}
 	private dateMenu(item: ArrangeItem, event: MouseEvent): void {
-		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event, item.completedAt ? undefined : {rule:item.repeat ?? null, save:(rule,date)=>this.run(()=>this.store.setRepeat(item.id,rule,date))});
+		this.chooseDate(item.date, date => this.run(() => this.store.setDate(item.id, date)), event, item.completedAt ? undefined : {rule:item.repeat ?? null, save:(rule,date)=>this.run(()=>this.store.setRepeat(item.id,rule,date))}, {kind:'item',id:item.id});
 	}
-	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, _event: MouseEvent, repeat?: {rule:RepeatRule | null; save:(rule:RepeatRule | null,date:string|null)=>Promise<boolean>}): void {
-		new ArrangeDatePicker(this.app, current, todayFacts(this.store.items, this.store.state).day, save, repeat, event => this.tips.interaction(event)).open();
+	private chooseDate(current: string | null, save: (date: string | null) => Promise<boolean>, _event: MouseEvent, repeat?: {rule:RepeatRule | null; save:(rule:RepeatRule | null,date:string|null)=>Promise<boolean>}, role?: {kind:'composer'|'item';id?:string}): void {
+		const picker = new ArrangeDatePicker(this.app, current, todayFacts(this.store.items, this.store.state).day, save, repeat, event => this.tips.interaction(event), undefined, () => { if(this.datePicker?.modal===picker) this.datePicker=null; });
+		if (role) this.datePicker = {modal:picker,...role};
+		picker.open();
 	}
 
 	private async select(id: string | null, locateInMain = false): Promise<void> {

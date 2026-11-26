@@ -3,6 +3,7 @@ import { dateRange, offsetDay, shiftDateMonth, shiftPeriod } from './arrangeCore
 import { firstRepeatDate, nextRepeatDate, repeatRule, repeatSummary, type RepeatRule } from './arrangeRepeat';
 
 type Snapshot = { date: string | null; rule: RepeatRule | null };
+export type DatePickerUpdate = { current: Snapshot; saved: Snapshot; failed: boolean; status: string; invalid: string };
 export interface RepeatEditor {
  rule: RepeatRule | null;
  save: (rule: RepeatRule | null, date: string | null) => Promise<boolean>;
@@ -60,7 +61,7 @@ export class ArrangeDatePicker extends Modal {
  private paintCalendar: (() => void) | null = null;
  constructor(app: App, current: string | null, private day: string,
   private saveDate: (date: string | null) => Promise<boolean>, private repeat?: RepeatEditor,
-  private interaction?: (event: Event) => void, private batch?: BatchDateOptions) {
+  private interaction?: (event: Event) => void, private batch?: BatchDateOptions, private dismissed?: () => void) {
   super(app);
   this.current = this.saved = {date:current,rule:repeat?.rule??null};
   this.mixed=Boolean(batch?.mixed);this.anyDate=batch?.anyDate??Boolean(current);
@@ -137,6 +138,20 @@ export class ArrangeDatePicker extends Modal {
   if(this.timer!==null) {clearTimeout(this.timer);this.timer=null;}
   return this.persist();
  }
+ /** Finish this modal's own save, but retain a failed, editable selection across reload. */
+ async prepareForUpdate(): Promise<DatePickerUpdate> {
+  this.finishInput();
+  await this.flush();
+  const snapshot = {current:this.current,saved:this.saved,failed:this.failed,status:this.status,invalid:this.invalid};
+  super.close();
+  return snapshot;
+ }
+ restoreFromUpdate(snapshot: DatePickerUpdate): void {
+  this.current=snapshot.current;this.saved=snapshot.saved;
+  this.dirty=JSON.stringify(this.current)!==JSON.stringify(this.saved);
+  this.failed=snapshot.failed;this.status=snapshot.status;this.invalid=snapshot.invalid;
+  this.showDate();this.paintFeedback();
+ }
  private finishInput(): void {
   if(this.inputTimer!==null) {clearTimeout(this.inputTimer);this.inputTimer=null;}
   if(this.inputPending) this.commitInput?.();
@@ -149,7 +164,7 @@ export class ArrangeDatePicker extends Modal {
    if(ok) {this.closeAfterSave=false;if(this.invalid)new Notice(this.batch?this.invalid:'未完整的重复设置未保存');super.close();}
   }).finally(()=>{this.exiting=false;});
  }
- override onClose(): void { this.batch?.onClose(); }
+ override onClose(): void { this.batch?.onClose(); this.dismissed?.(); }
  private changeDate(date: string | null): void {
   if(date===null&&this.batch?.clearBlocked){this.invalid=this.batch.clearBlocked;this.paintFeedback();return;}
   this.closeAfterSave=date!==null;

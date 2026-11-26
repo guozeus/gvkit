@@ -1,6 +1,5 @@
 import { Platform, requestUrl, requireApiVersion, type App, type Plugin } from 'obsidian';
 import { version as runningVersion } from '../manifest.json';
-import { syncState, type NativeSync } from './syncStatus';
 
 export { runningVersion };
 const id = 'gvkit';
@@ -22,10 +21,7 @@ interface Manager {
 	enablePlugin(id: string): Promise<boolean>;
 	enabledPlugins: Set<string>;
 }
-type Host = App & {
-	plugins?: Manager;
-	internalPlugins?: { getEnabledPluginById(id: string): NativeSync | null };
-};
+type Host = App & { plugins?: Manager };
 const hour = 3_600_000;
 const cooldown = 60_000;
 // A failed reload can create a fresh instance of the old plugin in the same app.
@@ -68,7 +64,8 @@ async function download(release: Release): Promise<Bundle> {
 	return bundle;
 }
 
-export function registerAutoUpdate(plugin: LoadedPlugin, busy: () => boolean, beforeReload: () => void): void {
+/** Prepare only GVKit's local state. A cancelled switch must leave the old instance usable. */
+export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Promise<void>, cancelReload: () => void): void {
 	const app = plugin.app as Host & { [lastCheck]?: number };
 	const manager = app.plugins;
 	const dir = plugin.manifest.dir;
@@ -80,20 +77,8 @@ export function registerAutoUpdate(plugin: LoadedPlugin, busy: () => boolean, be
 	let disposed = false;
 	let checking = false;
 	let retry: number | undefined;
-	let lastInput = 0;
-	let pending: { version: string; target: Bundle; previous: Bundle; fetched: number } | undefined;
 
-	function current(): boolean { return !disposed && manager!.getPlugin(id) === plugin; }
-	function safe(): boolean {
-		if (busy() || Date.now() - lastInput < 3000) return false;
-		let modal = false;
-		app.workspace.iterateAllLeaves(leaf => {
-			if (leaf.view.containerEl.ownerDocument.querySelector('.modal-container, .menu')) modal = true;
-		});
-		if (modal || doc.querySelector('.modal-container, .menu')) return false;
-		const sync = syncState(app.internalPlugins?.getEnabledPluginById('sync'));
-		return sync !== 'syncing' && sync !== 'connecting';
-	}
+	function current(): boolean { return !disposed && manager!.getPlugin(id) === plugin && manager!.enabledPlugins.has(id); }
 
 	async function readFiles(): Promise<Record<FileName, string | null>> {
 		const entries = await Promise.all(files.map(async name => {
@@ -105,44 +90,56 @@ export function registerAutoUpdate(plugin: LoadedPlugin, busy: () => boolean, be
 
 	async function load(version: string): Promise<void> {
 		await manager!.loadManifest(dir!);
-		if (!manager!.enabledPlugins.has(id)) return;
-		if (!await manager!.enablePlugin(id) || manager!.getPlugin(id)?.runningVersion !== version
-			|| manager!.getPlugin(id)?.manifest.version !== version) throw Error('Failed to load GVKit ' + version);
+		// disablePlugin removes the id from enabledPlugins on current Obsidian.
+		// enablePlugin must be invoked, rather than silently returning here.
+		if (!await manager!.enablePlugin(id)) throw Error('Failed to enable GVKit ' + version);
+		const loaded = manager!.getPlugin(id);
+		if (!loaded || loaded.runningVersion !== version || loaded.manifest.version !== version)
+			throw Error('Failed to load GVKit ' + version);
 	}
 
-	async function install(update: NonNullable<typeof pending>): Promise<void> {
-		if (!safe()) return;
+	async function install(version: string, target: Bundle, previous: Bundle): Promise<void> {
 		const before = await readFiles();
-		const disk = before['manifest.json'] && JSON.parse(before['manifest.json']);
-		if (disk && (disk.id !== id || !stable(disk.version) || newer(disk.version, update.version))) {
-			pending = undefined;
-			return;
-		}
-		if (!current() || !safe()) return;
-		let switching = false;
+		const completeOld = files.every(name => before[name] === previous[name]);
+		const completeNew = files.every(name => before[name] === target[name]);
+		// BRAT/Sync may be installing concurrently. Never adopt or overwrite a mixed package.
+		if (!completeOld && !completeNew) throw Error('GVKit files changed by another installer');
+		if (!current()) return;
+		let disabled = false;
 		try {
-			for (const name of files) {
-				if (!current()) return;
-				if (before[name] !== update.target[name]) await adapter.write(dir + '/' + name, update.target[name]);
-			}
-			// Sync or BRAT can deliver the same files independently. Only a complete,
-			// matching set is eligible for activation, including an already-synced set.
-			const installed = await readFiles();
-			if (!current() || !safe() || files.some(n => installed[n] !== update.target[n])) return;
-			beforeReload();
-			switching = true;
+			await prepareReload();
+			if (!current()) { cancelReload(); return; }
+			const ready = await readFiles();
+			if (files.some(name => ready[name] !== before[name])) { cancelReload(); return; }
 			await manager!.disablePlugin(id);
-			if (manager!.getPlugin(id)) throw Error('GVKit still loaded');
-			await load(update.version);
-			pending = undefined;
+			disabled = true;
+			if (manager!.getPlugin(id)) throw Error('GVKit still loaded after disable');
+			for (const name of files) {
+					const path = dir + '/' + name;
+					const disk = await adapter.read(path);
+					if (disk !== before[name] && disk !== target[name]) throw Error('GVKit external install conflict: ' + name);
+					if (disk !== target[name]) await adapter.write(path, target[name]);
+			}
+			const installed = await readFiles();
+			if (files.some(name => installed[name] !== target[name])) throw Error('GVKit package changed during installation');
+			await load(version);
 		} catch (error) {
-			if (!switching && !current()) return;
-			// The previous official package stays in memory: a Sync-mixed on-disk
-			// snapshot would not be a reliable rollback source.
-			if (switching && manager!.getPlugin(id) && manager!.getPlugin(id) !== plugin)
-				await manager!.disablePlugin(id);
-			for (const name of files) await adapter.write(dir + '/' + name, update.previous[name]);
-			if (switching && !manager!.getPlugin(id)) await load(runningVersion);
+			if (!disabled && manager!.getPlugin(id) !== plugin) disabled = true;
+			if (!disabled) cancelReload();
+			if (disabled) {
+				// Roll back only bytes this installer may have touched. Never erase a
+				// distinct BRAT/Sync package that arrived during the switch.
+				const disk = await readFiles();
+				if (files.every(name => disk[name] === before[name] || disk[name] === target[name])) {
+					if (manager!.getPlugin(id)) await manager!.disablePlugin(id);
+					for (const name of files) if (disk[name] !== previous[name])
+						await adapter.write(dir + '/' + name, previous[name]);
+					await load(runningVersion);
+				} else {
+					console.error('gvkit: external installer changed the package; cannot safely roll back', error);
+					// Never activate an unverified mixed package or overwrite external changes.
+				}
+			}
 			throw error;
 		}
 	}
@@ -155,32 +152,23 @@ export function registerAutoUpdate(plugin: LoadedPlugin, busy: () => boolean, be
 		if (!current() || checking || win.navigator.onLine === false) return;
 		checking = true;
 		try {
-			if (!pending || Date.now() - pending.fetched >= hour) {
-				const remaining = (app[lastCheck] ?? 0) + cooldown - Date.now();
-				if (remaining > 0) { later(remaining); return; }
-				app[lastCheck] = Date.now();
-				pending = undefined;
-				const latest = await getRelease('latest');
-				if (!current() || newer(runningVersion, latest.tag_name)) return;
-				if (latest.tag_name === runningVersion && plugin.manifest.version === runningVersion) return;
-				const previous = await getRelease('tags/' + runningVersion);
-				if (previous.tag_name !== runningVersion) throw Error('Missing previous release');
-				const [target, backup] = await Promise.all([download(latest), download(previous)]);
-				pending = { version: latest.tag_name, target, previous: backup, fetched: Date.now() };
-			}
-			if (current()) await install(pending);
-			if (pending && current()) later(15_000);
+			const remaining = (app[lastCheck] ?? 0) + cooldown - Date.now();
+			if (remaining > 0) { later(remaining); return; }
+			app[lastCheck] = Date.now();
+			const latest = await getRelease('latest');
+			if (!current() || newer(runningVersion, latest.tag_name)) return;
+			if (latest.tag_name === runningVersion && plugin.manifest.version === runningVersion) return;
+			const prior = await getRelease('tags/' + runningVersion);
+			if (prior.tag_name !== runningVersion) throw Error('Missing previous release');
+			const [target, backup] = await Promise.all([download(latest), download(prior)]);
+			if (current()) await install(latest.tag_name, target, backup);
 		} catch (error) {
-			console.warn('gvkit: automatic update deferred', error);
-			pending = undefined;
+			console.warn('gvkit: automatic update failed', error);
 			later(5 * cooldown);
 		} finally { checking = false; }
 	}
 
 	function listen(d: Document): void {
-		const activity = () => { lastInput = Date.now(); };
-		plugin.registerDomEvent(d, 'pointerdown', activity, true);
-		plugin.registerDomEvent(d, 'keydown', activity, true);
 		plugin.registerDomEvent(d, 'visibilitychange', () => { if (!d.hidden) void check(); });
 	}
 	listen(doc);
@@ -188,6 +176,6 @@ export function registerAutoUpdate(plugin: LoadedPlugin, busy: () => boolean, be
 	plugin.registerDomEvent(win, 'online', check);
 	plugin.registerDomEvent(win, 'pageshow', check);
 	plugin.registerInterval(win.setInterval(check, hour));
-	plugin.register(() => { disposed = true; win.clearTimeout(retry); pending = undefined; });
+	plugin.register(() => { disposed = true; win.clearTimeout(retry); });
 	app.workspace.onLayoutReady(() => later(1500));
 }
