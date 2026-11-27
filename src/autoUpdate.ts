@@ -2,8 +2,6 @@ import { Notice, Platform, requestUrl, requireApiVersion, type App, type Plugin 
 import { version as runningVersion } from '../manifest.json';
 
 export { runningVersion };
-/** A live GVKit IME composition must finish before its editor can be replaced. */
-export class GvkitUpdateDeferred extends Error {}
 const id = 'gvkit';
 const releases = 'https://api.github.com/repos/guozeus/gvkit/releases/';
 const files = ['main.js', 'styles.css', 'manifest.json'] as const;
@@ -66,8 +64,8 @@ async function download(release: Release): Promise<Bundle> {
 	return bundle;
 }
 
-/** Prepare only GVKit's local state. A cancelled switch must leave the old instance usable. */
-export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Promise<void>, cancelReload: () => void, canSwitch: () => boolean): void {
+/** Capture transient UI state synchronously; user operations never gate an update. */
+export function registerAutoUpdate(plugin: LoadedPlugin, captureReloadState: () => void, cancelReloadState: () => void): void {
 	const app = plugin.app as Host & { [lastCheck]?: number };
 	const manager = app.plugins;
 	const dir = plugin.manifest.dir;
@@ -79,7 +77,6 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 	let disposed = false;
 	let checking = false;
 	let retry: number | undefined;
-	let deferredIme = false;
 
 	function current(): boolean { return !disposed && manager!.getPlugin(id) === plugin && manager!.enabledPlugins.has(id); }
 
@@ -110,11 +107,10 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 		if (!current()) return;
 		let disabled = false;
 		try {
-			await prepareReload();
-			if (!current()) { cancelReload(); return; }
+			captureReloadState();
+			if (!current()) { cancelReloadState(); return; }
 			const ready = await readFiles();
-			if (files.some(name => ready[name] !== before[name])) { cancelReload(); return; }
-			if (!canSwitch()) throw new GvkitUpdateDeferred('GVKit editor composition in progress');
+			if (files.some(name => ready[name] !== before[name])) { cancelReloadState(); return; }
 			await manager!.disablePlugin(id);
 			disabled = true;
 			if (manager!.getPlugin(id)) throw Error('GVKit still loaded after disable');
@@ -129,7 +125,7 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 			await load(version);
 		} catch (error) {
 			if (!disabled && manager!.getPlugin(id) !== plugin) disabled = true;
-			if (!disabled) cancelReload();
+			if (!disabled) cancelReloadState();
 			if (disabled) {
 				let recovered = false;
 				try {
@@ -190,11 +186,6 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 			const [target, backup] = await Promise.all([download(latest), download(prior)]);
 			if (current()) await install(latest.tag_name, target, backup);
 		} catch (error) {
-			if (error instanceof GvkitUpdateDeferred) {
-				deferredIme = true;
-				app[lastCheck] = Date.now() - cooldown;
-				return; // Resume on this input's compositionend, not on general host activity.
-			}
 			console.warn('gvkit: automatic update failed', error);
 			later(5 * cooldown);
 		} finally { checking = false; }
@@ -202,9 +193,6 @@ export function registerAutoUpdate(plugin: LoadedPlugin, prepareReload: () => Pr
 
 	function listen(d: Document): void {
 		plugin.registerDomEvent(d, 'visibilitychange', () => { if (!d.hidden) void check(); });
-		plugin.registerDomEvent(d, 'compositionend', () => {
-			if (deferredIme) { deferredIme = false; later(100); }
-		}, true);
 	}
 	listen(doc);
 	plugin.registerEvent(app.workspace.on('window-open', (_window, w) => listen(w.document)));

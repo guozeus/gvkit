@@ -195,17 +195,15 @@ export default class GvkitPlugin extends Plugin {
 		registerGvkitIcons();
 		registerSyncStatus(this);
 		const arrange = registerArrange(this, target => this.openCollabBoard(target));
-		registerAutoUpdate(this, async () => {
-			await arrange.prepareForUpdate();
-			await this.publishSettings?.prepareForReload();
+		registerAutoUpdate(this, () => {
+			arrange.captureForUpdate();
 			(this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft = this.gvkitSettingsTab?.captureForUpdate() ?? undefined;
 			(this.app as typeof this.app & { gvkitReadAloudResume?: ReadAloudResume }).gvkitReadAloudResume = this.readAloud?.resumeSnapshot() ?? undefined;
 		}, () => {
 			arrange.cancelUpdate();
-			this.publishSettings?.cancelReload();
 			delete (this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft;
 			delete (this.app as typeof this.app & { gvkitReadAloudResume?: ReadAloudResume }).gvkitReadAloudResume;
-		}, () => !arrange.hasActiveComposition());
+		});
 		registerIndexNavigation(this);
 		const embeds = new ReadAloudEmbeds(this.app);
 		this.register(() => embeds.destroy());

@@ -7,7 +7,7 @@ type RepeatDraft = { original: RepeatRule | null; startingDate: string; selected
  yearDates: string[]; month: number; inputPending: boolean; focus: 'interval' | 'unit' | null };
 export type DatePickerUpdate = { current: Snapshot; saved: Snapshot; dirty: boolean; savedCertain: boolean;
  mixed: boolean; anyDate: boolean; failed: boolean; status: string; invalid: string;
- page: 'date' | 'repeat'; repeatDraft: RepeatDraft | null; calendarMonth: string | null };
+ page: 'date' | 'repeat'; repeatDraft: RepeatDraft | null; calendarMonth: string | null; closeAfterSave: boolean };
 export interface RepeatEditor {
  rule: RepeatRule | null;
  save: (rule: RepeatRule | null, date: string | null) => Promise<boolean>;
@@ -145,15 +145,14 @@ export class ArrangeDatePicker extends Modal {
   if(this.timer!==null) {clearTimeout(this.timer);this.timer=null;}
   return this.persist();
  }
- /** Finish this modal's own save, but retain a failed, editable selection across reload. */
- async prepareForUpdate(): Promise<DatePickerUpdate> {
-  // A half-typed interval belongs to the editor, not to a save request.
-  if(this.inputTimer!==null){clearTimeout(this.inputTimer);this.inputTimer=null;}
-  await this.flush();
-  if(this.inputTimer!==null){clearTimeout(this.inputTimer);this.inputTimer=null;}
-  const snapshot = {current:this.current,saved:this.saved,dirty:this.dirty,savedCertain:this.savedCertain,
+ /** Capture UI state without waiting for or starting any business write. */
+ captureForUpdate(): DatePickerUpdate {
+  const snapshot = {current:this.current,saved:this.saved,dirty:this.dirty||Boolean(this.writing),savedCertain:this.savedCertain,
    mixed:this.mixed,anyDate:this.anyDate,failed:this.failed,status:this.status,invalid:this.invalid,
-   page:this.page,repeatDraft:this.captureRepeat?.()??null,calendarMonth:this.calendarMonth};
+   page:this.page,repeatDraft:this.captureRepeat?.()??null,calendarMonth:this.calendarMonth,
+   closeAfterSave:this.closeAfterSave||this.exiting};
+  if(this.timer!==null){clearTimeout(this.timer);this.timer=null;}
+  if(this.inputTimer!==null){clearTimeout(this.inputTimer);this.inputTimer=null;}
   // Closing a number input may fire onchange: it must not commit a draft.
   const interval=this.contentEl.querySelector<HTMLInputElement>('input[aria-label="重复间隔"]');
   if(interval){interval.onchange=null;interval.oninput=null;}
@@ -167,7 +166,16 @@ export class ArrangeDatePicker extends Modal {
   this.failed=snapshot.failed;this.status=snapshot.status;
   if(snapshot.page==='repeat'&&this.repeat) this.showRepeat(snapshot.repeatDraft??undefined);
   else this.showDate(snapshot.calendarMonth??undefined);
+  this.closeAfterSave=snapshot.closeAfterSave;
   this.invalid=snapshot.invalid;this.paintFeedback();
+  if(snapshot.repeatDraft?.inputPending) {
+   this.inputTimer=setTimeout(()=>{this.inputTimer=null;this.commitInput?.();},250);
+  }
+  if(snapshot.dirty&&!snapshot.failed&&!snapshot.invalid) {
+   this.timer=setTimeout(()=>{this.timer=null;void this.persist();},220);
+  } else if(snapshot.closeAfterSave&&!snapshot.dirty&&!snapshot.failed&&!snapshot.invalid) {
+   super.close();
+  }
  }
  private finishInput(): void {
   if(this.inputTimer!==null) {clearTimeout(this.inputTimer);this.inputTimer=null;}
