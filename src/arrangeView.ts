@@ -5,6 +5,7 @@ import { ArrangeDatePicker, appendBatchFailures, type DatePickerUpdate } from '.
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
 import { ItemView, MarkdownRenderChild, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import type { SheetTarget } from './dingtalkSheet';
 import type { CollabTarget } from './collabBoard';
 import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeConfigError, ArrangeCreateError, ArrangeStore, type ArrangeBatchAction, type ArrangeBatchTarget, type ArrangeBatchResult } from './arrangeStore';
@@ -53,7 +54,7 @@ function titleCaretRect(input: HTMLTextAreaElement): DOMRect | null {
 // Transient tab state survives only the automatic reload of this leaf.
 type ReloadLeaf = WorkspaceLeaf & { gvkitResumeArrange?: (view: ArrangeView) => void };
 
-export function registerArrange(plugin: Plugin, openCollab?: (target: CollabTarget) => void) {
+export function registerArrange(plugin: Plugin, openCollab?: (target: CollabTarget) => void, openSheet?: (target: SheetTarget) => void) {
 	const platform = Platform.isIosApp ? 'ios' : Platform.isAndroidApp ? 'android' : Platform.isMobileApp ? 'mobile' : 'desktop';
 	const trace = deviceArrangeTrace(plugin.app.vault.getName(), plugin.manifest.version, platform);
 	trace.record('plugin.initialize');
@@ -67,7 +68,7 @@ export function registerArrange(plugin: Plugin, openCollab?: (target: CollabTarg
 			...observed, ...configFingerprint(source),
 		})).catch(error => trace.failure('vault.observe.fail', error, { stage: 'vault_change' }));
 	}));
-	plugin.registerView(ARRANGE_VIEW, leaf => new ArrangeView(leaf, store, openCollab));
+	plugin.registerView(ARRANGE_VIEW, leaf => new ArrangeView(leaf, store, openCollab, openSheet));
 	const syncChrome = () => document.body.classList.toggle(
 		'gvkit-arrange-active', Platform.isMobileApp && plugin.app.workspace.getActiveViewOfType(ArrangeView) !== null,
 	);
@@ -97,6 +98,7 @@ export function registerArrange(plugin: Plugin, openCollab?: (target: CollabTarg
 	const views = () => plugin.app.workspace.getLeavesOfType(ARRANGE_VIEW)
 		.map(leaf => leaf.view).filter((view): view is ArrangeView => view instanceof ArrangeView);
 	return {
+		store,
 		captureForUpdate: () => views().forEach(view => view.captureForUpdate()),
 		cancelUpdate: () => views().forEach(view => view.cancelUpdate()),
 	};
@@ -246,7 +248,7 @@ export class ArrangeView extends ItemView {
 		} catch { new Notice('复制失败，请重试'); }
 	}
 
-	constructor(leaf: WorkspaceLeaf, store: ArrangeStore, private openCollab?: (target: CollabTarget) => void) {
+	constructor(leaf: WorkspaceLeaf, store: ArrangeStore, private openCollab?: (target: CollabTarget) => void, private openSheet?: (target: SheetTarget) => void) {
 		super(leaf); this.store = store;
 		// Obsidian handles shortcuts at window capture, before textarea keydown.
 		// A view scope participates in that native path, including popout windows.
@@ -1544,8 +1546,17 @@ export class ArrangeView extends ItemView {
 		if (!parentSiblings && this.openCollab && (!item.occurrenceOf || item.occurrenceOf === item.id)) {
 			entry('协作板', 'share-2', () => { void this.openItemCollab(item); });
 		}
-		modal.open();
-	}
+        if (!parentSiblings && this.openSheet && (!item.occurrenceOf || item.occurrenceOf === item.id)) {
+            entry('发布到钉钉文档表格', 'table', () => { void this.openItemSheet(item); });
+        }
+        modal.open();
+    }
+    private async openItemSheet(item: ArrangeItem): Promise<void> {
+        if (!(await this.saveEdit())) { new Notice('请先保存当前事项再发布。'); return; }
+        const current = () => this.selected === item.id && this.leaf.view === this && this.app.workspace.activeLeaf === this.leaf
+            && this.store.items.some(r => r.id === item.id && r.path === item.path);
+        if (current()) this.openSheet?.({ root:item.id, current });
+    }
 	private async openItemCollab(item: ArrangeItem): Promise<void> {
 		if (!(await this.saveEdit())) { new Notice('请先保存当前事项再发布。'); return; }
 		if (this.selected !== item.id || this.leaf.view !== this) return;

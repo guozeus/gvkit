@@ -21,6 +21,7 @@ import { openZhouyouPublishDialog } from './publishDialog';
 import { DeviceZhouyouSecret } from './publishSecretSettings';
 import { ZhouyouClient, createZhouyouRequestUrlTransport, validateZhouyouEndpoint } from './zhouyouClient';
 import { CollabBoardPublisher, type CollabTarget } from './collabBoard';
+import { DingTalkSheets } from './dingtalkSheet';
 import { validCollabPath } from './collabBoardCore';
 import { registerAutoUpdate, runningVersion } from './autoUpdate';
 import { registerArrange } from './arrangeView';
@@ -194,7 +195,9 @@ export default class GvkitPlugin extends Plugin {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 		registerSyncStatus(this);
-		const arrange = registerArrange(this, target => this.openCollabBoard(target));
+		const arrange = registerArrange(this, target => this.openCollabBoard(target), target => sheets.open(target));
+        const sheets = new DingTalkSheets(this, arrange.store);
+        sheets.listen();
 		registerAutoUpdate(this, () => {
 			arrange.captureForUpdate();
 			(this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft = this.gvkitSettingsTab?.captureForUpdate() ?? undefined;
@@ -256,7 +259,7 @@ export default class GvkitPlugin extends Plugin {
 		}));
 		this.safeMoves = new SafeMoveManager(this.app);
 		this.publishSettings = new PublishSettings({ loadData: () => this.loadData(), saveData: data => this.saveData(data) });
-		this.gvkitSettingsTab = new GvkitSettingTab(this.app, this, this.fileIds, this.safeMoves, () => this.publishSettings);
+		this.gvkitSettingsTab = new GvkitSettingTab(this.app, this, this.fileIds, this.safeMoves, () => this.publishSettings, sheets);
 		this.addSettingTab(this.gvkitSettingsTab);
 		this.addCommand({
 			id: 'execute-safe-batch-move',

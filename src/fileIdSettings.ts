@@ -1,3 +1,4 @@
+import type { DingTalkSheets } from './dingtalkSheet';
 import { App, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TextComponent, requestUrl } from 'obsidian';
 import { requiresLargeBackfillConfirmation } from './fileIdCore';
 import { FileIdManager } from './fileIds';
@@ -73,6 +74,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 		private fileIds: FileIdManager,
 		private safeMoves: SafeMoveManager,
 		publishSettings: () => PublishSettings | null,
+        private sheets?: DingTalkSheets,
 	) {
 		super(app, plugin);
 		this.publishSettings = publishSettings;
@@ -184,6 +186,7 @@ export class GvkitSettingTab extends PluginSettingTab {
 					}
 				});
 			});
+		this.sheets?.settings(containerEl.createDiv());
 		const prefs = this.publishSettings();
 		if (prefs?.isLoaded()) {
 			this.renderZhouyou(prefs); this.renderCollab(prefs);

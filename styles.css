@@ -571,3 +571,6 @@ button.gvkit-sync-status { display: inline-flex; flex: 0 0 auto; align-items: ce
 .gvkit-sync-status svg { width: 14px; height: 14px; }
 .gvkit-sync-status[data-state="synced"] { color: var(--color-green); }
 .gvkit-sync-status[data-state="error"], .gvkit-sync-status[data-state="disconnected"] { color: var(--text-error); }
+
+.gvkit-sheet button, .gvkit-sheet a, .gvkit-sheet summary { touch-action: manipulation; }
+.gvkit-sheet strong { display: block; margin-top: .5em; }

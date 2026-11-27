@@ -521,6 +521,10 @@ export class ArrangeStore {
 		}
 		repeatRule(fields.repeat);
 	}
+	sheetSourceReady(root: string): boolean {
+		return !this.unknownRelations && !this.uncertainIds.has(root) && !this.uncertainParents.has(root);
+	}
+
 	private requireDependencies(id: string): void {
 		if (this.uncertainIds.has(id) || this.uncertainParents.has(id)
 			|| (this.unknownRelations && this.items.some(item => item.parent === id))) throw Error('相关事项待确认，请先修正异常事项后重试');
