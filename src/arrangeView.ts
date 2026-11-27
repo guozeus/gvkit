@@ -4,7 +4,7 @@ import { repeatLabel, type RepeatRule } from './arrangeRepeat';
 import { ArrangeDatePicker, appendBatchFailures, type DatePickerUpdate } from './arrangeDatePicker';
 import { ArrangeRewardsView } from './arrangeRewardsView';
 import { REWARD_VALUES, rewardValue } from './arrangeRewards';
-import { ItemView, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
+import { ItemView, MarkdownRenderChild, MarkdownRenderer, Menu, Modal, Notice, Platform, Plugin, Scope, setIcon, Setting, TFile, WorkspaceLeaf, type SliderComponent } from 'obsidian';
 import type { CollabTarget } from './collabBoard';
 import { ARRANGE_ACTIONS, ARRANGE_BREATHE_SETTINGS, ARRANGE_FREE_SIZES, ARRANGE_NUMBER_SETTINGS, COMPLETION_SOUNDS, DATE_HINT_COLORS, PIN_COLORS, dateRange, dayKey, matchesDateRange, relativeDate, rowDateLabel, shiftPeriod, SUBMIT_BLUE_COLORS, todayFacts, validParent, type ArrangeItem, type ArrangeState, type DateGrain, type RowAction } from './arrangeCore';
 import { ARRANGE_STATE_PATH, ArrangeConfigError, ArrangeCreateError, ArrangeStore, type ArrangeBatchAction, type ArrangeBatchTarget, type ArrangeBatchResult } from './arrangeStore';
@@ -143,6 +143,10 @@ export class ArrangeView extends ItemView {
 	private detail!: HTMLElement;
 	private detailScroll!: HTMLElement;
 	private children!: HTMLElement;
+	private parentPane: {
+		id: string; root: HTMLElement; title: HTMLElement; status: HTMLElement; children: HTMLElement; body: HTMLElement;
+		rowsKey: string; markdown: { path: string; source: string; child: MarkdownRenderChild } | null;
+	} | null = null;
 	private area!: HTMLElement;
 	private input!: HTMLTextAreaElement;
 	private createButton!: HTMLButtonElement;
@@ -537,6 +541,7 @@ export class ArrangeView extends ItemView {
 	async onClose(): Promise<void> {
 		this.store.trace?.record('view.close');
 		this.closed = true;
+		this.clearParentPane();
 		if (this.caretFrame !== null) this.contentEl.ownerDocument.defaultView?.cancelAnimationFrame(this.caretFrame);
 		this.caretFrame = null;
 		this.tips.destroy();
@@ -865,6 +870,7 @@ export class ArrangeView extends ItemView {
 			}
 		}
 		for(const row of Array.from(this.contentEl.querySelectorAll<HTMLElement>('.gvkit-arrange-row[data-id]'))){
+			if(this.parentPane?.root.contains(row))continue;
 			const chosen=active&&this.multi.has(row.dataset.id!);row.toggleClass('is-multi-selected',chosen);
 			for(const control of Array.from(row.querySelectorAll<HTMLElement>('input,button'))){
 				control.tabIndex=active&&!control.classList.contains('gvkit-arrange-title')?-1:0;
@@ -1164,11 +1170,12 @@ export class ArrangeView extends ItemView {
 		iconButton(period, '下一期', 'chevron-right', () => { filter.day = shiftPeriod(filter.day, filter.grain, 1); update(); });
 	}
 	private row(parent: HTMLElement, item: ArrangeItem, dailyGoal = false): void {
+		const parentSiblings = parent === this.parentPane?.children;
 		const row = parent.createDiv('gvkit-arrange-row');
 		row.toggleClass('gvkit-arrange-daily-goal', dailyGoal);
 		row.dataset.id = item.id;
 		row.toggleClass('is-selected', item.id === this.selected);
-		row.toggleClass('is-multi-selected',!this.choosingParent&&this.multi.has(item.id));
+		row.toggleClass('is-multi-selected',!parentSiblings&&!this.choosingParent&&this.multi.has(item.id));
 		row.toggleClass('is-pinned', item.pinned);
 		row.toggleClass('is-special-reminder', Boolean(item.specialReminderAt));
 		row.toggleClass('is-root-item', item.parent === null && this.store.parentIds.has(item.id));
@@ -1199,6 +1206,10 @@ export class ArrangeView extends ItemView {
 		}
 		label.onclick = () => {
 			const selecting = this.selected !== item.id;
+			if (parentSiblings) {
+				if (selecting) void this.select(item.id);
+				return;
+			}
 			void this.select(selecting ? item.id : null, selecting && parent === this.children && !Platform.isMobileApp);
 		};
 		if (this.store.parentIds.has(item.id)) {
@@ -1219,7 +1230,8 @@ export class ArrangeView extends ItemView {
 		const actionArea = row.createDiv('gvkit-arrange-actions');
 		for (const key of this.store.state.rowActions) {
 			if (dailyGoal && key === 'top' || !this.actionAvailable(key, item)) continue;
-			const button = iconButton(actionArea, this.actionLabel(key, item), actions[key].icon, event => this.action(key, item, event, parent !== this.list));
+			const button = iconButton(actionArea, this.actionLabel(key, item), actions[key].icon, event =>
+				this.action(key, item, event, parent !== this.list, parentSiblings ? parent : undefined));
 			if (key === 'pin' && item.pinned) button.addClass('is-active');
 			if (key === 'specialReminder') { button.toggleClass('is-active', Boolean(item.specialReminderAt)); button.setAttribute('aria-pressed', String(Boolean(item.specialReminderAt))); }
 			if (key === 'date' && item.date) button.addClass('is-active');
@@ -1229,7 +1241,12 @@ export class ArrangeView extends ItemView {
 		if (dailyGoal) {
 			this.goalReplaceButton(row);
 		}
-		this.rowGesture(row, label, item);
+		if (parentSiblings) {
+			row.oncontextmenu = event => {
+				event.preventDefault();
+				this.itemMenu(item, event, parent);
+			};
+		} else this.rowGesture(row, label, item);
 	}
 	private goalReplaceButton(row: HTMLElement): void {
 		iconButton(row, '更换今天特产基础产出事项', 'refresh-cw', () => { void this.changeParent(null); })
@@ -1429,18 +1446,19 @@ export class ArrangeView extends ItemView {
 		if (key === 'pin' || key === 'developmentCompleted' || key === 'specialReminder') return !item.completedAt;
 		return true;
 	}
-	private action(key: RowAction, item: ArrangeItem, event: MouseEvent, fromChildren = false): void {
+	private action(key: RowAction, item: ArrangeItem, event: MouseEvent, fromChildren = false, parentSiblings?: HTMLElement): void {
 		if(this.multi.size){if(this.busy)return;this.setMulti([]);}
 		if (!this.store.items.some(value => value.id === item.id)) return;
 		if (!this.actionAvailable(key, item)) return;
 		if (key === 'parent' && item.parent) {
+			if (parentSiblings) { void this.select(item.parent); return; }
 			void this.select(item.parent).then(() => {
 				const row = this.children?.querySelector<HTMLElement>(`[data-id="${item.id}"]`);
 				row?.scrollIntoView({ block: 'nearest' }); row?.addClass('is-located');
 			});
 		} else if (key === 'date') this.dateMenu(item, event);
 		else if (key === 'top') void this.run(() => this.store.top(item.id)).then(ok => {
-			if (ok) { this.reveal(item.id, fromChildren ? this.children : this.list); if (fromChildren) new Notice('已置顶主列表，子事项顺序不变'); }
+			if (ok) { this.reveal(item.id, parentSiblings ?? (fromChildren ? this.children : this.list)); if (fromChildren) new Notice('已置顶主列表，子事项顺序不变'); }
 		});
 		else if (key === 'specialReminder') void this.run(() => this.store.toggleSpecialReminder(item.id)).then(ok => { if (ok) new Notice(this.store.items.find(value => value.id === item.id)?.specialReminderAt ? '已开启特别提醒' : '已关闭特别提醒'); });
 		else if (key === 'pin') void this.run(() => this.store.togglePin(item.id)).then(ok => {
@@ -1470,7 +1488,7 @@ export class ArrangeView extends ItemView {
 	private reveal(id: string, parent = this.selected ? this.children : this.list): void {
 		parent?.querySelector<HTMLElement>(`[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
 	}
-	private itemMenu(item: ArrangeItem, event: MouseEvent): void {
+	private itemMenu(item: ArrangeItem, event: MouseEvent, parentSiblings?: HTMLElement): void {
 		const modal = new Modal(this.app);
 		modal.contentEl.addEventListener('click', event => this.tips.interaction(event), true);
 		modal.contentEl.addEventListener('input', event => this.tips.interaction(event), true);
@@ -1492,7 +1510,7 @@ export class ArrangeView extends ItemView {
 				: key === 'specialReminder' ? (item.specialReminderAt ? '关闭特别提醒' : '开启特别提醒')
 				: key === 'developmentCompleted' && item.developmentCompleted ? '取消AI已执行'
 				: key === 'developmentProject' && item.developmentProject ? '取消开发工程' : this.actionLabel(key, item);
-			const row = entry(title, actions[key].icon, () => this.action(key, item, event));
+			const row = entry(title, actions[key].icon, () => this.action(key, item, event, Boolean(parentSiblings), parentSiblings));
 			if (key === 'specialReminder') {
 				const button = row.querySelector<HTMLButtonElement>('.gvkit-arrange-menu-action')!;
 				button.setAttribute('aria-pressed', String(Boolean(item.specialReminderAt)));
@@ -1523,7 +1541,7 @@ export class ArrangeView extends ItemView {
 				};
 			}
 		}
-		if (this.openCollab && (!item.occurrenceOf || item.occurrenceOf === item.id)) {
+		if (!parentSiblings && this.openCollab && (!item.occurrenceOf || item.occurrenceOf === item.id)) {
 			entry('协作板', 'share-2', () => { void this.openItemCollab(item); });
 		}
 		modal.open();
@@ -1585,8 +1603,77 @@ export class ArrangeView extends ItemView {
 			}
 		});
 	}
+	private clearParentPane(): void {
+		const pane = this.parentPane;
+		if (!pane) return;
+		this.parentPane = null;
+		if (pane.markdown) this.removeChild(pane.markdown.child);
+		pane.root.remove();
+	}
+	private paintParentPane(item: ArrangeItem | undefined): void {
+		if (Platform.isMobileApp || this.choosingParent) return;
+		const parent = item?.parent && this.store.state.showParentDetailPane
+			? this.store.items.find(candidate => candidate.id === item.parent) : undefined;
+		if (this.parentPane?.id !== parent?.id) this.clearParentPane();
+		if (!parent) return;
+		if (!this.parentPane) {
+			const root = this.detail.createEl('section', { cls: 'gvkit-arrange-parent-pane', attr: { 'aria-label': '上级事项详情' } });
+			this.detail.prepend(root);
+			const header = root.createDiv('gvkit-arrange-parent-pane-header');
+			this.parentPane = {
+				id: parent.id, root, title: header.createEl('strong'), status: header.createDiv('gvkit-arrange-parent-pane-status'),
+				children: root.createDiv({ cls: 'gvkit-arrange-parent-pane-children', attr: { 'aria-label': '上级的子事项' } }),
+				body: root.createDiv('gvkit-arrange-parent-pane-body markdown-rendered'),
+				rowsKey: '', markdown: null,
+			};
+		}
+		const pane = this.parentPane;
+		if (pane.title.textContent !== parent.title) pane.title.textContent = parent.title;
+		const status = [
+			parent.date ? relativeDate(parent.date, this.today, Boolean(parent.completedAt)) : '',
+			parent.completedAt ? '已完成' : parent.developmentCompleted ? 'AI已执行' : '',
+		].filter(Boolean).join(' · ');
+		if (pane.status.textContent !== status) pane.status.textContent = status;
+		const children = this.directChildren(parent.id);
+		const rowsKey = JSON.stringify([this.today, this.store.state.rowActions, children.map(({ body, ...row }) =>
+			[row, this.store.parentIds.has(row.id)])]);
+		if (pane.rowsKey !== rowsKey) {
+			const scroll = pane.children.scrollTop;
+			pane.children.empty();
+			for (const child of children) this.row(pane.children, child);
+			pane.children.scrollTop = scroll;
+			pane.rowsKey = rowsKey;
+		}
+		for (const row of Array.from(pane.children.children) as HTMLElement[]) {
+			const selected = row.dataset.id === this.selected;
+			row.toggleClass('is-selected', selected);
+			row.querySelector('.gvkit-arrange-title')?.setAttribute('aria-current', String(selected));
+		}
+		if (pane.markdown?.source === parent.body && pane.markdown.path === parent.path) return;
+		const scroll = pane.body.scrollTop;
+		if (pane.markdown) this.removeChild(pane.markdown.child);
+		pane.body.empty();
+		pane.markdown = null;
+		if (!parent.body) return;
+		const mount = pane.body.createDiv();
+		const child = this.addChild(new MarkdownRenderChild(mount));
+		pane.markdown = { source: parent.body, path: parent.path, child };
+		mount.onclick = event => {
+			const link = (event.target as Element)?.closest?.('a.internal-link');
+			const href = link?.getAttribute('data-href') ?? link?.getAttribute('href');
+			if (!href || !mount.contains(link)) return;
+			event.preventDefault();
+			event.stopPropagation();
+			void this.app.workspace.openLinkText(href, parent.path, event.ctrlKey || event.metaKey);
+		};
+		// Each render owns its mount. Switching parent or body detaches the previous render.
+		void MarkdownRenderer.render(this.app, parent.body, mount, parent.path, child)
+			.catch(() => { if (this.parentPane === pane && pane.markdown?.child === child) mount.textContent = parent.body; })
+			.finally(() => { if (this.parentPane === pane && pane.markdown?.child === child) pane.body.scrollTop = scroll; });
+	}
 	private paintDetailState(): void {
 		const item = this.store.items.find(item => item.id === this.selected);
+		this.paintParentPane(item);
 		if (!item) return;
 		// Refresh the parent link in place so live relation changes keep the editor intact.
 		const scroll = this.editing?.id === item.id ? this.detailScroll : null;
@@ -1606,7 +1693,7 @@ export class ArrangeView extends ItemView {
 				nav.onclick = () => { void this.select(parent.id); };
 			}
 		}
-		const label = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-date');
+		const label = this.detail.querySelector<HTMLElement>(':scope > .gvkit-arrange-detail-tools > .gvkit-arrange-detail-date');
 		if (label) {
 			label.hidden = !item.date;
 			const text = item.date ? relativeDate(item.date, this.today, Boolean(item.completedAt)) + (item.reopened ? ' · 待重新完成' : '') + (item.repeat ? ` · ${repeatLabel(item.repeat)}` : item.occurrenceId ? ' · 本次' : '') : '';
@@ -1617,7 +1704,7 @@ export class ArrangeView extends ItemView {
 			} else label.textContent = text;
 			label.title = item.date ?? '';
 		}
-		const row = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-title-row');
+		const row = this.detailScroll?.querySelector<HTMLElement>(':scope > .gvkit-arrange-detail-title-row');
 		row?.toggleClass('is-completed', Boolean(item.completedAt));
 		row?.toggleClass('is-development-project', Boolean(item.developmentProject));
 		const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
@@ -1626,7 +1713,8 @@ export class ArrangeView extends ItemView {
 			checkbox.toggleClass('is-development-completed', Boolean(item.developmentCompleted && !item.completedAt));
 			checkbox.setAttribute('aria-label', `${item.completedAt ? '撤销完成' : '完成'}：${item.title}`);
 		}
-		for (const button of Array.from(this.detail.querySelectorAll<HTMLButtonElement>('.gvkit-reward-choice'))) {
+		for (const button of Array.from(this.detail.querySelectorAll<HTMLButtonElement>(
+			':scope > .gvkit-reward-choices > .gvkit-reward-choice, :scope > .gvkit-arrange-detail-tools > .gvkit-reward-choices > .gvkit-reward-choice'))) {
    button.setAttribute('aria-pressed', String(Number(button.dataset.points) === rewardValue(item.rewardPoints)));
   }
   this.paintDetailActions();
@@ -1637,11 +1725,13 @@ export class ArrangeView extends ItemView {
 		if (this.choosingParent) { this.detail.hidden = true; return; }
 		const item = this.store.items.find(item => item.id === this.selected);
 		this.editing?.body.destroy();
-		if (!item) { this.selected = null; this.editing = null; this.detail.hidden = true; return; }
+		if (!item) { this.selected = null; this.editing = null; this.clearParentPane(); this.detail.hidden = true; return; }
 		const scroll = this.editing?.id === item.id ? this.detailScroll?.scrollTop ?? 0 : 0;
 		this.detail.hidden = false;
 		this.detail.toggleClass('is-full', this.full);
-		this.detail.empty();
+		if (this.parentPane) {
+			for (const child of Array.from(this.detail.children)) if (child !== this.parentPane.root) child.remove();
+		} else this.detail.empty();
 		const grip = this.detail.createDiv('gvkit-arrange-panel-grip');
 		grip.setAttribute('aria-label', '拖动调整详情高度');
 		this.panelGesture(grip);
@@ -1787,7 +1877,7 @@ export class ArrangeView extends ItemView {
 	}
 	private paintDetailActions(): void {
 		const item = this.store.items.find(item => item.id === this.selected);
-		const strip = this.detail.querySelector<HTMLElement>('.gvkit-arrange-detail-actions');
+		const strip = this.detail.querySelector<HTMLElement>(':scope > .gvkit-arrange-detail-tools > .gvkit-arrange-detail-actions');
 		if (!item || !strip) return;
 		const scroll = strip.scrollLeft;
 		strip.empty();
@@ -2063,6 +2153,10 @@ export class ArrangeView extends ItemView {
 				.setValue(this.store.state.completionSound).onChange(value => configure({ completionSound: value as ArrangeState['completionSound'] })));
 		new Setting(modal.contentEl).setName('详情显示上级事项')
 			.addToggle(toggle => toggle.setValue(this.store.state.showParentNavigation).onChange(value => configure({ showParentNavigation: value })));
+		if (!Platform.isMobileApp) {
+			new Setting(modal.contentEl).setName('上下显示上级事项详情')
+				.addToggle(toggle => toggle.setValue(this.store.state.showParentDetailPane).onChange(value => configure({ showParentDetailPane: value })));
+		}
 		new Setting(modal.contentEl).setName('事项详情显示已完成下级')
 			.addToggle(toggle => toggle.setValue(this.store.state.showCompletedChildren).onChange(value => configure({ showCompletedChildren: value })));
 		new Setting(modal.contentEl).setName('事项左滑操作')

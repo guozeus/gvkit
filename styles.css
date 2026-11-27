@@ -221,6 +221,40 @@ body.gvkit-arrange-active .mobile-toolbar-options-container {
 .gvkit-arrange-area:has(> .gvkit-arrange-detail[hidden]) > .gvkit-arrange-divider, .gvkit-arrange-mobile .gvkit-arrange-divider { display: none; }
 .gvkit-arrange-detail { display: flex; flex-direction: column; flex: 0 0 var(--gvkit-arrange-detail-width, 46%); min-width: 0; overflow: hidden; background: var(--background-primary); }
 .gvkit-arrange-detail[hidden] { display: none; }
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane {
+	display: grid;
+	grid-template-rows: fit-content(28%) fit-content(52%) minmax(0, 1fr);
+	flex: 0 0 38%;
+	min-height: 0;
+	overflow: hidden;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane > * {
+	min-height: 0;
+	min-width: 0;
+	overflow: auto;
+	overscroll-behavior: contain;
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane-header {
+	padding: 8px 16px 4px;
+	overflow-wrap: anywhere;
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane-status {
+	color: var(--text-muted);
+	font-size: var(--gvkit-arrange-date-font, 12px);
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane-body {
+	padding: 0 16px;
+	font-size: var(--gvkit-arrange-body-font, 16px);
+	overflow-wrap: anywhere;
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane-status:empty { display: none; }
+.gvkit-arrange:not(.gvkit-arrange-mobile) .gvkit-arrange-parent-pane-children > .gvkit-arrange-row.is-selected {
+	background-color: color-mix(in srgb, var(--color-blue) 18%, transparent);
+	animation: none;
+}
+.gvkit-arrange:not(.gvkit-arrange-mobile).is-multiselect .gvkit-arrange-parent-pane-children .gvkit-arrange-actions { visibility: visible; }
 .gvkit-arrange-detail-tools { flex: 0 0 var(--gvkit-arrange-toolbar-height, 44px); display: flex; align-items: center; justify-content: flex-end; min-width: 0; padding: 0 8px; }
 .gvkit-arrange .gvkit-arrange-detail-date { flex: 0 1 150px; min-width: 0; height: var(--gvkit-arrange-toolbar-height, 44px); padding: 0; border: 0; box-shadow: none; background: transparent; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gvkit-arrange-date-color, #0066ff); font-size: var(--gvkit-arrange-date-font, 12px); cursor: pointer; }
 .gvkit-arrange-detail-date[hidden] { display: none; }
