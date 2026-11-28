@@ -3,7 +3,7 @@ import test from 'node:test';
 import { build } from 'esbuild';
 import { Window } from 'happy-dom';
 
-test('device confirms the displayed two levels and stays bound to the selected tab and original view', async () => {
+test('shared publication key confirms the exact linked tab and publishes the displayed two levels', async () => {
     const window = new Window();
     const document = window.document;
     const proto: any = window.HTMLElement.prototype;
@@ -44,9 +44,9 @@ test('device confirms the displayed two levels and stays bound to the selected t
         {id:'old',title:'历史投影',parent:'g',occurrenceOf:'x'},{id:'z',title:'第三层',parent:'x'},
     ];
     g.sheetRequest=async(arg:any)=>{
-        assert.equal(arg.headers.Authorization,'Bearer device-only');
+        assert.equal(arg.headers.Authorization,'Bearer shared-publication-key');
         const body=arg.body && JSON.parse(arg.body);
-        if(arg.url.endsWith('/targets')) return {status:200,json:{sheets:[{id:'a',name:'甲'},{id:'b',name:'乙'}]}};
+        if(arg.url.endsWith('/targets')) return {status:200,json:{sheets:[{id:'b',name:'乙'}]}};
         if(arg.url.includes('?root=')) return {status:200,json:{binding}};
         if(arg.url.endsWith('/command')) {
             assert.equal(body.action,'stop'); binding.status='stopped'; return {status:200,json:binding};
@@ -54,12 +54,12 @@ test('device confirms the displayed two levels and stays bound to the selected t
         if(arg.url.includes('blocked=true')) return {status:200,json:{bindings:[binding]}};
         publications++;
         pending.push(body);
-        binding={root:'r',id:'bound',version:1,sheet:'乙',title:'根',status:'protect_page',requests:{},removals:[]};
+        binding={root:'r',id:'bound',version:1,sheet:'乙',title:'根',status:'synced'};
         return {status:200,json:binding};
     };
-    const plugin={app:{secretStorage:{getSecret:(ref:string)=>{assert.equal(ref,'gvkit-dingtalk-sheet-device');return 'device-only';}}}};
+    const plugin={app:{secretStorage:{getSecret:(ref:string)=>{assert.equal(ref,'gvkit-collab-board-device');return 'shared-publication-key';}}}};
     const store={items,sheetSourceReady:()=>true,load:async()=>{}};
-    const ui=new DingTalkSheets(plugin,store);
+    const ui=new DingTalkSheets(plugin,store,()=>({getCollabSecretRef:()=> 'gvkit-collab-board-device'}));
     const tick=()=>new Promise(resolve=>setImmediate(resolve));
     const btn=(name:string)=>[...document.querySelectorAll('button')].find(b=>b.textContent===name) as any;
     try {
@@ -67,16 +67,19 @@ test('device confirms the displayed two levels and stays bound to the selected t
         const input=document.querySelector('input')!;
         input.value='https://alidocs.dingtalk.com/i/nodes/'+'a'.repeat(32)+'?sheetId=b';
         await btn('核对页签').onclick();
-        assert.equal(document.querySelector('select')!.value,'b');
-        assert.match(document.body.textContent,/已完成孙项/);
+        assert.equal(document.querySelector('select'),null);
+        assert.match(document.body.textContent,/发布到「乙」/);
+        assert.match(document.body.textContent,/根 · 2 项/);
         assert.doesNotMatch(document.body.textContent,/历史投影|第三层|私密正文/);
         items[2].title='更新的标题';
-        await btn('确认发布').onclick(); assert.equal(publications,0);
-        assert.match(document.body.textContent,/更新的标题/);
-        await btn('确认发布').onclick(); assert.equal(publications,1);
+        await btn('发布').onclick(); assert.equal(publications,0);
+        assert.match(document.body.textContent,/事项内容已变化/);
+        await btn('发布').onclick(); assert.equal(publications,1);
         assert.equal(pending[0].sheet,'b');
+        assert.match(pending[0].link,/sheetId=b/);
+        assert.equal(pending[0].preview.rows[1].title,'更新的标题');
         assert.deepEqual(pending[0].preview.rows.map((r:any)=>Object.keys(r).sort()),[['id','parent','title'],['id','parent','title']]);
-        assert.match(document.body.textContent,/配置专用页保护/);
+        assert.match(document.body.textContent,/当前内容已同步/);
         await btn('停止后续同步').onclick();
         assert.match(document.body.textContent,/后续同步已停止/);
         ui.panel.close();

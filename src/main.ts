@@ -195,9 +195,9 @@ export default class GvkitPlugin extends Plugin {
 		this.publishLifecycleActive = true;
 		registerGvkitIcons();
 		registerSyncStatus(this);
+		let sheets!: DingTalkSheets;
 		const arrange = registerArrange(this, target => this.openCollabBoard(target), target => sheets.open(target));
-        const sheets = new DingTalkSheets(this, arrange.store);
-        sheets.listen();
+        sheets = new DingTalkSheets(this, arrange.store, () => this.publishSettings);
 		registerAutoUpdate(this, () => {
 			arrange.captureForUpdate();
 			(this.app as typeof this.app & { gvkitSettingsDraft?: GvkitSettingsDraft }).gvkitSettingsDraft = this.gvkitSettingsTab?.captureForUpdate() ?? undefined;
